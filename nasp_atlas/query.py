@@ -6,7 +6,7 @@ import cellxgene_census  # type: ignore
 from pandas import DataFrame, Series  # type: ignore
 
 
-CENSUS_VERSION: str = "stable"
+CENSUS_VERSION: str = "2025-11-08"
 
 OBS_COLS: list[str] = [
     "dataset_id",
@@ -381,7 +381,7 @@ def _summarize_dataset(datasets: DataFrame, obs: DataFrame) -> DataFrame:
 
 def main() -> None:
     datasets, obs = _read_cxg_census_metadata()
-    obs = _filter_datasets_with_relevant_disease(obs)
+    # obs = _filter_datasets_with_relevant_disease(obs)
     aggregated_dataset = _summarize_dataset(datasets=datasets, obs=obs)
     aggregated_dataset.to_csv("cellxgene_human.tsv", sep="\t", index=False)
 
