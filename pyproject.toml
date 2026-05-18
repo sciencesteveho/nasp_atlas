@@ -1,0 +1,164 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nasp_atlas"
+version = "0.1.0"
+description = "Curation and analyses of NASP in publicly-available single-cell atlases."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "License :: OSI Approved :: Apache Software License",
+  "Intended Audience :: Science/Research",
+]
+
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pyink",
+  "ruff",
+  "pyright",
+  "pytest",
+  "pytest-cov",
+  "ipython",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 80
+indent-width = 4
+src = ["src", "scripts", "tests"]
+
+exclude = [
+  ".git",
+  ".ruff_cache",
+  ".venv",
+  "venv",
+  "build",
+  "dist",
+  "__pycache__",
+  "*.egg-info",
+  "notebooks",
+]
+
+[tool.ruff.lint]
+select = [
+  "F",    # Pyflakes
+  "E",    # pycodestyle errors
+  "W",    # pycodestyle warnings
+  "I",    # isort-compatible import sorting
+  "B",    # flake8-bugbear
+  "UP",   # pyupgrade
+  "RUF",  # Ruff-specific rules
+]
+
+# Keep E501 line-too-long and E741 ambiguous-variable-name enabled.
+ignore = []
+
+# Warn about unused imports, but do not auto-delete them on save.
+unfixable = [
+  "F401",
+]
+
+fixable = ["ALL"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["nasp_atlas"]
+
+force-sort-within-sections = true
+combine-as-imports = true
+split-on-trailing-comma = true
+lines-after-imports = 2
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = [
+  "F401",  # Allow public re-exports.
+]
+
+"*_test.py" = [
+  "E402",  # Allow test-local imports after setup when needed.
+]
+
+"tests/**/*.py" = [
+  "E402",
+]
+
+"scripts/**/*.py" = [
+  "E402",  # Useful for scripts with path/bootstrap setup.
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+docstring-code-format = true
+docstring-code-line-length = 80
+
+[tool.pyink]
+line-length = 80
+unstable = true
+pyink = true
+pyink-use-majority-quotes = true
+
+pyink-indentation = 2
+
+include = '\.pyi?$'
+
+pyink-annotation-pragmas = [
+  "noqa",
+  "pylint:",
+  "type: ignore",
+  "pytype:",
+  "mypy:",
+  "pyright:",
+  "pyre-",
+]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+
+include = [
+  "src",
+  "scripts",
+  "tests",
+]
+
+exclude = [
+  "**/node_modules",
+  "**/.*",        
+  "build",
+  "dist",
+  "**/*.egg-info",
+  "**/__pycache__",
+  "**/*.pyc",
+  "venv",
+  "notebooks",
+]
+
+reportMissingImports = true
+reportMissingTypeStubs = false
+
+[tool.pytest.ini_options]
+testpaths = [
+  "tests",
+]
+
+python_files = [
+  "*_test.py",
+  "test_*.py",
+]
+
+addopts = [
+  "-ra",
+  "--strict-markers",
+  "--strict-config",
+]
