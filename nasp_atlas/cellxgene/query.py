@@ -3,7 +3,18 @@
 import re
 
 import cellxgene_census  # type: ignore
-from pandas import DataFrame, Series  # type: ignore
+from pandas import DataFrame  # type: ignore
+from pandas import Series  # type: ignore
+
+from nasp_atlas.visualization.cellxgene.metadata import (
+    _set_matplotlib_publication_parameters,
+)
+from nasp_atlas.visualization.cellxgene.metadata import (
+    build_dataset_makeup_table,
+)
+from nasp_atlas.visualization.cellxgene.metadata import (
+    plot_dataset_makeup_dotplot_pdf,
+)
 
 
 CENSUS_VERSION: str = "2025-11-08"
@@ -384,6 +395,24 @@ def main() -> None:
     # obs = _filter_datasets_with_relevant_disease(obs)
     aggregated_dataset = _summarize_dataset(datasets=datasets, obs=obs)
     aggregated_dataset.to_csv("cellxgene_human.tsv", sep="\t", index=False)
+
+    _set_matplotlib_publication_parameters()
+
+    makeup = build_dataset_makeup_table(
+        obs=obs,
+        aggregated_dataset=aggregated_dataset,
+    )
+
+    plot_dataset_makeup_dotplot_pdf(
+        makeup=makeup,
+        output_path="cellxgene_tissue_makeup.pdf",
+        annotation_type="tissue",
+    )
+    plot_dataset_makeup_dotplot_pdf(
+        makeup=makeup,
+        output_path="cellxgene_disease_makeup.pdf",
+        annotation_type="disease",
+    )
 
 
 if __name__ == "__main__":

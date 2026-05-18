@@ -29,13 +29,14 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
+include = ["nasp_atlas*"]
 
 [tool.ruff]
 target-version = "py311"
 line-length = 80
 indent-width = 4
-src = ["src", "scripts", "tests"]
+src = ["nasp_atlas", "tests"]
 
 exclude = [
   ".git",
@@ -73,7 +74,8 @@ fixable = ["ALL"]
 [tool.ruff.lint.isort]
 known-first-party = ["nasp_atlas"]
 
-force-sort-within-sections = true
+force-single-line = true
+single-line-exclusions = ["typing", "collections.abc"]
 combine-as-imports = true
 split-on-trailing-comma = true
 lines-after-imports = 2
@@ -125,12 +127,7 @@ pyink-annotation-pragmas = [
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
-
-include = [
-  "src",
-  "scripts",
-  "tests",
-]
+include = ["nasp_atlas"]
 
 exclude = [
   "**/node_modules",
