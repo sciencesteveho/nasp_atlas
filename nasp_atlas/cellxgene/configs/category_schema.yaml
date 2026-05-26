@@ -1,0 +1,468 @@
+# Category schema for collapsing raw CELLxGENE metadata labels.
+#
+# Optional cosmetic labels used in plot legends/sidebars. If omitted, labels are
+# generated from category keys, e.g."liver_biliary" -> "Liver biliary".
+display_names:
+  liver_biliary: Liver & biliary
+  blood_immune: Blood & immune
+  skeletal_muscle: Skeletal muscle
+  inflammatory_autoimmune: Inflammatory / autoimmune
+  neurologic_other: Neurologic (other)
+  developmental_genetic: Developmental / genetic
+  fibrosis_injury: Fibrosis / injury
+  eye_disease: Eye disease
+
+# Pattern order is significant.
+# The first matching category wins, so specific terms must appear before
+# broader substring catch-alls.
+disease:
+  # If true, the category key "normal" only matches the exact raw label
+  # "normal". This prevents labels such as "normal pressure hydrocephalus" from
+  # being classified as normal.
+  match_normal_exactly: true
+
+  patterns:
+    cancer:
+    - cancer
+    - carcinoma
+    - melanoma
+    - neoplasm
+    - tumor
+    - tumour
+    - glioblastoma
+    - blastoma
+    - leukemia
+    - leukaemia
+    - lymphoma
+    - myeloma
+    - sarcoma
+    - adenoma
+    - astrocytoma
+    - oncocytoma
+
+    metabolic:
+    - diabetes
+    - prediabetes
+    - obesity
+    - fatty liver
+    - steatohepatitis
+    - steatosis
+    - non-alcoholic fatty
+    - metabolic syndrome
+    - dyslipidemia
+
+    # Must precede normal so "normal pressure hydrocephalus" is not normal.
+    neurodegeneration:
+    - alzheimer
+    - parkinson
+    - lewy body
+    - frontotemporal
+    - tauopathy
+    - amyotrophic lateral sclerosis
+    - huntington
+    - motor neuron
+    - pick disease
+    - leukoencephalopathy
+    - normal pressure hydrocephalus
+    - progressive supranuclear palsy
+    - vascular dementia
+    - dementia
+
+    cardiovascular:
+    - atherosclerosis
+    - cardiomyopathy
+    - heart failure
+    - myocardial
+    - coronary
+    - atrial fibrillation
+    - hypertension
+    - stroke
+    - heart disorder
+    - heart valve
+    - mitral valve
+    - myocarditis
+    - congenital heart
+
+    renal:
+    - chronic kidney
+    - kidney failure
+    - acute kidney
+    - renal failure
+    - nephropathy
+    - glomerulosclerosis
+    - obstructive nephropathy
+
+    # Must precede infection so non-infectious interstitial pneumonias are not
+    # captured by the generic "pneumonia" infection term.
+    respiratory:
+    - pulmonary fibrosis
+    - interstitial lung
+    - chronic obstructive pulmonary
+    - emphysema
+    - sarcoidosis
+    - asthma
+    - bronchopulmonary
+    - hypersensitivity pneumonitis
+    - lymphangioleiomyomatosis
+    - respiratory failure
+    - respiratory system
+    - rhinitis
+    - lymphoid interstitial pneumonia
+    - non-specific interstitial pneumonia
+
+    infection:
+    - covid
+    - influenza
+    - pneumonia
+    - tuberculosis
+    - hiv
+    - sepsis
+    - viral
+    - bacterial
+    - cytomegalovirus
+    - leishmaniasis
+    - listeriosis
+    - toxoplasmosis
+    - malaria
+    - plasmodium
+
+    inflammatory_autoimmune:
+    - lupus
+    - sjogren
+    - dermatomyositis
+    - scleroderma
+    - arthritis
+    - crohn
+    - colitis
+    - celiac
+    - psoriasis
+    - multiple sclerosis
+    - inflammatory bowel
+    - inflammatory disease
+    - primary biliary
+    - primary sclerosing cholangitis
+    - gastritis
+    - periodontitis
+    - gingivitis
+    - pulpitis
+
+    # Must precede fibrosis_injury so "cystic fibrosis" is not captured by the
+    # shorter "fibrosis" term.
+    developmental_genetic:
+    - down syndrome
+    - trisomy
+    - duchenne
+    - cystic fibrosis
+    - common variable immunodeficiency
+    - primary immunodeficiency
+    - anencephaly
+
+    fibrosis_injury:
+    - fibrosis
+    - injury
+    - keloid
+    - scar
+
+    hematologic:
+    - clonal hematopoiesis
+    - myelodysplastic
+    - myeloproliferative
+    - anemia
+    - anaemia
+    - thrombocytopenia
+    - hematologic disorder
+
+    eye_disease:
+    - macular degeneration
+    - glaucoma
+    - cataract
+    - retinopathy
+
+    psychiatric:
+      - bipolar
+      - schizophrenia
+      - schizoaffective
+      - depression
+      - depressive disorder
+      - anorexia
+      - bulimia
+      - obsessive-compulsive
+      - post-traumatic stress
+      - attention deficit
+      - opiate dependence
+      - autism
+
+    neurologic_other:
+      - migraine
+      - epilepsy
+      - tardive dyskinesia
+      - isolated focal cortical dysplasia
+      - cortical dysplasia
+      - cognitive disorder
+
+    digestive_other:
+    - digestive system
+    - gastric intestinal metaplasia
+    - hyperplastic polyp
+    - intestinal failure
+    - barrett
+
+    normal:
+    - normal
+
+tissue:
+  patterns:
+    adipose:
+    - adipose
+    - fat pad
+    - white adipose
+    - brown adipose
+    - omental fat
+    - perirenal fat
+    - visceral fat
+    - omentum
+
+    liver_biliary:
+    - liver
+    - hepato
+    - bile duct
+    - gallbladder
+    - biliary
+
+
+    # Must precede eye so "choroid plexus" is not captured by "choroid".
+    brain:
+    - brain
+    - cortex
+    - cerebellum
+    - cerebrum
+    - hippocampus
+    - hippocampal
+    - amygdala
+    - thalamus
+    - striatum
+    - white matter
+    - grey matter
+    - spinal cord
+    - midbrain
+    - hindbrain
+    - forebrain
+    - basal ganglia
+    - basal ganglion
+    - brodmann
+    - gyrus
+    - lobe
+    - putamen
+    - caudate
+    - nucleus accumbens
+    - substantia nigra
+    - medulla oblongata
+    - pons
+    - meninx
+    - meninges
+    - telencephalon
+    - diencephalon
+    - metencephalon
+    - myelencephalon
+    - ganglionic eminence
+    - dentate nucleus
+    - cerebellar peduncular
+    - cerebral nuclei
+    - cerebrospinal fluid
+    - cortical plate
+    - cranial nerve
+    - dorsal root ganglion
+    - dorsal motor nucleus
+    - dorsal lateral plate
+    - neural tube
+    - globus pallidus
+    - thalamic complex
+    - temporoparietal junction
+
+    heart:
+    - heart
+    - myocardium
+    - cardiac
+    - ventricle
+    - atrium
+    - atrioventricular node
+    - sinoatrial node
+    - interventricular septum
+
+    skeletal_muscle:
+    - skeletal muscle
+    - muscle of
+    - quadriceps
+    - biceps
+    - soleus
+    - tibialis
+    - gastrocnemius
+    - intercostal muscle
+    - muscle organ
+    - tendon
+    - diaphragm
+
+    pancreas:
+    - pancreas
+    - islet of langerhans
+
+    vasculature:
+    - vasculature
+    - artery
+    - aorta
+    - vein
+    - vascular
+    - blood vessel
+    - capillary
+    - inferior vena cava
+
+    kidney:
+    - kidney
+    - renal cortex
+    - renal medulla
+    - renal papilla
+    - renal pelvis
+    - nephron
+    - ureter
+
+    lung:
+    - lung
+    - bronchus
+    - alveol
+    - trachea
+    - respiratory epithelium
+    - bronchial mucosa
+    - respiratory airway
+    - epithelial lining fluid
+    - segmental bronchus
+    - terminal bronchus
+    - nasal cavity
+    - nasopharynx
+    - nose
+
+    gut:
+    - intestine
+    - colon
+    - ileum
+    - jejunum
+    - duodenum
+    - stomach
+    - rectum
+    - esophagus
+    - gut
+    - caecum
+    - cecum
+    - pylor
+    - lamina propria
+    - intestinal mucosa
+    - mucosa of
+    - hindgut
+    - hepatic cecum
+    - esophagogastric
+    - rectosigmoid
+    - vermiform appendix
+    - duodeno-jejunal
+    - duodenal epithelium
+    - ileal epithelium
+    - jejunal epithelium
+    - mucosa
+
+    skin:
+    - skin
+    - dermis
+    - epidermis
+    - zone of skin
+
+    reproductive:
+    - ovary
+    - testis
+    - uterus
+    - prostate
+    - endometrium
+    - fallopian
+    - oviduct
+    - vagina
+    - cervix
+    - myometrium
+    - gonad
+    - placenta
+    - trophoblast
+    - chorionic villus
+    - decidua
+
+    breast:
+    - breast
+    - mammary gland
+    - mammary
+
+    eye:
+    - eye
+    - retina
+    - retinal
+    - choroid
+    - cornea
+    - lens
+    - ciliary body
+    - conjunctiva
+    - sclera
+    - iris
+    - uvea
+    - macula lutea
+    - fovea centralis
+    - ocular
+    - optic disc
+    - corneo-scleral
+
+    # Must precede serosal so "pleural effusion" is not captured by "pleura".
+    blood_immune:
+    - blood
+    - lymph node
+    - thymus
+    - spleen
+    - bone marrow
+    - tonsil
+    - pbmc
+    - buffy coat
+    - peripheral blood
+    - ascitic fluid
+    - pleural effusion
+    - saliva
+    - milk
+
+    oral:
+    - oral cavity
+    - tongue
+    - gingiva
+    - buccal
+    - dental pulp
+    - hard palate
+    - soft palate
+    - oropharynx
+    - salivary gland
+    - parotid gland
+    - sublingual gland
+    - submandibular gland
+    - labial gland
+    - lacrimal gland
+    - minor salivary gland
+    - submucosal esophageal gland
+
+    endocrine:
+    - adrenal gland
+    - adrenal tissue
+    - thyroid gland
+
+    urinary:
+    - bladder organ
+    - urinary bladder
+
+    serosal:
+    - pleura
+    - peritoneum
+
+  overrides:
+    choroid plexus: brain
+    choroid plexus epithelium: brain
+    cortex of kidney: kidney
+    renal cortex: kidney
+    kidney blood vessel: kidney

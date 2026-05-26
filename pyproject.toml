@@ -16,7 +16,14 @@ classifiers = [
   "Intended Audience :: Science/Research",
 ]
 
-dependencies = []
+dependencies = [
+  "cellxgene_census==1.17.0",
+  "matplotlib==3.10.9",
+  "pandas==3.0.3",
+  "plotly==6.7.0",
+  "PyYAML>=6.0.2",
+  "seaborn==0.13.2",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -31,6 +38,9 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["nasp_atlas*"]
+
+[tool.setuptools.package-data]
+"nasp_atlas.cellxgene.configs" = ["*.yaml"]
 
 [tool.ruff]
 target-version = "py311"

@@ -1,305 +1,432 @@
 """Query CELLxGENE for dataset metadata."""
 
-import re
+from __future__ import annotations
+
+from collections.abc import Callable, Iterable, Sequence
+from pathlib import Path
+from typing import Self
 
 import cellxgene_census  # type: ignore
-from pandas import DataFrame  # type: ignore
-from pandas import Series  # type: ignore
+import pandas as pd
 
-from nasp_atlas.visualization.cellxgene.metadata import (
-    _set_matplotlib_publication_parameters,
+from nasp_atlas.cellxgene.categorize import _collapse_sex_series
+from nasp_atlas.cellxgene.categorize import _summarize_development_stage
+from nasp_atlas.cellxgene.config import CXGMetadataConfig
+from nasp_atlas.cellxgene.filter import annotate_obs_categories
+from nasp_atlas.cellxgene.filter import filter_obs_by_category
+from nasp_atlas.cellxgene.visualization.age import (
+    plot_age_makeup as _plot_age_makeup,
 )
-from nasp_atlas.visualization.cellxgene.metadata import (
-    build_dataset_makeup_table,
+from nasp_atlas.cellxgene.visualization.age import (
+    plot_age_ranges as _plot_age_ranges,
 )
-from nasp_atlas.visualization.cellxgene.metadata import (
-    plot_dataset_makeup_dotplot_pdf,
+from nasp_atlas.cellxgene.visualization.composition import (
+    metadata_barplot as _metadata_barplot,
 )
+from nasp_atlas.cellxgene.visualization.composition import (
+    plot_category_makeup as _plot_category_makeup,
+)
+from nasp_atlas.cellxgene.visualization.sankey import (
+    metadata_sankey as _metadata_sankey,
+)
+from nasp_atlas.common import _collapse_unique_series
+from nasp_atlas.visualization import _set_matplotlib_publication_parameters
 
 
-CENSUS_VERSION: str = "2025-11-08"
+class CXGMetadata:
+    """Stateful workflow for CELLxGENE metadata querying and visualization."""
 
-OBS_COLS: list[str] = [
-    "dataset_id",
-    "donor_id",
-    "assay",
-    "cell_type",
-    "development_stage",
-    "disease",
-    "sex",
-    "tissue",
-    "suspension_type",
-]
+    def __init__(
+        self,
+        datasets: pd.DataFrame,
+        obs: pd.DataFrame,
+        config: CXGMetadataConfig | None = None,
+    ) -> None:
+        """Initialize with dataset-level and cell-level metadata."""
+        self.datasets = datasets
+        self.obs = obs
+        self.config = config or CXGMetadataConfig()
 
-DATASET_COLS: list[str] = [
-    "dataset_id",
-    "collection_name",
-    "collection_id",
-    "dataset_total_cell_count",
-    "dataset_h5ad_path",
-]
+        _set_matplotlib_publication_parameters()
 
-DISEASE_KEYWORDS: list[str] = [
-    "normal",
-    "age",
-    "aging",
-    "alzheimer",
-    "dementia",
-    "parkinson",
-    "lewy",
-    "frontotemporal",
-    "tauopathy",
-    "amyotrophic lateral sclerosis",
-    "multiple sclerosis",
-    "macular degeneration",
-    "glaucoma",
-    "cataract",
-    "atherosclerosis",
-    "cardiomyopathy",
-    "heart failure",
-    "myocardial",
-    "coronary",
-    "atrial fibrillation",
-    "diabetes",
-    "prediabetes",
-    "chronic kidney",
-    "kidney failure",
-    "covid",
-    "influenza",
-    "pneumonia",
-    "pulmonary fibrosis",
-    "interstitial lung",
-    "chronic obstructive pulmonary disease",
-    "emphysema",
-    "sarcoidosis",
-    "inflammatory",
-    "inflammation",
-    "crohn",
-    "colitis",
-    "celiac",
-    "gastritis",
-    "periodontitis",
-    "gingivitis",
-    "arthritis",
-    "lupus",
-    "sjogren",
-    "dermatomyositis",
-    "scleroderma",
-    "fibrosis",
-    "injury",
-    "keloid",
-    "clonal hematopoiesis",
-    "myelodysplastic",
-    "myeloproliferative",
-    "leukemia",
-    "lymphoma",
-    "myeloma",
-    "cancer",
-    "carcinoma",
-    "melanoma",
-    "neoplasm",
-    "tumor",
-    "glioblastoma",
-    "blastoma",
-]
+    def annotate_obs_categories(
+        self,
+        *,
+        source_column: str,
+        target_column: str,
+        categorizer: Callable[[object], str],
+    ) -> Self:
+        """Add a broad-category column to obs."""
+        self.obs = annotate_obs_categories(
+            self.obs,
+            source_column=source_column,
+            target_column=target_column,
+            categorizer=categorizer,
+        )
+        return self
 
+    def annotate_default_categories(self) -> Self:
+        """Add default disease and tissue category columns to obs."""
+        self.annotate_obs_categories(
+            source_column="disease",
+            target_column="disease_category",
+            categorizer=self.config.categorize_disease,
+        )
+        self.annotate_obs_categories(
+            source_column="tissue",
+            target_column="tissue_category",
+            categorizer=self.config.categorize_tissue,
+        )
+        return self
 
-def _collapse_unique_series(values: Series, delimiter: str = ", ") -> str:
-    """Collapse unique series values into a delimiter-separated string."""
-    vals = sorted(values.dropna().astype(str).unique())
-    return delimiter.join(vals)
+    def _ensure_default_category_column(self, category_column: str) -> None:
+        """Create a default category column when a default plot needs it."""
+        if category_column in self.obs.columns:
+            return
 
+        if category_column == "disease_category":
+            self.annotate_obs_categories(
+                source_column="disease",
+                target_column=category_column,
+                categorizer=self.config.categorize_disease,
+            )
+            return
 
-def _filter_datasets_with_relevant_disease(obs: DataFrame) -> DataFrame:
-    """Keep cells from datasets with normal or aging/inflammation-relevant
-    disease annotations.
-    """
-    disease_pattern = "|".join(
-        re.escape(keyword) for keyword in DISEASE_KEYWORDS
-    )
+        if category_column == "tissue_category":
+            self.annotate_obs_categories(
+                source_column="tissue",
+                target_column=category_column,
+                categorizer=self.config.categorize_tissue,
+            )
 
-    relevant_dataset_ids = obs.loc[
-        obs["disease"]
-        .astype(str)
-        .str.lower()
-        .str.contains(disease_pattern, na=False),
-        "dataset_id",
-    ].unique()
+    def _categorizer_for_label_column(
+        self,
+        label_column: str,
+    ) -> Callable[[object], str] | None:
+        """Return the configured categorizer for a metadata label column."""
+        if label_column == "disease":
+            return self.config.categorize_disease
 
-    return obs[obs["dataset_id"].isin(relevant_dataset_ids)].copy()
+        if label_column == "tissue":
+            return self.config.categorize_tissue
 
+        return (
+            str
+            if label_column in {"disease_category", "tissue_category"}
+            else None
+        )
 
-def _collapse_sex_series(values: Series) -> str:
-    """Collapse sex annotations merging male and female when both are
-    present.
-    """
-    vals = set(values.dropna().astype(str).str.strip().str.lower())
-    collapsed: list[str] = []
+    def filter_by_category(
+        self,
+        *,
+        column: str,
+        keep: Iterable[str],
+    ) -> Self:
+        """Restrict obs to rows whose category value is in keep."""
+        self.obs = filter_obs_by_category(
+            self.obs,
+            column=column,
+            keep=keep,
+        )
+        return self
 
-    if {"male", "female"}.issubset(vals):
-        collapsed.append("male & female")
-        vals.discard("male")
-        vals.discard("female")
+    def filter_diseases(
+        self,
+        keep: Iterable[str],
+        column: str = "disease_category",
+    ) -> Self:
+        """Restrict obs to selected disease categories."""
+        return self._filter_by_category(column, keep)
 
-    collapsed.extend(sorted(vals))
+    def filter_tissues(
+        self,
+        keep: Iterable[str],
+        column: str = "tissue_category",
+    ) -> Self:
+        """Restrict obs to selected tissue categories."""
+        return self._filter_by_category(column, keep)
 
-    return ", ".join(collapsed)
+    def _filter_by_category(self, column, keep):
+        """Ensure the category column exists and filter obs by selected
+        values.
+        """
+        self._ensure_default_category_column(column)
+        self.filter_by_category(column=column, keep=keep)
+        return self
 
+    def plot_category_makeup(
+        self,
+        *,
+        category_column: str,
+        outpath: str | Path,
+        front: Sequence[str] = (),
+        back: Sequence[str] = (),
+        datasets_per_plot: int = 35,
+    ) -> None:
+        """Plot dataset makeup along one categorical axis."""
+        _plot_category_makeup(
+            obs=self.obs,
+            datasets=self.datasets,
+            category_column=category_column,
+            outpath=outpath,
+            front=tuple(front),
+            back=tuple(back),
+            datasets_per_plot=datasets_per_plot,
+        )
 
-def _stage_age_value(stage: str) -> float:
-    """Return an approximate numeric age for sorting development stages."""
-    value = stage.strip().lower()
+    def plot_disease_makeup(
+        self,
+        outpath: str | Path,
+        *,
+        category_column: str = "disease_category",
+        front: Sequence[str] = (),
+        back: Sequence[str] = (),
+        datasets_per_plot: int = 35,
+    ) -> None:
+        """Plot dataset makeup by disease category.
 
-    if value == "unknown":
-        return float("inf")
+        Args:
+          outpath: File path to save the plot.
+          category_column: The column containing the category values.
+          front: Categories to display at the front of the plots.
+          back: Categories to display at the end of the plots.
+          datasets_per_plot: # of datasets per plot.
+        """
+        self._ensure_default_category_column(category_column)
+        self.plot_category_makeup(
+            category_column=category_column,
+            outpath=outpath,
+            front=front,
+            back=back,
+            datasets_per_plot=datasets_per_plot,
+        )
 
-    match = re.search(r"carnegie stage\s+(\d+)", value)
-    if match:
-        return -1.0 + int(match.group(1)) / 100.0
+    def plot_tissue_makeup(
+        self,
+        outpath: str | Path,
+        *,
+        category_column: str = "tissue_category",
+        front: Sequence[str] = (),
+        back: Sequence[str] = (),
+        datasets_per_plot: int = 35,
+    ) -> None:
+        """Plot dataset makeup by tissue category.
 
-    match = re.search(r"(\d+)(?:st|nd|rd|th)? week post-fertilization", value)
-    if match:
-        return -0.75 + int(match.group(1)) / 100.0
+        Args:
+          outpath: File path to save the plot.
+          category_column: The column containing the category values.
+          front: Categories to display at the front of the plots.
+          back: Categories to display at the end of the plots.
+          datasets_per_plot: # of datasets per plot.
+        """
+        self._ensure_default_category_column(category_column)
+        self.plot_category_makeup(
+            category_column=category_column,
+            outpath=outpath,
+            front=front,
+            back=back,
+            datasets_per_plot=datasets_per_plot,
+        )
 
-    match = re.search(r"(\w+) lmp month", value)
-    if match:
-        month_map = {
-            "fourth": 4,
-            "fifth": 5,
-            "sixth": 6,
-            "seventh": 7,
-            "eighth": 8,
-            "ninth": 9,
-        }
-        return -0.5 + month_map.get(match.group(1), 0) / 100.0
+    def metadata_barplot(
+        self,
+        *,
+        label_column: str,
+        outpath: str | Path,
+        dataset_id: str | None = None,
+        grouped: bool = False,
+        bar_height_in: float = 0.18,
+        fig_width_in: float = 2.75,
+        cmap: str = "tab20",
+    ) -> None:
+        """Plot metadata barplot for current obs or one dataset."""
+        _metadata_barplot(
+            obs=self.obs,
+            dataset_id=dataset_id,
+            label_column=label_column,
+            outpath=outpath,
+            grouped=grouped,
+            bar_height_in=bar_height_in,
+            fig_width_in=fig_width_in,
+            cmap=cmap,
+            categorizer=self._categorizer_for_label_column(label_column),
+        )
 
-    if (
-        "embryonic" in value
-        or "organogenesis" in value
-        or "blastula" in value
-        or "prenatal" in value
-    ):
-        return -0.25
+    def metadata_sankey(
+        self,
+        *,
+        label_column: str,
+        outpath: str | Path,
+        dataset_id: str | None = None,
+        node_height_in: float = 0.22,
+        fig_width_in: float = 4.5,
+        cmap: str = "tab20",
+    ) -> Path:
+        """Plot metadata Sankey for current obs or one dataset."""
+        return _metadata_sankey(
+            obs=self.obs,
+            dataset_id=dataset_id,
+            label_column=label_column,
+            outpath=outpath,
+            node_height_in=node_height_in,
+            fig_width_in=fig_width_in,
+            cmap=cmap,
+            categorizer=self._categorizer_for_label_column(label_column),
+        )
 
-    if "newborn" in value:
-        return 0.0
+    def plot_age_ranges(
+        self,
+        outpath: str | Path,
+        *,
+        dataset_id: str | None = None,
+        stage_column: str = "development_stage",
+        collapsed: bool = True,
+        bar_height_in: float = 0.18,
+        fig_width_in: float = 3.5,
+        cmap: str = "tab20",
+    ) -> Path:
+        """Plot development-stage age ranges for current obs or one dataset."""
+        return _plot_age_ranges(
+            obs=self.obs,
+            outpath=outpath,
+            dataset_id=dataset_id,
+            stage_column=stage_column,
+            collapsed=collapsed,
+            bar_height_in=bar_height_in,
+            fig_width_in=fig_width_in,
+            cmap=cmap,
+        )
 
-    match = re.search(r"(\d+)-month-old", value)
-    if match:
-        return int(match.group(1)) / 12.0
+    def plot_age_makeup(
+        self,
+        outpath: str | Path,
+        *,
+        stage_column: str = "development_stage",
+        collapsed: bool = True,
+        datasets_per_plot: int = 35,
+        bar_height_in: float = 0.15,
+        fig_width_in: float = 2.85,
+        cmap: str = "tab20c",
+    ) -> None:
+        """Plot dataset makeup across development-stage age ranges."""
+        _plot_age_makeup(
+            obs=self.obs,
+            datasets=self.datasets,
+            outpath=outpath,
+            stage_column=stage_column,
+            collapsed=collapsed,
+            datasets_per_plot=datasets_per_plot,
+            bar_height_in=bar_height_in,
+            fig_width_in=fig_width_in,
+            cmap=cmap,
+        )
 
-    match = re.search(r"(\d+)-year-old", value)
-    if match:
-        return float(match.group(1))
+    def to_csv(
+        self,
+        outpath: str | Path,
+        *,
+        sep: str = "\t",
+        index: bool = False,
+    ) -> Path:
+        """Write summarized dataset metadata to disk."""
+        output_path = Path(outpath)
+        self.summarize_datasets().to_csv(output_path, sep=sep, index=index)
+        return output_path
 
-    match = re.search(r"(\d+)\s*year-old and over", value)
-    if match:
-        return float(match.group(1))
+    def summarize_datasets(self) -> pd.DataFrame:
+        """Summarize primary-cell metadata by dataset.
 
-    match = re.search(r"(\d+)-(\d+)\s*year-old", value)
-    if match:
-        return float(match.group(1))
+        Args:
+        datasets: Dataset-level Census metadata from census_info["datasets"].
+        obs: Primary-cell metadata from census_data[organism].obs.
+        dataset_cols: Dataset-level columns to preserve when present.
 
-    decade_map = {
-        "third decade": 20.0,
-        "fourth decade": 30.0,
-        "fifth decade": 40.0,
-        "sixth decade": 50.0,
-        "seventh decade": 60.0,
-        "eighth decade": 70.0,
-        "ninth decade": 80.0,
-        "tenth decade": 90.0,
-    }
+        Returns:
+        Dataset-level summary table with one row per dataset.
+        """
+        dataset_summary = (
+            self.obs.groupby("dataset_id", observed=True)
+            .agg(
+                n_cells=("dataset_id", "size"),
+                n_donors=("donor_id", "nunique"),
+                n_cell_types=("cell_type", "nunique"),
+                assays=("assay", _collapse_unique_series),
+                tissues=("tissue", _collapse_unique_series),
+                diseases=("disease", _collapse_unique_series),
+                sexes=("sex", _collapse_sex_series),
+                age_terms=(
+                    "development_stage",
+                    _summarize_development_stage,
+                ),
+                suspension_types=("suspension_type", _collapse_unique_series),
+            )
+            .reset_index()
+        )
 
-    for key, age in decade_map.items():
-        if key in value:
-            return age
+        available_dataset_cols = [
+            col
+            for col in self.config.dataset_cols
+            if col in self.datasets.columns
+        ]
 
-    stage_map = {
-        "nursing stage": 0.0,
-        "infant stage": 0.0,
-        "child stage": 1.0,
-        "juvenile stage": 5.0,
-        "pediatric stage": 1.0,
-        "postnatal stage": 0.0,
-        "young adult stage": 20.0,
-        "adult stage": 18.0,
-        "prime adult stage": 30.0,
-        "middle aged stage": 45.0,
-        "late adult stage": 60.0,
-    }
+        dataset_summary = dataset_summary.merge(
+            self.datasets[available_dataset_cols],
+            on="dataset_id",
+            how="left",
+        )
 
-    for key, age in stage_map.items():
-        if key in value:
-            return age
+        front_cols = [
+            col
+            for col in [
+                "collection_name",
+                "dataset_id",
+                "n_cells",
+                "n_donors",
+                "n_cell_types",
+                "assays",
+                "tissues",
+                "diseases",
+                "sexes",
+                "age_terms",
+                "suspension_types",
+            ]
+            if col in dataset_summary.columns
+        ]
 
-    return float("inf") - 1.0
+        dataset_summary = dataset_summary[
+            front_cols
+            + [col for col in dataset_summary.columns if col not in front_cols]
+        ]
 
+        return dataset_summary.sort_values(
+            ["n_cells", "n_donors"],
+            ascending=False,
+        )
 
-def _stage_range_label(age: float, stage: str) -> str:
-    """Format an approximate age for the development-stage range prefix."""
-    value = stage.strip().lower()
-
-    if age < 0:
-        return "prenatal"
-
-    if "newborn" in value or age == 0:
-        return "neonatal"
-
-    if age < 1:
-        return f"{round(age * 12):g}mo"
-
-    if "year-old and over" in value or "and over" in value:
-        return f"{int(age)}yo+"
-
-    return f"{int(age)}yo"
-
-
-def _summarize_development_stage(values: Series, delimiter: str = ", ") -> str:
-    """Summarize development stages as range plus sorted stage counts."""
-    counts = values.dropna().astype(str).str.strip().value_counts()
-    counts = counts[counts.index != ""]
-
-    if counts.empty:
-        return ""
-
-    ordered = sorted(
-        counts.index, key=lambda stage: (_stage_age_value(stage), stage)
-    )
-
-    known = [
-        (stage, _stage_age_value(stage))
-        for stage in ordered
-        if _stage_age_value(stage) != float("inf")
-        and _stage_age_value(stage) != float("inf") - 1.0
-    ]
-
-    if known:
-        min_stage, min_age = min(known, key=lambda item: item[1])
-        max_stage, max_age = max(known, key=lambda item: item[1])
-        range_prefix = f"{_stage_range_label(min_age, min_stage)}"
-        range_prefix += f"-{_stage_range_label(max_age, max_stage)}"
-    else:
-        range_prefix = "unknown"
-
-    terms = [f"{stage} ({counts[stage]})" for stage in ordered]
-
-    return delimiter.join([range_prefix, *terms])
+    @classmethod
+    def from_census(
+        cls,
+        organism: str = "homo_sapiens",
+        config: CXGMetadataConfig | None = None,
+    ) -> Self:
+        """Read CELLxGENE Census metadata and return a query object."""
+        query_config = config or CXGMetadataConfig()
+        datasets, obs = _read_cxg_census_metadata(
+            organism=organism,
+            census_version=query_config.census_version,
+            obs_cols=query_config.obs_cols,
+        )
+        return cls(datasets=datasets, obs=obs, config=query_config)
 
 
 def _read_cxg_census_metadata(
+    *,
     organism: str = "homo_sapiens",
-) -> tuple[DataFrame, DataFrame]:
-    """Read CELLxGENE CENSUS metadata at the dataset and cell levels. As the
-    metadata exists at separate levels, we read the metadata out at the cell
-    level before collapsing back into dataset level downstream.
-
-    Returns:
-      [DataFrame, DataFrame]: The first DF consists of dataset-level CxG
-      metadata. The second DF consists of cell-level CxG metadata to be further
-      collapsed.
-    """
-    census = cellxgene_census.open_soma(census_version=CENSUS_VERSION)
+    census_version: str,
+    obs_cols: Sequence[str],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Read CELLxGENE Census metadata at dataset and cell levels."""
+    census = cellxgene_census.open_soma(census_version=census_version)
 
     try:
         datasets = census["census_info"]["datasets"].read().concat().to_pandas()
@@ -308,7 +435,7 @@ def _read_cxg_census_metadata(
             census["census_data"][organism]
             .obs.read(
                 value_filter="is_primary_data == True",
-                column_names=OBS_COLS,
+                column_names=list(obs_cols),
             )
             .concat()
             .to_pandas()
@@ -318,102 +445,3 @@ def _read_cxg_census_metadata(
         census.close()
 
     return datasets, obs
-
-
-def _summarize_dataset(datasets: DataFrame, obs: DataFrame) -> DataFrame:
-    """Summarize primary-cell metadata by dataset.
-
-    Aggregates per-cell CELLxGENE Census obs metadata to one row per dataset_id,
-    including cell count, donor count, cell-type count, and collapsed
-    categorical annotations. Dataset-level metadata from census_info["datasets"]
-    is then merged onto the summary.
-
-    Args:
-      datasets: Dataset-level Census metadata from census_info["datasets"].
-      obs: Primary-cell metadata from census_data[organism].obs.
-
-    Returns:
-      Dataset-level summary table with one row per dataset.
-    """
-    dataset_summary = (
-        obs.groupby("dataset_id", observed=True)
-        .agg(
-            n_cells=("dataset_id", "size"),
-            n_donors=("donor_id", "nunique"),
-            n_cell_types=("cell_type", "nunique"),
-            assays=("assay", _collapse_unique_series),
-            tissues=("tissue", _collapse_unique_series),
-            diseases=("disease", _collapse_unique_series),
-            sexes=("sex", _collapse_sex_series),
-            age_terms=("development_stage", _summarize_development_stage),
-            suspension_types=("suspension_type", _collapse_unique_series),
-        )
-        .reset_index()
-    )
-
-    dataset_cols = [col for col in DATASET_COLS if col in datasets.columns]
-
-    dataset_summary = dataset_summary.merge(
-        datasets[dataset_cols],
-        on="dataset_id",
-        how="left",
-    )
-
-    front_cols = [
-        col
-        for col in [
-            "collection_name",
-            "dataset_id",
-            "n_cells",
-            "n_donors",
-            "n_cell_types",
-            "assays",
-            "tissues",
-            "diseases",
-            "sexes",
-            "age_terms",
-            "suspension_types",
-        ]
-        if col in dataset_summary.columns
-    ]
-
-    dataset_summary = dataset_summary[
-        front_cols
-        + [col for col in dataset_summary.columns if col not in front_cols]
-    ]
-
-    dataset_summary = dataset_summary.sort_values(
-        ["n_cells", "n_donors"],
-        ascending=False,
-    )
-
-    return dataset_summary
-
-
-def main() -> None:
-    datasets, obs = _read_cxg_census_metadata()
-    # obs = _filter_datasets_with_relevant_disease(obs)
-    aggregated_dataset = _summarize_dataset(datasets=datasets, obs=obs)
-    aggregated_dataset.to_csv("cellxgene_human.tsv", sep="\t", index=False)
-
-    _set_matplotlib_publication_parameters()
-
-    makeup = build_dataset_makeup_table(
-        obs=obs,
-        aggregated_dataset=aggregated_dataset,
-    )
-
-    plot_dataset_makeup_dotplot_pdf(
-        makeup=makeup,
-        output_path="cellxgene_tissue_makeup.pdf",
-        annotation_type="tissue",
-    )
-    plot_dataset_makeup_dotplot_pdf(
-        makeup=makeup,
-        output_path="cellxgene_disease_makeup.pdf",
-        annotation_type="disease",
-    )
-
-
-if __name__ == "__main__":
-    main()
