@@ -19,6 +19,7 @@ classifiers = [
 dependencies = [
   "cellxgene_census==1.17.0",
   "matplotlib==3.10.9",
+  "numpy>=2.0",
   "pandas==3.0.3",
   "plotly==6.7.0",
   "PyYAML>=6.0.2",
@@ -38,6 +39,7 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["nasp_atlas*"]
+namespaces = true
 
 [tool.setuptools.package-data]
 "nasp_atlas.cellxgene.configs" = ["*.yaml"]

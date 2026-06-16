@@ -175,6 +175,13 @@ metadata.metadata_barplot(
     outpath=outdir / "filtered_disease_labels_grouped.png",
 )
 
+metadata.metadata_barplot(
+    label_column="tissue",
+    grouped=True,
+    outpath=outdir / "filtered_tissue_labels_grouped.png",
+)
+
+
 metadata.plot_disease_makeup(
     outdir / "filtered_disease_makeup.png",
     category_column="disease_category",
