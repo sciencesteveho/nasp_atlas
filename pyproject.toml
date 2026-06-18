@@ -7,7 +7,7 @@ name = "nasp_atlas"
 version = "0.1.0"
 description = "Curation and analyses of NASP in publicly-available single-cell atlases."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 license = { text = "Apache-2.0" }
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -28,12 +28,26 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pyink",
   "ruff",
   "pyright",
   "pytest",
   "pytest-cov",
   "ipython",
+  "ipykernel",
+  "pre-commit",
+]
+
+[project.urls]
+Homepage = "https://github.com/sciencesteveho/nasp_atlas"
+Source = "https://github.com/sciencesteveho/nasp_atlas"
+Issues = "https://github.com/sciencesteveho/nasp_atlas/issues"
+
+[tool.coverage.run]
+source = ["nasp_atlas"]
+omit = [
+  "tests/**",
+  "**/*_test.py",
+  "**/test_*.py",
 ]
 
 [tool.setuptools.packages.find]
@@ -45,10 +59,11 @@ namespaces = true
 "nasp_atlas.cellxgene.configs" = ["*.yaml"]
 
 [tool.ruff]
+src = ["nasp_atlas", "tests"]
+extend-include = [ "*.ipynb" ]
 target-version = "py311"
 line-length = 80
 indent-width = 4
-src = ["nasp_atlas", "tests"]
 
 exclude = [
   ".git",
@@ -59,7 +74,6 @@ exclude = [
   "dist",
   "__pycache__",
   "*.egg-info",
-  "notebooks",
 ]
 
 [tool.ruff.lint]
@@ -71,17 +85,25 @@ select = [
   "B",    # flake8-bugbear
   "UP",   # pyupgrade
   "RUF",  # Ruff-specific rules
+  "C4",     # flake8-comprehensions
+  "BLE",    # flake8-blind-except
+  "RUF100", # unused noqa
+  "D",   # pydocstyle
 ]
 
-# Keep E501 line-too-long and E741 ambiguous-variable-name enabled.
-ignore = []
+ignore = [
+  "D413",  # Missing blank line after last section.
+]
 
-# Warn about unused imports, but do not auto-delete them on save.
+# Warn about unused imports, but do not auto-delete on save.
 unfixable = [
   "F401",
 ]
 
 fixable = ["ALL"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.ruff.lint.isort]
 known-first-party = ["nasp_atlas"]
@@ -113,37 +135,18 @@ lines-after-imports = 2
 quote-style = "double"
 indent-style = "space"
 line-ending = "auto"
-docstring-code-format = true
-docstring-code-line-length = 80
-
-[tool.pyink]
-line-length = 80
-unstable = true
-pyink = true
-pyink-use-majority-quotes = true
-
-pyink-indentation = 2
-
-include = '\.pyi?$'
-
-pyink-annotation-pragmas = [
-  "noqa",
-  "pylint:",
-  "type: ignore",
-  "pytype:",
-  "mypy:",
-  "pyright:",
-  "pyre-",
-]
+docstring-code-format = false
 
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "standard"
-include = ["nasp_atlas"]
+include = [
+  "nasp_atlas",
+]
 
 exclude = [
   "**/node_modules",
-  "**/.*",        
+  "**/.*",
   "build",
   "dist",
   "**/*.egg-info",
@@ -170,4 +173,5 @@ addopts = [
   "-ra",
   "--strict-markers",
   "--strict-config",
+  "--import-mode=importlib",
 ]

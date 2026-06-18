@@ -113,9 +113,7 @@ def _build_sankey_layout(
         )
         category_right_cursors[category] = category_y_top
 
-    category_sibling_counters: dict[str, int] = {
-        category: 0 for category in categories
-    }
+    category_sibling_counters: dict[str, int] = dict.fromkeys(categories, 0)
     category_sibling_totals: dict[str, int] = {
         category: int((counts["category"] == category).sum())
         for category in categories

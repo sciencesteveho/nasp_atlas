@@ -298,6 +298,7 @@ def _plot_stacked_bar(
       sort_by_total_cells: Order dataset by total cell count (largest sit at the
         top of each figure).
       display_names: Optional human-readable labels for category values.
+      num_legend_cols: Number of columns to use for the legend
     """
     pivot_fraction, total_cells, categories = _prepare_stacked_bar_data(
         makeup=makeup,
@@ -375,8 +376,9 @@ def _annotate_bars(
     fractions: np.ndarray,
     x_max: float,
 ) -> None:
-    """Annotate horizontal bars with count and percentage labels. If the
-    rendered label fits inside its bar, it is placed inside the bar,
+    """Annotate horizontal bars with count and percentage labels.
+
+    If the rendered label fits inside its bar, it is placed inside the bar,
     right-aligned in white. Otherwise, it is placed to the right of the bar.
 
     Args:
