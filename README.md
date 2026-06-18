@@ -8,7 +8,15 @@ Curation and analyses of **N**ucleic **A**cid **S**ensing **P**athways (**NASP**
 
 ## Installation
 ```sh
-# Lorem Ipsum for now!
+# prepare a fresh conda environment
+conda create -n nasp_atlas python=3.11 -y
+conda activate nasp_atlas
+python -m pip install -U pip setuptools wheel
+
+# download and install from source
+git clone https://github.com/sciencesteveho/nasp_atlas.git
+cd nasp_atlas
+pip install -e .
 ```
 <br>
 

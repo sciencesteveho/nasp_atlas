@@ -93,6 +93,7 @@ select = [
 
 ignore = [
   "D413",  # Missing blank line after last section.
+  "D205",  # 1 blank line required before class docstring.
 ]
 
 # Warn about unused imports, but do not auto-delete on save.
