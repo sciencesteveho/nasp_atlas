@@ -17,23 +17,29 @@ classifiers = [
 ]
 
 dependencies = [
+  "anndata==0.12.6",
   "cellxgene_census==1.17.0",
+  "h5py==3.16.0",
   "matplotlib==3.10.9",
-  "numpy>=2.0",
+  "numpy==2.4.6",
   "pandas==3.0.3",
   "plotly==6.7.0",
-  "PyYAML>=6.0.2",
+  "pyscenic==0.12.1",
+  "PyYAML==6.0.3",
+  "scanpy==1.11.5",
+  "scipy==1.17.1",
   "seaborn==0.13.2",
+  "setuptools<81",
 ]
 
 [project.optional-dependencies]
 dev = [
-  "ruff",
-  "pyright",
-  "pytest",
+  "ruff==0.15.17",
+  "pyright[nodejs]==1.1.410",
+  "pytest==9.1.0",
   "pytest-cov",
-  "ipython",
-  "ipykernel",
+  "ipython==8.12.3",
+  "ipykernel==7.3.0",
   "pre-commit",
 ]
 

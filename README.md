@@ -22,11 +22,58 @@ pip install -e .
 
 ## Data requirements
 
-Also lorem ipsum.
+Lorem ipsum for now.
 
 <br>
 
 ## Modules
+
+### Single-cell
+
+Generalizable, reproducible single-cell utilities and visualizations.
+
+`SCProcessor` handles common Scanpy processing steps like normalization, HVG PCA, neighbor graphs, and clustering. `SCVisualizer` centralizes stylistic choices for embedding viz, multi-gene panels, and dotplots.
+
+```python
+from nasp_atlas.single_cell import SCUtils
+from nasp_atlas.single_cell import SCVisualizer
+
+sc_utils = SCUtils(output_dir="results")
+adata = SCUtils.load_h5ad("atlas_subset.h5ad")
+
+sc_utils.viz.plot_multi_gene_umap_panel(
+    adata,
+    genes=["AIM2", "CGAS", "ZBP1"],
+    filename="dna_sensing_genes",
+    gene_symbol_column="feature_name",
+    expression_layer=None,
+)
+```
+
+For NASP module marker panels, resolve symbols through the given anndata's gene-symbol column:
+
+```python
+from nasp_compendium import GeneModules
+
+viz = SCVisualizer(output_dir="results/tabula_sapiens_scoring_dev")
+genes = GeneModules.genes(
+    "NASP_DNA_SENSING",
+    adata=adata,
+    gene_symbol_column="feature_name",
+    output="symbols",
+)
+
+viz.plot_multi_gene_umap_panel(
+    adata,
+    genes=genes,
+    filename="NASP_DNA_SENSING_gene_expression_umaps",
+    gene_symbol_column="feature_name",
+    expression_layer=None,
+    ncols=6,
+)
+```
+
+</br>
 
 ### CELLxGENE metadata
 
