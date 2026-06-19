@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from nasp_atlas.cellxgene.categorize import _stage_age_value
 from nasp_atlas.cellxgene.categorize import categorize_development_stage
+from nasp_atlas.cellxgene.categorize import stage_age_value
 from nasp_atlas.cellxgene.visualization.composition import _annotate_bars
 from nasp_atlas.cellxgene.visualization.composition import _clean_label_series
 from nasp_atlas.cellxgene.visualization.composition import _format_plot_title
@@ -24,7 +24,7 @@ def _age_labels_and_values(
 ) -> tuple[pd.Series, pd.Series]:
     """Return plot labels and numeric sort values for stage labels."""
     labels = stages.map(categorize_development_stage) if collapsed else stages
-    age_values = stages.map(_stage_age_value)
+    age_values = stages.map(stage_age_value)
     return labels, age_values
 
 

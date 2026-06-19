@@ -230,7 +230,7 @@ def _collapse_sex_series(values: pd.Series) -> str:
     return ", ".join(collapsed)
 
 
-def _stage_age_value(stage: str) -> float:
+def stage_age_value(stage: str) -> float:
     """Return an approximate numeric age for sorting development stages."""
     value = stage.strip().lower()
 
@@ -339,7 +339,7 @@ def categorize_development_stage(stage: object) -> str:
         return "unknown"
 
     stage_string = str(stage).strip()
-    age = _stage_age_value(stage_string)
+    age = stage_age_value(stage_string)
 
     if age in {float("inf"), float("inf") - 1.0}:
         return "unknown"
@@ -360,13 +360,13 @@ def _summarize_development_stage(
 
     ordered = sorted(
         counts.index,
-        key=lambda stage: (_stage_age_value(stage), stage),
+        key=lambda stage: (stage_age_value(stage), stage),
     )
 
     if known := [
-        (stage, _stage_age_value(stage))
+        (stage, stage_age_value(stage))
         for stage in ordered
-        if _stage_age_value(stage) not in [float("inf"), float("inf") - 1.0]
+        if stage_age_value(stage) not in [float("inf"), float("inf") - 1.0]
     ]:
         min_stage, min_age = min(known, key=lambda item: item[1])
         max_stage, max_age = max(known, key=lambda item: item[1])
