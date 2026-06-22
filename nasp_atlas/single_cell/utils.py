@@ -90,17 +90,12 @@ def dedupe_stem(stem: str, used_stems: set[str]) -> str:
 
 
 def normalize_h5ad_string_storage(adata: ad.AnnData) -> None:
-    """Keep h5ad writes away from pandas Arrow string arrays."""
-    adata.obs.index = pd.Index(
-        [str(value) for value in adata.obs_names],
-        dtype=object,
-    )
-    adata.var.index = pd.Index(
-        [str(value) for value in adata.var_names],
-        dtype=object,
-    )
+    """Convert pandas Arrow-backed string columns to object dtype for h5ad
+    writes.
+    """
+    adata.obs.index = pd.Index(adata.obs_names.astype(str), dtype=object)
+    adata.var.index = pd.Index(adata.var_names.astype(str), dtype=object)
     for frame in (adata.obs, adata.var):
         for column in frame.columns:
-            dtype = frame[column].dtype
-            if isinstance(dtype, (pd.CategoricalDtype, pd.StringDtype)):
+            if isinstance(frame[column].dtype, pd.StringDtype):
                 frame[column] = frame[column].astype(object)
