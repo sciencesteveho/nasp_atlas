@@ -5,7 +5,7 @@ from __future__ import annotations
 import gc
 import re
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import anndata as ad  # type: ignore
 import h5py  # type: ignore
@@ -17,6 +17,10 @@ from nasp_atlas.single_cell.io import read_csr_rows
 from nasp_atlas.single_cell.io import read_h5ad
 
 
+H5adCompression = Literal["gzip", "lzf"]
+SplitCompression = H5adCompression | Literal["source"] | None
+
+
 def split_anndata_by_obs(
     adata_or_path: ad.AnnData | str | Path,
     *,
@@ -25,8 +29,14 @@ def split_anndata_by_obs(
     output_name: str,
     subset_fraction: float | None = None,
     random_state: int = 0,
+    compression: SplitCompression = "source",
 ) -> dict[str, Path]:
-    """Write one AnnData file per value in `adata.obs[obs_key]`."""
+    """Write one AnnData file per value in `adata.obs[obs_key]`.
+
+    By default, path-backed inputs preserve the source H5AD matrix
+    compression for the output files. Pass ``compression=None`` to disable
+    output compression.
+    """
     close_backed = False
     if isinstance(adata_or_path, ad.AnnData):
         adata = adata_or_path
@@ -47,7 +57,13 @@ def split_anndata_by_obs(
         )
 
     try:
-        return _write_obs_value_h5ads(obs_key, adata, output_dir, output_name)
+        return _write_obs_value_h5ads(
+            obs_key,
+            adata,
+            output_dir,
+            output_name,
+            compression=compression,
+        )
     finally:
         if close_backed:
             adata.file.close()
@@ -58,6 +74,8 @@ def _write_obs_value_h5ads(
     adata: ad.AnnData,
     output_dir: str | Path,
     output_name: str,
+    *,
+    compression: SplitCompression = "source",
 ) -> dict[str, Path]:
     """Write one h5ad file for each non-null value in an obs column."""
     if obs_key not in adata.obs:
@@ -74,18 +92,24 @@ def _write_obs_value_h5ads(
 
     written: dict[str, Path] = {}
     used_stems: set[str] = set()
-    obs_values = adata.obs[obs_key]
-    obs_values_text = obs_values.astype(str)
-    for value in sorted(obs_values.dropna().astype(str).unique()):
+    write_compression, compression_opts = _resolve_write_compression(
+        adata,
+        compression,
+    )
+    for value, obs_indices in _iter_obs_value_indices(adata.obs[obs_key]):
         value_slug = snake_case(value)
         if not value_slug:
             continue
 
         stem = dedupe_stem(f"{value_slug}_{suffix}", used_stems)
         out = output_path / f"{stem}.h5ad"
-        subset = _materialize_obs_subset(adata, obs_values_text == value)
+        subset = _materialize_obs_subset(adata, obs_indices)
         normalize_h5ad_string_storage(subset)
-        subset.write_h5ad(out)
+        subset.write_h5ad(
+            out,
+            compression=write_compression,
+            compression_opts=compression_opts,
+        )
         written[value] = out
         del subset
         gc.collect()
@@ -112,6 +136,79 @@ def dedupe_stem(stem: str, used_stems: set[str]) -> str:
     deduped = f"{stem}_{index}"
     used_stems.add(deduped)
     return deduped
+
+
+def _iter_obs_value_indices(
+    obs_values: pd.Series,
+) -> list[tuple[str, np.ndarray]]:
+    """Return sorted non-null obs value labels and integer row indices."""
+    valid = obs_values.notna()
+    if not bool(valid.any()):
+        return []
+
+    positions = pd.Series(np.arange(len(obs_values)), index=obs_values.index)
+    labels = obs_values.loc[valid].astype(str)
+    grouped = positions.loc[valid].groupby(labels, sort=True)
+    return [
+        (str(value), group.to_numpy(dtype=np.intp, copy=False))
+        for value, group in grouped
+    ]
+
+
+def _resolve_write_compression(
+    adata: ad.AnnData,
+    compression: SplitCompression,
+) -> tuple[H5adCompression | None, Any | None]:
+    """Return output compression settings for split h5ads."""
+    if compression == "source":
+        return _infer_h5ad_compression(adata)
+    return compression, None
+
+
+def _infer_h5ad_compression(
+    adata: ad.AnnData,
+) -> tuple[H5adCompression | None, Any | None]:
+    """Infer H5AD matrix compression from a backed AnnData source."""
+    if adata.filename is None:
+        return None, None
+
+    with h5py.File(adata.filename, "r") as h5:
+        for dataset in _iter_h5ad_matrix_datasets(h5):
+            compression = dataset.compression
+            if compression in {"gzip", "lzf"}:
+                return (
+                    cast(H5adCompression, compression),
+                    dataset.compression_opts,
+                )
+
+    return None, None
+
+
+def _iter_h5ad_matrix_datasets(h5: h5py.File) -> list[h5py.Dataset]:
+    """Return datasets that represent X or raw.X storage."""
+    datasets: list[h5py.Dataset] = []
+
+    if "X" in h5:
+        datasets.extend(_matrix_datasets(h5["X"]))
+
+    raw = h5.get("raw")
+    if isinstance(raw, h5py.Group) and "X" in raw:
+        datasets.extend(_matrix_datasets(raw["X"]))
+
+    return datasets
+
+
+def _matrix_datasets(storage: h5py.Group | h5py.Dataset) -> list[h5py.Dataset]:
+    """Return datasets backing a dense or sparse H5AD matrix storage object."""
+    if isinstance(storage, h5py.Dataset):
+        return [storage]
+
+    datasets: list[h5py.Dataset] = []
+    for key in ("data", "indices", "indptr"):
+        child = storage.get(key)
+        if isinstance(child, h5py.Dataset):
+            datasets.append(child)
+    return datasets
 
 
 def normalize_h5ad_string_storage(adata: ad.AnnData) -> None:
@@ -146,11 +243,10 @@ def _normalize_dataframe_string_storage(frame: pd.DataFrame) -> None:
 
 def _materialize_obs_subset(
     adata: ad.AnnData,
-    obs_mask: pd.Series,
+    obs_indices: np.ndarray,
 ) -> ad.AnnData:
-    """Return an in-memory AnnData subset for the given obs mask."""
-    row_mask = obs_mask.to_numpy()
-    subset = adata[row_mask, :]
+    """Return an in-memory AnnData subset for the given obs indices."""
+    subset = adata[obs_indices, :]
     if not subset.isbacked:
         return subset.copy()
 
@@ -158,7 +254,7 @@ def _materialize_obs_subset(
         return subset.to_memory()
 
     raw = subset.raw
-    raw_x = _read_backed_raw_x_rows(adata, row_mask)
+    raw_x = _read_backed_raw_x_rows(adata, obs_indices)
     raw_var = cast(pd.DataFrame, raw.var.copy())
     raw_any = cast(Any, raw)
     raw_varm = {key: value.copy() for key, value in raw_any.varm.items()}
@@ -176,13 +272,12 @@ def _materialize_obs_subset(
 
 def _read_backed_raw_x_rows(
     adata: ad.AnnData,
-    row_mask: np.ndarray,
+    obs_indices: np.ndarray,
 ) -> object:
     """Read selected rows from a backed AnnData raw matrix."""
     if adata.filename is None:
         raise ValueError("Backed AnnData raw matrix has no source filename.")
 
-    obs_indices = np.flatnonzero(row_mask)
     with h5py.File(adata.filename, "r") as h5:
         raw_group = h5["raw"]
         if not isinstance(raw_group, h5py.Group):

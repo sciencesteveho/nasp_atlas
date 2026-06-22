@@ -9,6 +9,7 @@ os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 os.environ.setdefault("NUMBA_CACHE_DIR", "/tmp/numba")
 
 import anndata as ad  # type: ignore
+import h5py  # type: ignore
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -134,6 +135,37 @@ def test_split_anndata_by_obs_writes_snake_case_files(tmp_path) -> None:
     assert liver.obs_names.tolist() == ["cell_a", "cell_c"]
 
 
+def test_split_anndata_by_obs_names_files_from_obs_values(tmp_path) -> None:
+    """Split filenames use obs values before the configured output name."""
+    obs_index = pd.Index(["cell_a", "cell_b", "cell_c"], dtype=object)
+    adata = ad.AnnData(
+        X=np.ones((3, 2)),
+        obs=pd.DataFrame(
+            {
+                "tissue_type": pd.Categorical(
+                    ["Liver", "Lung", "Liver"],
+                    categories=["Liver", "Lung", "Unused Tissue"],
+                ),
+            },
+            index=obs_index,
+        ),
+        var=pd.DataFrame(index=pd.Index(["gene_a", "gene_b"], dtype=object)),
+    )
+    output_dir = tmp_path / "split"
+
+    written = split_anndata_by_obs(
+        adata,
+        output_dir=output_dir,
+        obs_key="tissue_type",
+        output_name="tabula sapiens",
+    )
+
+    assert written == {
+        "Liver": output_dir / "liver_tabula_sapiens.h5ad",
+        "Lung": output_dir / "lung_tabula_sapiens.h5ad",
+    }
+
+
 def test_split_anndata_by_obs_reads_path_backed(tmp_path, monkeypatch) -> None:
     """Path-based splitting keeps the source h5ad backed and closes it."""
     obs_index = pd.Index(["cell_a", "cell_b", "cell_c"], dtype=object)
@@ -174,6 +206,38 @@ def test_split_anndata_by_obs_reads_path_backed(tmp_path, monkeypatch) -> None:
 
     assert len(backed_reads) == 1
     assert backed_reads[0].file.is_open is False
+
+
+def test_split_anndata_by_obs_preserves_source_compression(tmp_path) -> None:
+    """Path-based splitting keeps source matrix compression by default."""
+    obs_index = pd.Index(["cell_a", "cell_b", "cell_c"], dtype=object)
+    adata = ad.AnnData(
+        X=np.ones((3, 2)),
+        obs=pd.DataFrame(
+            {
+                "tissue_type": pd.Series(
+                    ["Liver", "Bone Marrow", "Liver"],
+                    index=obs_index,
+                    dtype=object,
+                ),
+            },
+            index=obs_index,
+        ),
+        var=pd.DataFrame(index=pd.Index(["gene_a", "gene_b"], dtype=object)),
+    )
+    h5ad_path = tmp_path / "tabula_sapiens.h5ad"
+    output_dir = tmp_path / "split"
+    adata.write_h5ad(h5ad_path, compression="gzip")
+
+    written = split_anndata_by_obs(
+        h5ad_path,
+        output_dir=output_dir,
+        obs_key="tissue_type",
+        output_name="tabula sapiens",
+    )
+
+    with h5py.File(written["Liver"], "r") as h5:
+        assert h5["X"].compression == "gzip"
 
 
 def test_split_anndata_by_obs_reads_backed_sparse_raw(tmp_path) -> None:
