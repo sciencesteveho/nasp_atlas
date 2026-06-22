@@ -12,6 +12,7 @@ import anndata as ad  # type: ignore
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
 from nasp_compendium.types import GeneModule
 
 import nasp_atlas.single_cell.utils as single_cell_utils
@@ -173,6 +174,46 @@ def test_split_anndata_by_obs_reads_path_backed(tmp_path, monkeypatch) -> None:
 
     assert len(backed_reads) == 1
     assert backed_reads[0].file.is_open is False
+
+
+def test_split_anndata_by_obs_reads_backed_sparse_raw(tmp_path) -> None:
+    """Path-based splitting handles backed CSR raw matrices."""
+    obs_index = pd.Index(["cell_a", "cell_b", "cell_c"], dtype=object)
+    var_index = pd.Index(["gene_a", "gene_b"], dtype=object)
+    adata = ad.AnnData(
+        X=sp.csr_matrix(np.arange(6).reshape(3, 2)),
+        obs=pd.DataFrame(
+            {
+                "tissue_type": pd.Series(
+                    ["Liver", "Bone Marrow", "Liver"],
+                    index=obs_index,
+                    dtype=object,
+                ),
+            },
+            index=obs_index,
+        ),
+        var=pd.DataFrame(index=var_index),
+    )
+    adata.raw = adata
+    h5ad_path = tmp_path / "tabula_sapiens.h5ad"
+    output_dir = tmp_path / "split"
+    adata.write_h5ad(h5ad_path)
+
+    written = split_anndata_by_obs(
+        h5ad_path,
+        output_dir=output_dir,
+        obs_key="tissue_type",
+        output_name="tabula sapiens",
+    )
+
+    liver = ad.read_h5ad(written["Liver"])
+    assert liver.obs_names.tolist() == ["cell_a", "cell_c"]
+    assert liver.raw is not None
+    assert liver.raw.var_names.tolist() == ["gene_a", "gene_b"]
+    np.testing.assert_array_equal(
+        liver.raw.X.toarray(),
+        np.array([[0, 1], [4, 5]]),
+    )
 
 
 def test_normalize_h5ad_string_storage_converts_arrow_categories(

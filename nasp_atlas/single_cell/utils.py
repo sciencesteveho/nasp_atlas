@@ -5,11 +5,15 @@ from __future__ import annotations
 import gc
 import re
 from pathlib import Path
+from typing import Any, cast
 
 import anndata as ad  # type: ignore
+import h5py  # type: ignore
+import numpy as np
 import pandas as pd
 
 from nasp_atlas.single_cell.io import random_cell_subset
+from nasp_atlas.single_cell.io import read_csr_rows
 from nasp_atlas.single_cell.io import read_h5ad
 
 
@@ -116,17 +120,28 @@ def normalize_h5ad_string_storage(adata: ad.AnnData) -> None:
     """
     adata.obs.index = pd.Index(adata.obs_names.astype(str), dtype=object)
     adata.var.index = pd.Index(adata.var_names.astype(str), dtype=object)
-    for frame in (adata.obs, adata.var):
-        for column in frame.columns:
-            series = frame[column]
-            if isinstance(series.dtype, pd.StringDtype):
-                frame[column] = series.astype(object)
-            elif isinstance(series.dtype, pd.CategoricalDtype):
-                categories = series.cat.categories
-                if isinstance(categories.dtype, pd.StringDtype):
-                    frame[column] = series.cat.set_categories(
-                        pd.Index(categories.astype(object), dtype=object)
-                    )
+    _normalize_dataframe_string_storage(cast(pd.DataFrame, adata.obs))
+    _normalize_dataframe_string_storage(cast(pd.DataFrame, adata.var))
+    if adata.raw is not None:
+        adata.raw.var.index = pd.Index(
+            adata.raw.var_names.astype(str),
+            dtype=object,
+        )
+        _normalize_dataframe_string_storage(cast(pd.DataFrame, adata.raw.var))
+
+
+def _normalize_dataframe_string_storage(frame: pd.DataFrame) -> None:
+    """Convert Arrow-backed string storage in a dataframe for h5ad writes."""
+    for column in frame.columns:
+        series = frame[column]
+        if isinstance(series.dtype, pd.StringDtype):
+            frame[column] = series.astype(object)
+        elif isinstance(series.dtype, pd.CategoricalDtype):
+            categories = series.cat.categories
+            if isinstance(categories.dtype, pd.StringDtype):
+                frame[column] = series.cat.set_categories(
+                    pd.Index(categories.astype(object), dtype=object)
+                )
 
 
 def _materialize_obs_subset(
@@ -134,5 +149,55 @@ def _materialize_obs_subset(
     obs_mask: pd.Series,
 ) -> ad.AnnData:
     """Return an in-memory AnnData subset for the given obs mask."""
-    subset = adata[obs_mask.to_numpy(), :]
-    return subset.to_memory() if subset.isbacked else subset.copy()
+    row_mask = obs_mask.to_numpy()
+    subset = adata[row_mask, :]
+    if not subset.isbacked:
+        return subset.copy()
+
+    if subset.raw is None:
+        return subset.to_memory()
+
+    raw = subset.raw
+    raw_x = _read_backed_raw_x_rows(adata, row_mask)
+    raw_var = cast(pd.DataFrame, raw.var.copy())
+    raw_any = cast(Any, raw)
+    raw_varm = {key: value.copy() for key, value in raw_any.varm.items()}
+
+    subset._raw = None
+    in_memory = subset.to_memory()
+    in_memory.raw = ad.AnnData(
+        X=raw_x,
+        obs=cast(pd.DataFrame, in_memory.obs.copy()),
+        var=raw_var,
+        varm=cast(dict[str, Any], raw_varm),
+    )
+    return in_memory
+
+
+def _read_backed_raw_x_rows(
+    adata: ad.AnnData,
+    row_mask: np.ndarray,
+) -> object:
+    """Read selected rows from a backed AnnData raw matrix."""
+    if adata.filename is None:
+        raise ValueError("Backed AnnData raw matrix has no source filename.")
+
+    obs_indices = np.flatnonzero(row_mask)
+    with h5py.File(adata.filename, "r") as h5:
+        raw_group = h5["raw"]
+        if not isinstance(raw_group, h5py.Group):
+            raise TypeError("Expected backed AnnData raw to be an HDF5 group.")
+
+        raw_x = raw_group["X"]
+        if isinstance(raw_x, h5py.Dataset):
+            return raw_x[obs_indices, :].copy()
+        if isinstance(raw_x, h5py.Group):
+            if raw_x.attrs.get("encoding-type") == "csr_matrix":
+                return read_csr_rows(raw_x, obs_indices)
+            raise ValueError(
+                "Expected backed AnnData raw.X to be dense or CSR sparse."
+            )
+
+    raise TypeError(
+        "Expected backed AnnData raw.X to be an HDF5 dataset/group."
+    )
