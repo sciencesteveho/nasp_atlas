@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 from nasp_compendium.types import GeneModule
 
+import nasp_atlas.single_cell.utils as single_cell_utils
 from nasp_atlas.cellxgene import add_development_stage_age_obs
 from nasp_atlas.single_cell import EmbeddingConfig
 from nasp_atlas.single_cell import SCUtils
@@ -21,6 +22,7 @@ from nasp_atlas.single_cell import SCVisualizer
 from nasp_atlas.single_cell import combine_module_scores
 from nasp_atlas.single_cell import inverse_module_score_name
 from nasp_atlas.single_cell import module_score_name
+from nasp_atlas.single_cell import normalize_h5ad_string_storage
 from nasp_atlas.single_cell import positive_module_score_name
 from nasp_atlas.single_cell import score_scanpy_module
 from nasp_atlas.single_cell import split_anndata_by_obs
@@ -129,6 +131,82 @@ def test_split_anndata_by_obs_writes_snake_case_files(tmp_path) -> None:
     }
     liver = ad.read_h5ad(written["Liver"])
     assert liver.obs_names.tolist() == ["cell_a", "cell_c"]
+
+
+def test_split_anndata_by_obs_reads_path_backed(tmp_path, monkeypatch) -> None:
+    """Path-based splitting keeps the source h5ad backed and closes it."""
+    obs_index = pd.Index(["cell_a", "cell_b", "cell_c"], dtype=object)
+    adata = ad.AnnData(
+        X=np.ones((3, 2)),
+        obs=pd.DataFrame(
+            {
+                "tissue_type": pd.Series(
+                    ["Liver", "Bone Marrow", "Liver"],
+                    index=obs_index,
+                    dtype=object,
+                ),
+            },
+            index=obs_index,
+        ),
+        var=pd.DataFrame(index=pd.Index(["gene_a", "gene_b"], dtype=object)),
+    )
+    h5ad_path = tmp_path / "tabula_sapiens.h5ad"
+    adata.write_h5ad(h5ad_path)
+
+    original_read_h5ad = single_cell_utils.ad.read_h5ad
+    backed_reads: list[ad.AnnData] = []
+
+    def read_h5ad_spy(*args, **kwargs):
+        loaded = original_read_h5ad(*args, **kwargs)
+        if kwargs.get("backed") == "r":
+            backed_reads.append(loaded)
+        return loaded
+
+    monkeypatch.setattr(single_cell_utils.ad, "read_h5ad", read_h5ad_spy)
+
+    split_anndata_by_obs(
+        h5ad_path,
+        output_dir=tmp_path / "split",
+        obs_key="tissue_type",
+        output_name="tabula sapiens",
+    )
+
+    assert len(backed_reads) == 1
+    assert backed_reads[0].file.is_open is False
+
+
+def test_normalize_h5ad_string_storage_converts_arrow_categories(
+    tmp_path,
+) -> None:
+    """Anndata string categoricals write after normalization."""
+    obs_index = pd.Index(["cell_a", "cell_b"], dtype=object)
+    tissue_categories = pd.Index(
+        ["Bone Marrow", "Liver"],
+        dtype="string[pyarrow]",
+    )
+    adata = ad.AnnData(
+        X=np.ones((2, 2)),
+        obs=pd.DataFrame(
+            {
+                "tissue_type": pd.Categorical.from_codes(
+                    [1, 0],
+                    categories=tissue_categories,
+                ),
+            },
+            index=obs_index,
+        ),
+        var=pd.DataFrame(index=pd.Index(["gene_a", "gene_b"], dtype=object)),
+    )
+    normalized = tmp_path / "normalized.h5ad"
+
+    categories = adata.obs["tissue_type"].cat.categories
+    assert isinstance(categories.dtype, pd.StringDtype)
+
+    normalize_h5ad_string_storage(adata)
+    adata.write_h5ad(normalized)
+
+    reread = ad.read_h5ad(normalized)
+    assert reread.obs["tissue_type"].tolist() == ["Liver", "Bone Marrow"]
 
 
 def test_module_score_names_live_in_single_cell_utils() -> None:

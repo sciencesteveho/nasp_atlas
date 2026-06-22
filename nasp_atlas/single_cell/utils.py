@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import re
 from pathlib import Path
 
@@ -22,6 +23,7 @@ def split_anndata_by_obs(
     random_state: int = 0,
 ) -> dict[str, Path]:
     """Write one AnnData file per value in `adata.obs[obs_key]`."""
+    close_backed = False
     if isinstance(adata_or_path, ad.AnnData):
         adata = adata_or_path
         if subset_fraction is not None:
@@ -30,6 +32,9 @@ def split_anndata_by_obs(
                 fraction=subset_fraction,
                 random_state=random_state,
             )
+    elif subset_fraction is None:
+        adata = ad.read_h5ad(adata_or_path, backed="r")
+        close_backed = True
     else:
         adata, _ = read_h5ad(
             adata_or_path,
@@ -37,6 +42,20 @@ def split_anndata_by_obs(
             random_state=random_state,
         )
 
+    try:
+        return _write_obs_value_h5ads(obs_key, adata, output_dir, output_name)
+    finally:
+        if close_backed:
+            adata.file.close()
+
+
+def _write_obs_value_h5ads(
+    obs_key: str,
+    adata: ad.AnnData,
+    output_dir: str | Path,
+    output_name: str,
+) -> dict[str, Path]:
+    """Write one h5ad file for each non-null value in an obs column."""
     if obs_key not in adata.obs:
         raise ValueError(f"obs_key not found in adata.obs: {obs_key}")
 
@@ -60,10 +79,12 @@ def split_anndata_by_obs(
 
         stem = dedupe_stem(f"{value_slug}_{suffix}", used_stems)
         out = output_path / f"{stem}.h5ad"
-        subset = adata[obs_values_text == value].copy()
+        subset = _materialize_obs_subset(adata, obs_values_text == value)
         normalize_h5ad_string_storage(subset)
         subset.write_h5ad(out)
         written[value] = out
+        del subset
+        gc.collect()
 
     return written
 
@@ -97,5 +118,21 @@ def normalize_h5ad_string_storage(adata: ad.AnnData) -> None:
     adata.var.index = pd.Index(adata.var_names.astype(str), dtype=object)
     for frame in (adata.obs, adata.var):
         for column in frame.columns:
-            if isinstance(frame[column].dtype, pd.StringDtype):
-                frame[column] = frame[column].astype(object)
+            series = frame[column]
+            if isinstance(series.dtype, pd.StringDtype):
+                frame[column] = series.astype(object)
+            elif isinstance(series.dtype, pd.CategoricalDtype):
+                categories = series.cat.categories
+                if isinstance(categories.dtype, pd.StringDtype):
+                    frame[column] = series.cat.set_categories(
+                        pd.Index(categories.astype(object), dtype=object)
+                    )
+
+
+def _materialize_obs_subset(
+    adata: ad.AnnData,
+    obs_mask: pd.Series,
+) -> ad.AnnData:
+    """Return an in-memory AnnData subset for the given obs mask."""
+    subset = adata[obs_mask.to_numpy(), :]
+    return subset.to_memory() if subset.isbacked else subset.copy()
