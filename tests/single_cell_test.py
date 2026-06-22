@@ -12,11 +12,18 @@ import anndata as ad  # type: ignore
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from nasp_compendium.types import GeneModule
 
 from nasp_atlas.cellxgene import add_development_stage_age_obs
 from nasp_atlas.single_cell import EmbeddingConfig
 from nasp_atlas.single_cell import SCUtils
 from nasp_atlas.single_cell import SCVisualizer
+from nasp_atlas.single_cell import combine_module_scores
+from nasp_atlas.single_cell import inverse_module_score_name
+from nasp_atlas.single_cell import module_score_name
+from nasp_atlas.single_cell import positive_module_score_name
+from nasp_atlas.single_cell import score_scanpy_module
+from nasp_atlas.single_cell import split_anndata_by_obs
 
 
 def test_embedding_config_roundtrip() -> None:
@@ -76,6 +83,153 @@ def test_scutils_map_categorical_column() -> None:
         "stimulated",
         "stimulated",
     ]
+
+
+def test_split_anndata_by_obs_writes_snake_case_files(tmp_path) -> None:
+    """Tabula Sapiens helper writes one h5ad per obs value."""
+    obs_index = pd.Index(
+        ["cell_a", "cell_b", "cell_c", "cell_d"],
+        dtype=object,
+    )
+    var_index = pd.Index(["gene_a", "gene_b"], dtype=object)
+    adata = ad.AnnData(
+        X=np.ones((4, 2)),
+        obs=pd.DataFrame(
+            {
+                "tissue_type": pd.Series(
+                    [
+                        "Liver",
+                        "Bone Marrow",
+                        "Liver",
+                        "Blood & Immune",
+                    ],
+                    index=obs_index,
+                    dtype=object,
+                ),
+            },
+            index=obs_index,
+        ),
+        var=pd.DataFrame(index=var_index),
+    )
+    h5ad_path = tmp_path / "tabula_sapiens.h5ad"
+    output_dir = tmp_path / "split"
+    adata.write_h5ad(h5ad_path)
+
+    written = split_anndata_by_obs(
+        h5ad_path,
+        output_dir=output_dir,
+        obs_key="tissue_type",
+        output_name="tabula sapiens",
+    )
+
+    assert written == {
+        "Blood & Immune": output_dir / "blood_immune_tabula_sapiens.h5ad",
+        "Bone Marrow": output_dir / "bone_marrow_tabula_sapiens.h5ad",
+        "Liver": output_dir / "liver_tabula_sapiens.h5ad",
+    }
+    liver = ad.read_h5ad(written["Liver"])
+    assert liver.obs_names.tolist() == ["cell_a", "cell_c"]
+
+
+def test_module_score_names_live_in_single_cell_utils() -> None:
+    """Module score naming is owned by single-cell scoring utilities."""
+    module = GeneModule(
+        module_id="NASP_DNA_SENSING",
+        positive_genes=("CGAS",),
+        inverse_genes=("LMNB1",),
+        context_dependent_genes=(),
+        gene_id_output="symbols",
+    )
+
+    assert (
+        positive_module_score_name(module, scorer="scanpy")
+        == "NASP_DNA_SENSING_pos"
+    )
+    assert (
+        inverse_module_score_name(module, scorer="scanpy")
+        == "NASP_DNA_SENSING_inv"
+    )
+    assert module_score_name(module, scorer="scanpy") == (
+        "NASP_DNA_SENSING_score"
+    )
+    assert (
+        positive_module_score_name(module, scorer="aucell")
+        == "NASP_DNA_SENSING_pos_auc"
+    )
+    assert module_score_name(module, scorer="aucell") == (
+        "NASP_DNA_SENSING_auc"
+    )
+
+
+def test_combine_module_scores_subtracts_inverse_scores() -> None:
+    """Single-cell utilities combine signed sub-scores."""
+    module = GeneModule(
+        module_id="NASP_DNA_SENSING",
+        positive_genes=("CGAS",),
+        inverse_genes=("LMNB1",),
+        context_dependent_genes=(),
+        gene_id_output="symbols",
+    )
+    scores = pd.DataFrame(
+        {
+            "NASP_DNA_SENSING_pos": [2.0, 4.0],
+            "NASP_DNA_SENSING_inv": [0.5, 3.0],
+        },
+        index=["cell_a", "cell_b"],
+    )
+
+    combined = combine_module_scores(module, scores, scorer="scanpy")
+
+    assert combined.name == "NASP_DNA_SENSING_score"
+    assert combined.tolist() == [1.5, 1.0]
+
+
+def test_score_scanpy_module_calls_scanpy_directly(monkeypatch) -> None:
+    """Atlas scanpy scoring forwards explicit score_genes arguments."""
+    adata = ad.AnnData(
+        X=np.ones((2, 2)),
+        obs=pd.DataFrame(index=["cell_a", "cell_b"]),
+        var=pd.DataFrame(index=["CGAS", "LMNB1"]),
+    )
+    module = GeneModule(
+        module_id="NASP_DNA_SENSING",
+        positive_genes=("CGAS",),
+        inverse_genes=("LMNB1",),
+        context_dependent_genes=(),
+        gene_id_output="var_names",
+    )
+    calls = []
+
+    def fake_score_genes(adata_arg, **kwargs):
+        calls.append(kwargs)
+        if kwargs["score_name"].endswith("_pos"):
+            adata_arg.obs[kwargs["score_name"]] = [2.0, 4.0]
+        else:
+            adata_arg.obs[kwargs["score_name"]] = [0.5, 3.0]
+
+    monkeypatch.setattr(
+        "nasp_atlas.single_cell.module_scoring.sc.tl.score_genes",
+        fake_score_genes,
+    )
+
+    score_name = score_scanpy_module(adata, module, random_state=7)
+
+    assert score_name == "NASP_DNA_SENSING_score"
+    assert calls == [
+        {
+            "gene_list": ["CGAS"],
+            "score_name": "NASP_DNA_SENSING_pos",
+            "random_state": 7,
+            "use_raw": False,
+        },
+        {
+            "gene_list": ["LMNB1"],
+            "score_name": "NASP_DNA_SENSING_inv",
+            "random_state": 7,
+            "use_raw": False,
+        },
+    ]
+    assert adata.obs["NASP_DNA_SENSING_score"].tolist() == [1.5, 1.0]
 
 
 def test_visualizer_resolves_feature_name_symbols(tmp_path) -> None:

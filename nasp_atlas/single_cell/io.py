@@ -7,13 +7,14 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-import anndata as ad
-import h5py
+import anndata as ad  # type: ignore
+import h5py  # type: ignore
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-import scipy.sparse as sp
-from anndata.io import read_elem
+import scanpy as sc  # type: ignore
+import scipy.sparse as sp  # type: ignore
+from anndata.io import read_elem  # type: ignore
 
 
 def random_obs_indices(
@@ -105,6 +106,24 @@ def read_random_h5ad_subset(
     for key, value in obsm_values.items():
         adata.obsm[key] = value
     return adata, n_obs
+
+
+def read_h5ad(
+    path: str | Path,
+    *,
+    subset_fraction: float | None = None,
+    random_state: int = 0,
+) -> tuple[ad.AnnData, int]:
+    """Read a full h5ad or a reproducible random subset."""
+    if subset_fraction is None:
+        adata = sc.read_h5ad(path)
+        return adata, adata.n_obs
+
+    return read_random_h5ad_subset(
+        path,
+        fraction=subset_fraction,
+        random_state=random_state,
+    )
 
 
 def random_cell_subset(

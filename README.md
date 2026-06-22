@@ -32,7 +32,7 @@ Lorem ipsum for now.
 
 Generalizable, reproducible single-cell utilities and visualizations.
 
-`SCProcessor` handles common Scanpy processing steps like normalization, HVG PCA, neighbor graphs, and clustering. `SCVisualizer` centralizes stylistic choices for embedding viz, multi-gene panels, and dotplots.
+`SCProcessor` handles common Scanpy processing steps like normalization, HVG, PCA, neighbor graphs, and clustering. `SCVisualizer` centralizes stylistic choices for embedding viz, multi-gene panels, and dotplots.
 
 ```python
 from nasp_atlas.single_cell import SCUtils
@@ -70,6 +70,27 @@ viz.plot_multi_gene_umap_panel(
     gene_symbol_column="feature_name",
     expression_layer=None,
     ncols=6,
+)
+```
+
+Score gene modules:
+
+```python
+from nasp_atlas.single_cell import module_score_name
+from nasp_atlas.single_cell import score_aucell_modules
+from nasp_atlas.single_cell import score_scanpy_modules
+
+modules = score_scanpy_modules(
+    adata,
+    ["NASP_DNA_SENSING", "NASP_RNA_SENSING"],
+    gene_symbol_column="feature_name",
+)
+score_keys = [module_score_name(module, scorer="scanpy") for module in modules]
+
+adata_auc, auc_df, auc_modules = score_aucell_modules(
+    adata,
+    ["NASP_DNA_SENSING", "NASP_RNA_SENSING"],
+    gene_symbol_column="feature_name",
 )
 ```
 

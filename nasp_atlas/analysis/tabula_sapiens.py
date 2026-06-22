@@ -7,12 +7,12 @@ from pathlib import Path
 from typing import cast
 
 import anndata as ad  # type: ignore
-import scanpy as sc  # type: ignore
 from nasp_compendium import GeneModules  # type: ignore
 
 from nasp_atlas.cellxgene.metadata import add_development_stage_age_obs
 from nasp_atlas.cellxgene.metadata import category_color_map_from_uns
-from nasp_atlas.single_cell.io import read_random_h5ad_subset
+from nasp_atlas.single_cell.io import read_h5ad
+from nasp_atlas.single_cell.module_scoring import module_score_name
 from nasp_atlas.single_cell.module_scoring import plot_module_gene_umaps
 from nasp_atlas.single_cell.module_scoring import score_aucell_modules
 from nasp_atlas.single_cell.module_scoring import score_scanpy_modules
@@ -41,7 +41,7 @@ def run_tabula_sapiens_scoring_analysis(
 ) -> None:
     """Run Tabula Sapiens metadata plots and NASP module scoring."""
     # Load data
-    adata, _ = _load_tabula_sapiens_anndata(
+    adata, _ = read_h5ad(
         h5ad_path,
         subset_fraction=subset_fraction,
         random_state=random_state,
@@ -101,8 +101,11 @@ def run_tabula_sapiens_scoring_analysis(
         )
         viz.plot_multi_obs_umap_panel(
             adata,
-            obs_keys=[module.score_name for module in scanpy_modules],
-            filename="tabula_sapiens_scanpy_module_umaps_subset",
+            obs_keys=[
+                module_score_name(module, scorer="scanpy")
+                for module in scanpy_modules
+            ],
+            filename="tabula_sapiens_scanpy_module_umaps",
             cmap=score_cmap,
             ncols=5,
             size=point_size,
@@ -117,31 +120,16 @@ def run_tabula_sapiens_scoring_analysis(
         )
         viz.plot_multi_obs_umap_panel(
             adata_auc,
-            obs_keys=[module.score_name for module in auc_modules],
-            filename="tabula_sapiens_aucell_module_umaps_subset",
+            obs_keys=[
+                module_score_name(module, scorer="aucell")
+                for module in auc_modules
+            ],
+            filename="tabula_sapiens_aucell_module_umaps",
             cmap=score_cmap,
             ncols=5,
             size=point_size,
             vmin=0,
         )
-
-
-def _load_tabula_sapiens_anndata(
-    h5ad_path: str | Path,
-    *,
-    subset_fraction: float | None = None,
-    random_state: int = 0,
-) -> tuple[ad.AnnData, int]:
-    """Load full Tabula Sapiens data or a reproducible random subset."""
-    if subset_fraction is None:
-        adata = sc.read_h5ad(h5ad_path)
-        return adata, adata.n_obs
-
-    return read_random_h5ad_subset(
-        h5ad_path,
-        fraction=subset_fraction,
-        random_state=random_state,
-    )
 
 
 def _plot_tabula_sapiens_metadata_umaps(
