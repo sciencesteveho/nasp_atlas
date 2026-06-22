@@ -20,6 +20,22 @@ pip install -e .
 ```
 <br>
 
+## Development
+
+Install the dev extras:
+
+```sh
+pip install -e ".[dev]"
+```
+
+CI runs the pre-commit suite. Local hooks are opt-in:
+
+```sh
+pre-commit install --hook-type pre-commit --hook-type pre-push
+```
+
+<br>
+
 ## Data requirements
 
 Lorem ipsum for now.

@@ -21,6 +21,7 @@ dependencies = [
   "cellxgene_census==1.17.0",
   "h5py==3.16.0",
   "matplotlib==3.10.9",
+  "nasp_compendium @ git+https://github.com/sciencesteveho/nasp_compendium.git",
   "numpy==2.4.6",
   "pandas==3.0.3",
   "plotly==6.7.0",
