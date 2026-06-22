@@ -35,6 +35,7 @@ def run_tabula_sapiens_scoring_analysis(
     module_ids: Sequence[str] | None = None,
     metadata_panels: Sequence[str | UmapPanelSpec] | None = None,
     sensor_group: str = "nucleic_acid_sensors",
+    plot_modules: bool = False,
     score_scanpy: bool = False,
     score_aucell: bool = False,
 ) -> None:
@@ -78,15 +79,16 @@ def run_tabula_sapiens_scoring_analysis(
         selected_module_ids = list(module_ids)
 
     # Per-module marker gene umaps
-    plot_module_gene_umaps(
-        adata=adata,
-        module_ids=selected_module_ids,
-        viz=viz,
-        gene_symbol_column=gene_symbol_column,
-        expression_layer=expression_layer,
-        ncols=6,
-        size=point_size,
-    )
+    if plot_modules:
+        plot_module_gene_umaps(
+            adata=adata,
+            module_ids=selected_module_ids,
+            viz=viz,
+            gene_symbol_column=gene_symbol_column,
+            expression_layer=expression_layer,
+            ncols=6,
+            size=point_size,
+        )
 
     # Scoring functions and viz
     score_cmap = SCVisualizer.umap_expression_cmap("viridis")
