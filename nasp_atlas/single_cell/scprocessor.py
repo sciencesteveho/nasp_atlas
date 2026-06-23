@@ -564,6 +564,7 @@ class SCProcessor:
         use_rep: str | None = None,
         n_neighbors: int = 15,
         random_state: int = 0,
+        min_dist: float = 0.5,
     ) -> None:
         """Recompute nearest-neighbor graph and UMAP coordinates.
 
@@ -573,6 +574,7 @@ class SCProcessor:
         back to `X_pca` (scanpy default).
         n_neighbors: Number of neighbors for graph construction.
         random_state: Seed for UMAP reproducibility.
+        min_dist: How tight umap points cluster.
         """
         if use_rep is not None and use_rep not in adata.obsm:
             raise KeyError(
@@ -581,4 +583,4 @@ class SCProcessor:
             )
 
         sc.pp.neighbors(adata, use_rep=use_rep, n_neighbors=n_neighbors)
-        sc.tl.umap(adata, random_state=random_state)
+        sc.tl.umap(adata, min_dist=min_dist, random_state=random_state)

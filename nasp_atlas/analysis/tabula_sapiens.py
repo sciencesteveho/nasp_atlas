@@ -57,6 +57,7 @@ def run_tabula_sapiens_scoring_analysis(
             adata,
             use_rep=single_tissue_use_rep,
             random_state=random_state,
+            min_dist=0.3,
         )
         point_size /= 20
 
