@@ -30,13 +30,20 @@ def split_anndata_by_obs(
     subset_fraction: float | None = None,
     random_state: int = 0,
     compression: SplitCompression = "source",
+    backed: bool = False,
 ) -> dict[str, Path]:
     """Write one AnnData file per value in `adata.obs[obs_key]`.
 
-    By default, path-backed inputs preserve the source H5AD matrix
-    compression for the output files. Pass ``compression=None`` to disable
-    output compression.
+    By default the full matrix is read into memory once and split in
+    memory, which is far faster than per-value backed reads. Set
+    ``backed=True`` to stream from disk when memory is constrained, at
+    the cost of repeated scattered decompression.
+
+    By default, path inputs preserve the source H5AD matrix compression
+    for the output files. Pass ``compression=None`` to disable output
+    compression.
     """
+    source_path: Path | None = None
     close_backed = False
     if isinstance(adata_or_path, ad.AnnData):
         adata = adata_or_path
@@ -46,15 +53,19 @@ def split_anndata_by_obs(
                 fraction=subset_fraction,
                 random_state=random_state,
             )
-    elif subset_fraction is None:
-        adata = ad.read_h5ad(adata_or_path, backed="r")
-        close_backed = True
     else:
-        adata, _ = read_h5ad(
-            adata_or_path,
-            subset_fraction=subset_fraction,
-            random_state=random_state,
-        )
+        source_path = Path(adata_or_path)
+        if subset_fraction is not None:
+            adata, _ = read_h5ad(
+                adata_or_path,
+                subset_fraction=subset_fraction,
+                random_state=random_state,
+            )
+        elif backed:
+            adata = ad.read_h5ad(adata_or_path, backed="r")
+            close_backed = True
+        else:
+            adata = ad.read_h5ad(adata_or_path)
 
     try:
         return _write_obs_value_h5ads(
@@ -63,6 +74,7 @@ def split_anndata_by_obs(
             output_dir,
             output_name,
             compression=compression,
+            source_path=source_path,
         )
     finally:
         if close_backed:
@@ -76,6 +88,7 @@ def _write_obs_value_h5ads(
     output_name: str,
     *,
     compression: SplitCompression = "source",
+    source_path: Path | None = None,
 ) -> dict[str, Path]:
     """Write one h5ad file for each non-null value in an obs column."""
     if obs_key not in adata.obs:
@@ -95,6 +108,7 @@ def _write_obs_value_h5ads(
     write_compression, compression_opts = _resolve_write_compression(
         adata,
         compression,
+        source_path,
     )
     for value, obs_indices in _iter_obs_value_indices(adata.obs[obs_key]):
         value_slug = snake_case(value)
@@ -158,21 +172,25 @@ def _iter_obs_value_indices(
 def _resolve_write_compression(
     adata: ad.AnnData,
     compression: SplitCompression,
+    source_path: Path | None,
 ) -> tuple[H5adCompression | None, Any | None]:
     """Return output compression settings for split h5ads."""
-    if compression == "source":
-        return _infer_h5ad_compression(adata)
-    return compression, None
+    if compression != "source":
+        return compression, None
+
+    inference_path = source_path
+    if inference_path is None and adata.filename is not None:
+        inference_path = Path(adata.filename)
+    if inference_path is None:
+        return None, None
+    return _infer_h5ad_compression(inference_path)
 
 
 def _infer_h5ad_compression(
-    adata: ad.AnnData,
+    path: Path,
 ) -> tuple[H5adCompression | None, Any | None]:
-    """Infer H5AD matrix compression from a backed AnnData source."""
-    if adata.filename is None:
-        return None, None
-
-    with h5py.File(adata.filename, "r") as h5:
+    """Infer H5AD matrix compression from a source file path."""
+    with h5py.File(path, "r") as h5:
         for dataset in _iter_h5ad_matrix_datasets(h5):
             compression = dataset.compression
             if compression in {"gzip", "lzf"}:
@@ -189,11 +207,11 @@ def _iter_h5ad_matrix_datasets(h5: h5py.File) -> list[h5py.Dataset]:
     datasets: list[h5py.Dataset] = []
 
     if "X" in h5:
-        datasets.extend(_matrix_datasets(h5["X"]))
+        datasets.extend(_matrix_datasets(h5["X"]))  # type: ignore
 
     raw = h5.get("raw")
     if isinstance(raw, h5py.Group) and "X" in raw:
-        datasets.extend(_matrix_datasets(raw["X"]))
+        datasets.extend(_matrix_datasets(raw["X"]))  # type: ignore
 
     return datasets
 
