@@ -556,3 +556,29 @@ class SCProcessor:
         )
 
         return cluster_means, cluster_labels, score
+
+    @staticmethod
+    def _recompute_umap(
+        adata: ad.AnnData,
+        *,
+        use_rep: str | None = None,
+        n_neighbors: int = 15,
+        random_state: int = 0,
+    ) -> None:
+        """Recompute nearest-neighbor graph and UMAP coordinates.
+
+        Args:
+        adata: The AnnData to recompute for.
+        use_rep: Key in `adata.obsm` to use for neighbor search. If None, falls
+        back to `X_pca` (scanpy default).
+        n_neighbors: Number of neighbors for graph construction.
+        random_state: Seed for UMAP reproducibility.
+        """
+        if use_rep is not None and use_rep not in adata.obsm:
+            raise KeyError(
+                f"Cannot recompute UMAP with use_rep={use_rep!r}; "
+                f"available obsm keys are {list(adata.obsm.keys())}."
+            )
+
+        sc.pp.neighbors(adata, use_rep=use_rep, n_neighbors=n_neighbors)
+        sc.tl.umap(adata, random_state=random_state)

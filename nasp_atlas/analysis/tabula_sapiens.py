@@ -16,6 +16,7 @@ from nasp_atlas.single_cell.module_scoring import module_score_name
 from nasp_atlas.single_cell.module_scoring import plot_module_gene_umaps
 from nasp_atlas.single_cell.module_scoring import score_aucell_modules
 from nasp_atlas.single_cell.module_scoring import score_scanpy_modules
+from nasp_atlas.single_cell.scprocessor import SCProcessor
 from nasp_atlas.single_cell.visualization import SCVisualizer
 from nasp_atlas.single_cell.visualization import UmapPanelSpec
 
@@ -38,6 +39,8 @@ def run_tabula_sapiens_scoring_analysis(
     plot_modules: bool = False,
     score_scanpy: bool = False,
     score_aucell: bool = False,
+    single_tissue: str | None = None,
+    single_tissue_use_rep: str | None = "X_scvi",
 ) -> None:
     """Run Tabula Sapiens metadata plots and NASP module scoring."""
     # Load data
@@ -48,8 +51,17 @@ def run_tabula_sapiens_scoring_analysis(
     )
     point_size = 75000 / adata.n_obs
 
-    # Init visualizer
+    # If single tissue, recompute neighbors and UMAP
+    if single_tissue is not None:
+        SCProcessor._recompute_umap(
+            adata,
+            use_rep=single_tissue_use_rep,
+            random_state=random_state,
+        )
+
+    # Init visualizer and plot metadata
     viz = SCVisualizer(output_dir=output_dir)
+
     _plot_tabula_sapiens_metadata_umaps(
         adata,
         viz=viz,
@@ -57,6 +69,7 @@ def run_tabula_sapiens_scoring_analysis(
         sex_key=sex_key,
         development_stage_key=development_stage_key,
         age_key=age_key,
+        filename="tabula_sapiens_metadata_umaps",
         panels=metadata_panels,
         size=point_size,
     )
