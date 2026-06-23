@@ -49,15 +49,16 @@ def run_tabula_sapiens_scoring_analysis(
         subset_fraction=subset_fraction,
         random_state=random_state,
     )
-    point_size = 75000 / adata.n_obs
 
     # If single tissue, recompute neighbors and UMAP
+    point_size = 75000 / adata.n_obs
     if single_tissue is not None:
         SCProcessor._recompute_umap(
             adata,
             use_rep=single_tissue_use_rep,
             random_state=random_state,
         )
+        point_size /= 20
 
     # Init visualizer and plot metadata
     viz = SCVisualizer(output_dir=output_dir)
