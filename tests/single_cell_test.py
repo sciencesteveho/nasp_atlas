@@ -166,8 +166,57 @@ def test_split_anndata_by_obs_names_files_from_obs_values(tmp_path) -> None:
     }
 
 
-def test_split_anndata_by_obs_reads_path_backed(tmp_path, monkeypatch) -> None:
-    """Path-based splitting keeps the source h5ad backed and closes it."""
+def test_split_anndata_by_obs_reads_path_in_memory_by_default(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Path-based splitting reads the source h5ad into memory by default."""
+    obs_index = pd.Index(["cell_a", "cell_b", "cell_c"], dtype=object)
+    adata = ad.AnnData(
+        X=np.ones((3, 2)),
+        obs=pd.DataFrame(
+            {
+                "tissue_type": pd.Series(
+                    ["Liver", "Bone Marrow", "Liver"],
+                    index=obs_index,
+                    dtype=object,
+                ),
+            },
+            index=obs_index,
+        ),
+        var=pd.DataFrame(index=pd.Index(["gene_a", "gene_b"], dtype=object)),
+    )
+    h5ad_path = tmp_path / "tabula_sapiens.h5ad"
+    adata.write_h5ad(h5ad_path)
+
+    original_read_h5ad = single_cell_utils.ad.read_h5ad
+    reads: list[tuple[dict, ad.AnnData]] = []
+
+    def read_h5ad_spy(*args, **kwargs):
+        loaded = original_read_h5ad(*args, **kwargs)
+        reads.append((kwargs, loaded))
+        return loaded
+
+    monkeypatch.setattr(single_cell_utils.ad, "read_h5ad", read_h5ad_spy)
+
+    split_anndata_by_obs(
+        h5ad_path,
+        output_dir=tmp_path / "split",
+        obs_key="tissue_type",
+        output_name="tabula sapiens",
+    )
+
+    assert len(reads) == 1
+    kwargs, loaded = reads[0]
+    assert "backed" not in kwargs
+    assert loaded.isbacked is False
+
+
+def test_split_anndata_by_obs_reads_path_backed_when_requested(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Path-based splitting can keep the source h5ad backed and closes it."""
     obs_index = pd.Index(["cell_a", "cell_b", "cell_c"], dtype=object)
     adata = ad.AnnData(
         X=np.ones((3, 2)),
@@ -202,6 +251,7 @@ def test_split_anndata_by_obs_reads_path_backed(tmp_path, monkeypatch) -> None:
         output_dir=tmp_path / "split",
         obs_key="tissue_type",
         output_name="tabula sapiens",
+        backed=True,
     )
 
     assert len(backed_reads) == 1
@@ -268,6 +318,7 @@ def test_split_anndata_by_obs_reads_backed_sparse_raw(tmp_path) -> None:
         output_dir=output_dir,
         obs_key="tissue_type",
         output_name="tabula sapiens",
+        backed=True,
     )
 
     liver = ad.read_h5ad(written["Liver"])
