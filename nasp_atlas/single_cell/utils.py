@@ -12,8 +12,8 @@ import h5py  # type: ignore
 import numpy as np
 import pandas as pd
 
-from nasp_atlas.single_cell.io import random_cell_subset
-from nasp_atlas.single_cell.io import read_csr_rows
+from nasp_atlas.single_cell.io import _random_cell_subset
+from nasp_atlas.single_cell.io import _read_csr_rows
 from nasp_atlas.single_cell.io import read_h5ad
 
 
@@ -48,7 +48,7 @@ def split_anndata_by_obs(
     if isinstance(adata_or_path, ad.AnnData):
         adata = adata_or_path
         if subset_fraction is not None:
-            adata = random_cell_subset(
+            adata = _random_cell_subset(
                 adata,
                 fraction=subset_fraction,
                 random_state=random_state,
@@ -306,7 +306,7 @@ def _read_backed_raw_x_rows(
             return raw_x[obs_indices, :].copy()
         if isinstance(raw_x, h5py.Group):
             if raw_x.attrs.get("encoding-type") == "csr_matrix":
-                return read_csr_rows(raw_x, obs_indices)
+                return _read_csr_rows(raw_x, obs_indices)
             raise ValueError(
                 "Expected backed AnnData raw.X to be dense or CSR sparse."
             )

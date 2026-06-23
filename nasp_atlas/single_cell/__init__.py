@@ -2,6 +2,8 @@
 
 from nasp_atlas.single_cell.config import EmbeddingConfig
 from nasp_atlas.single_cell.io import read_h5ad
+from nasp_atlas.single_cell.metacells import aggregate_counts_by_coverage
+from nasp_atlas.single_cell.metacells import aggregate_metacells
 from nasp_atlas.single_cell.module_scoring import ScorerName
 from nasp_atlas.single_cell.module_scoring import combine_module_scores
 from nasp_atlas.single_cell.module_scoring import inverse_module_score_name
@@ -28,6 +30,8 @@ __all__ = [
     "SCVisualizer",
     "ScorerName",
     "UmapPanelSpec",
+    "aggregate_counts_by_coverage",
+    "aggregate_metacells",
     "combine_module_scores",
     "dedupe_stem",
     "inverse_module_score_name",

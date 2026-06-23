@@ -158,7 +158,7 @@ def score_aucell_modules(
     if adata.isbacked:
         raise ValueError(
             "score_aucell_modules expects an in-memory AnnData. "
-            "Call random_cell_subset first for backed data."
+            "Load or copy backed data into memory before scoring."
         )
 
     warnings.filterwarnings(

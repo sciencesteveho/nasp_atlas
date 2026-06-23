@@ -16,10 +16,6 @@ import pandas as pd
 import yaml
 
 
-_DEFAULT_SCHEMA_PACKAGE = "nasp_atlas.cellxgene.configs"
-_DEFAULT_SCHEMA_FILENAME = "category_schema.yaml"
-
-
 @dataclass(frozen=True)
 class CategorySchema:
     """Category schema for disease and tissue metadata labels."""
@@ -89,22 +85,27 @@ def _load_default_category_schema() -> CategorySchema:
     return load_category_schema()
 
 
-def categorize_disease(raw: object) -> str:
+def _categorize_disease(raw: object) -> str:
     """Map a raw disease label to the default broad category."""
     return _load_default_category_schema().categorize_disease(raw)
 
 
-def categorize_tissue(raw: object) -> str:
+def _categorize_tissue(raw: object) -> str:
     """Map a raw tissue label to the default broad category."""
     return _load_default_category_schema().categorize_tissue(raw)
 
 
-def _load_category_schema_text(source: str | Path | None = None) -> str:
+def _load_category_schema_text(
+    source: str | Path | None = None,
+    *,
+    default_package: str = "nasp_atlas.cellxgene.configs",
+    default_filename: str = "category_schema.yaml",
+) -> str:
     """Load category schema YAML text."""
     if source is None:
         return (
-            resources.files(_DEFAULT_SCHEMA_PACKAGE)
-            .joinpath(_DEFAULT_SCHEMA_FILENAME)
+            resources.files(default_package)
+            .joinpath(default_filename)
             .read_text(encoding="utf-8")
         )
 
@@ -333,7 +334,7 @@ def _stage_range_label(age: float, stage: str) -> str:
     return f"{int(age)}yo"
 
 
-def categorize_development_stage(stage: object) -> str:
+def _categorize_development_stage(stage: object) -> str:
     """Map a raw development-stage label to an approximate age-range label."""
     if _is_missing(stage):
         return "unknown"

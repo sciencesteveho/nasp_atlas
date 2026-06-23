@@ -12,23 +12,13 @@ import pandas as pd
 from nasp_atlas.cellxgene.categorize import _collapse_sex_series
 from nasp_atlas.cellxgene.categorize import _summarize_development_stage
 from nasp_atlas.cellxgene.config import CXGMetadataConfig
-from nasp_atlas.cellxgene.filter import annotate_obs_categories
-from nasp_atlas.cellxgene.filter import filter_obs_by_category
-from nasp_atlas.cellxgene.visualization.age import (
-    plot_age_makeup as _plot_age_makeup,
-)
-from nasp_atlas.cellxgene.visualization.age import (
-    plot_age_ranges as _plot_age_ranges,
-)
-from nasp_atlas.cellxgene.visualization.composition import (
-    metadata_barplot as _metadata_barplot,
-)
-from nasp_atlas.cellxgene.visualization.composition import (
-    plot_category_makeup as _plot_category_makeup,
-)
-from nasp_atlas.cellxgene.visualization.sankey import (
-    metadata_sankey as _metadata_sankey,
-)
+from nasp_atlas.cellxgene.filter import _annotate_obs_categories
+from nasp_atlas.cellxgene.filter import _filter_obs_by_category
+from nasp_atlas.cellxgene.visualization.age import _plot_age_makeup
+from nasp_atlas.cellxgene.visualization.age import _plot_age_ranges
+from nasp_atlas.cellxgene.visualization.composition import _metadata_barplot
+from nasp_atlas.cellxgene.visualization.composition import _plot_category_makeup
+from nasp_atlas.cellxgene.visualization.sankey import _metadata_sankey
 from nasp_atlas.common import _collapse_unique_series
 from nasp_atlas.visualization import _set_matplotlib_publication_parameters
 
@@ -57,7 +47,7 @@ class CXGMetadata:
         categorizer: Callable[[object], str],
     ) -> Self:
         """Add a broad-category column to obs."""
-        self.obs = annotate_obs_categories(
+        self.obs = _annotate_obs_categories(
             self.obs,
             source_column=source_column,
             target_column=target_column,
@@ -123,7 +113,7 @@ class CXGMetadata:
         keep: Iterable[str],
     ) -> Self:
         """Restrict obs to rows whose category value is in keep."""
-        self.obs = filter_obs_by_category(
+        self.obs = _filter_obs_by_category(
             self.obs,
             column=column,
             keep=keep,

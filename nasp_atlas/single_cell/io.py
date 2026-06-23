@@ -17,7 +17,7 @@ import scipy.sparse as sp  # type: ignore
 from anndata.io import read_elem  # type: ignore
 
 
-def random_obs_indices(
+def _random_obs_indices(
     n_obs: int,
     *,
     fraction: float,
@@ -37,7 +37,7 @@ def random_obs_indices(
     return np.sort(rng.choice(n_obs, size=n_subset, replace=False))
 
 
-def read_csr_rows(
+def _read_csr_rows(
     x_group: h5py.Group,
     obs_indices: npt.NDArray[np.integer[Any]],
 ) -> sp.csr_matrix:
@@ -73,7 +73,7 @@ def read_csr_rows(
     )
 
 
-def read_random_h5ad_subset(
+def _read_random_h5ad_subset(
     path: str | Path,
     *,
     fraction: float,
@@ -84,13 +84,13 @@ def read_random_h5ad_subset(
     with h5py.File(path, "r") as h5:
         x_group = _require_group(h5, "X")
         n_obs = _matrix_shape(x_group)[0]
-        obs_indices = random_obs_indices(
+        obs_indices = _random_obs_indices(
             n_obs,
             fraction=fraction,
             random_state=random_state,
         )
 
-        x = read_csr_rows(x_group, obs_indices)
+        x = _read_csr_rows(x_group, obs_indices)
         obs = _read_dataframe(h5, "obs").iloc[obs_indices].copy()
         var = _read_dataframe(h5, "var").copy()
         uns = _read_color_uns(h5)
@@ -119,28 +119,28 @@ def read_h5ad(
         adata = sc.read_h5ad(path)
         return adata, adata.n_obs
 
-    return read_random_h5ad_subset(
+    return _read_random_h5ad_subset(
         path,
         fraction=subset_fraction,
         random_state=random_state,
     )
 
 
-def random_cell_subset(
+def _random_cell_subset(
     adata: ad.AnnData,
     *,
     fraction: float,
     random_state: int = 0,
 ) -> ad.AnnData:
     """Return a reproducible random cell subset."""
-    obs_indices = random_obs_indices(
+    obs_indices = _random_obs_indices(
         adata.n_obs,
         fraction=fraction,
         random_state=random_state,
     )
     subset = adata[obs_indices, :]
     if subset.isbacked and subset.filename is not None:
-        sampled, _ = read_random_h5ad_subset(
+        sampled, _ = _read_random_h5ad_subset(
             subset.filename,
             fraction=fraction,
             random_state=random_state,

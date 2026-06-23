@@ -12,14 +12,14 @@ from matplotlib.font_manager import FontProperties
 from matplotlib.patches import Rectangle
 from matplotlib.transforms import blended_transform_factory
 
-from nasp_atlas.cellxgene.categorize import categorize_disease
-from nasp_atlas.cellxgene.categorize import categorize_tissue
-from nasp_atlas.cellxgene.filter import humanize_label
-from nasp_atlas.cellxgene.filter import order_categories
+from nasp_atlas.cellxgene.categorize import _categorize_disease
+from nasp_atlas.cellxgene.categorize import _categorize_tissue
+from nasp_atlas.cellxgene.filter import _humanize_label
+from nasp_atlas.cellxgene.filter import _order_categories
 from nasp_atlas.visualization import _darken_color
 
 
-def build_makeup_table(
+def _build_makeup_table(
     obs: pd.DataFrame,
     category_column: str,
     dataset_meta: pd.DataFrame | None = None,
@@ -224,7 +224,7 @@ def _plot_stacked_bar_chunk(
             height=0.675,
             left=cursor,
             color=color_map[category],
-            label=humanize_label(category, display_names),
+            label=_humanize_label(category, display_names),
             edgecolor="white",
             linewidth=0.3,
         )
@@ -285,7 +285,7 @@ def _plot_stacked_bar(
 
     Args:
       makeup: long-format dataset x category cell-count table from
-        `build_makeup_table`.
+        `_build_makeup_table`.
       outpath: Output dir. If multiple plots are written, chunk
         numbers are appended before the suffix.
       category_order: Categories in left-to-right plotting order.
@@ -620,7 +620,7 @@ def _draw_category_sidebar(
         probe = ax.text(
             0,
             0,
-            humanize_label(category, display_names),
+            _humanize_label(category, display_names),
             fontsize=annotation_fontsize,
         )
         max_label_width_px = max(
@@ -657,7 +657,7 @@ def _draw_category_sidebar(
         ax.text(
             band_x + band_width / 2,
             mid_y,
-            humanize_label(category, display_names),
+            _humanize_label(category, display_names),
             va="center",
             ha="center",
             fontsize=annotation_fontsize,
@@ -776,13 +776,13 @@ def _grouped_composition_barplot(
 def _default_categorizer(label_column: str) -> Callable[[object], str] | None:
     """Return a default categorizer for raw CELLxGENE metadata columns."""
     categorizers = {
-        "tissue": categorize_tissue,
-        "disease": categorize_disease,
+        "tissue": _categorize_tissue,
+        "disease": _categorize_disease,
     }
     return categorizers.get(label_column)
 
 
-def plot_category_makeup(
+def _plot_category_makeup(
     obs: pd.DataFrame,
     datasets: pd.DataFrame,
     category_column: str,
@@ -794,12 +794,12 @@ def plot_category_makeup(
 ) -> None:
     """Plot dataset makeup along one categorical axis."""
     _validate_columns(obs, (category_column,))
-    category_order = order_categories(
+    category_order = _order_categories(
         _clean_label_series(obs[category_column]).unique(),
         front=front,
         back=back,
     )
-    makeup = build_makeup_table(
+    makeup = _build_makeup_table(
         obs,
         category_column=category_column,
         dataset_meta=datasets,
@@ -813,7 +813,7 @@ def plot_category_makeup(
     )
 
 
-def metadata_barplot(
+def _metadata_barplot(
     obs: pd.DataFrame,
     *,
     dataset_id: str | None = None,

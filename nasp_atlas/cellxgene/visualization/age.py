@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from nasp_atlas.cellxgene.categorize import categorize_development_stage
+from nasp_atlas.cellxgene.categorize import _categorize_development_stage
 from nasp_atlas.cellxgene.categorize import stage_age_value
 from nasp_atlas.cellxgene.visualization.composition import _annotate_bars
 from nasp_atlas.cellxgene.visualization.composition import _clean_label_series
@@ -23,7 +23,7 @@ def _age_labels_and_values(
     collapsed: bool,
 ) -> tuple[pd.Series, pd.Series]:
     """Return plot labels and numeric sort values for stage labels."""
-    labels = stages.map(categorize_development_stage) if collapsed else stages
+    labels = stages.map(_categorize_development_stage) if collapsed else stages
     age_values = stages.map(stage_age_value)
     return labels, age_values
 
@@ -39,7 +39,7 @@ def _ordered_age_categories(age_table: pd.DataFrame) -> list[str]:
     return ordered["category"].astype(str).tolist()
 
 
-def build_age_range_table(
+def _build_age_range_table(
     obs: pd.DataFrame,
     *,
     dataset_id: str | None = None,
@@ -88,7 +88,7 @@ def build_age_range_table(
     )
 
 
-def build_age_makeup_table(
+def _build_age_makeup_table(
     obs: pd.DataFrame,
     *,
     stage_column: str = "development_stage",
@@ -151,7 +151,7 @@ def build_age_makeup_table(
     return counts
 
 
-def plot_age_ranges(
+def _plot_age_ranges(
     obs: pd.DataFrame,
     *,
     outpath: str | Path,
@@ -182,7 +182,7 @@ def plot_age_ranges(
     Returns:
       Path to the written figure file.
     """
-    counts = build_age_range_table(
+    counts = _build_age_range_table(
         obs,
         dataset_id=dataset_id,
         stage_column=stage_column,
@@ -249,7 +249,7 @@ def plot_age_ranges(
     return output_path
 
 
-def plot_age_makeup(
+def _plot_age_makeup(
     obs: pd.DataFrame,
     datasets: pd.DataFrame,
     *,
@@ -276,7 +276,7 @@ def plot_age_makeup(
       fig_width_in: Figure width.
       cmap: Colormap palette to use.
     """
-    makeup = build_age_makeup_table(
+    makeup = _build_age_makeup_table(
         obs,
         stage_column=stage_column,
         collapsed=collapsed,

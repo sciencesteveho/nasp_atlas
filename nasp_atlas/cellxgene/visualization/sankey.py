@@ -11,9 +11,9 @@ from matplotlib.axes import Axes
 from matplotlib.patches import PathPatch
 from matplotlib.path import Path as MplPath
 
-from nasp_atlas.cellxgene.categorize import categorize_disease
-from nasp_atlas.cellxgene.categorize import categorize_tissue
-from nasp_atlas.cellxgene.filter import humanize_label
+from nasp_atlas.cellxgene.categorize import _categorize_disease
+from nasp_atlas.cellxgene.categorize import _categorize_tissue
+from nasp_atlas.cellxgene.filter import _humanize_label
 from nasp_atlas.cellxgene.visualization.composition import _count_dataset_labels
 from nasp_atlas.cellxgene.visualization.composition import _format_plot_title
 from nasp_atlas.cellxgene.visualization.composition import (
@@ -335,7 +335,7 @@ def _plot_dataset_sankey(
         ax.text(
             x_left_left - label_pad,
             y_mid,
-            humanize_label(segment["category"], display_names),
+            _humanize_label(segment["category"], display_names),
             ha="right",
             va="center",
             fontsize=fontsize,
@@ -369,13 +369,13 @@ def _plot_dataset_sankey(
 def _default_categorizer(label_column: str) -> Callable[[object], str] | None:
     """Return a default categorizer for raw CELLxGENE metadata columns."""
     categorizers = {
-        "tissue": categorize_tissue,
-        "disease": categorize_disease,
+        "tissue": _categorize_tissue,
+        "disease": _categorize_disease,
     }
     return categorizers.get(label_column)
 
 
-def metadata_sankey(
+def _metadata_sankey(
     obs: pd.DataFrame,
     *,
     dataset_id: str | None = None,
