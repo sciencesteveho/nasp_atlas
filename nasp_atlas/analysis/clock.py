@@ -46,6 +46,9 @@ class ClockConfig:
       donor_key: obs column identifying donors.
       cell_type_key: obs column identifying cell types.
       tissue_key: obs column identifying tissue (constant per file).
+      assay_key: obs colum identifying sequencing platform.
+      assay_allowlist: Choose to limit analysis to specific platforms as they
+        vary in coverage.
       development_stage_key: obs column with CxG development stage.
       age_key: obs column created to hold numeric age in years.
       levels: Aggregation levels to run ("tissue" and/or "cell_type").
@@ -64,6 +67,8 @@ class ClockConfig:
     donor_key: str = "donor_id"
     cell_type_key: str = "cell_type"
     tissue_key: str = "tissue_in_publication"
+    assay_key: str | None = "assay"
+    assay_allowlist: tuple[str, ...] | None = None
     development_stage_key: str = "development_stage"
     age_key: str = "age_years"
     levels: Sequence[str] = ("tissue", "cell_type")
@@ -76,19 +81,121 @@ class ClockConfig:
     broadcast_level: str = "cell_type"
     random_seed: int = 42
 
-    def level_grouping(self, level: str) -> tuple[list[str], str | None]:
+    def level_grouping(self, level: str) -> tuple[list[str], list[str] | None]:
         """Return (group_by, split_by) for an aggregation level.
+
+        Assay, when configured, is added to both the metacell grouping and
+        the relative-scaling stratum so platforms are never pooled into the
+        same per-gene reference.
 
         Args:
           level: "tissue" or "cell_type".
         """
+        group_by = [self.donor_key]
+        stratum: list[str] = []
+        if self.assay_key is not None:
+            group_by.append(self.assay_key)
+            stratum.append(self.assay_key)
         if level == "tissue":
-            return [self.donor_key], None
+            return group_by, (stratum or None)
         if level == "cell_type":
-            return [self.donor_key, self.cell_type_key], self.cell_type_key
+            return (
+                [*group_by, self.cell_type_key],
+                [*stratum, self.cell_type_key],
+            )
         raise ValueError(
             f"Unknown level {level!r}; expected tissue or cell_type"
         )
+
+
+def run_tissue_clock_analysis(
+    *,
+    h5ad_path: str | Path,
+    output_dir: str | Path,
+    gene_table: pd.DataFrame,
+    ortholog_table: pd.DataFrame,
+    model_paths: Sequence[str | Path],
+    config: ClockConfig | None = None,
+    save_tables: bool = True,
+    annotate_adata: bool = True,
+    save_adata: bool = False,
+) -> dict[str, pd.DataFrame]:
+    """Run the transcriptomic-clock workflow on one tissue h5ad.
+
+    Args:
+      h5ad_path: Path to a single tissue h5ad (cellxgene-standardized).
+      output_dir: Directory for tidy tables and the annotated h5ad.
+      gene_table: tAge human gene table (Ensembl -> human Entrez).
+      ortholog_table: tAge ortholog table (human Entrez -> mouse Entrez).
+      model_paths: Paths to the clock .pkl models to apply.
+      config: Run configuration. Defaults to `ClockConfig()`.
+      save_tables: Write one tidy CSV per level to `output_dir`.
+      annotate_adata: Broadcast the configured level's predictions to `.obs`.
+      save_adata: Write the annotated AnnData to `output_dir`.
+
+    Returns:
+      Mapping of level name to its tidy metacell DataFrame.
+    """
+    config = config or ClockConfig()
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    adata, _ = read_h5ad(h5ad_path)
+
+    if config.assay_allowlist is not None and config.assay_key is not None:
+        keep = adata.obs[config.assay_key].isin(config.assay_allowlist)
+        logger.info(
+            "[clock] assay filter %s: keeping %d/%d cells",
+            config.assay_allowlist,
+            int(keep.sum()),
+            adata.n_obs,
+        )
+        adata = adata[keep.to_numpy()].copy()
+
+    add_development_stage_age_obs(
+        adata,
+        stage_column=config.development_stage_key,
+        age_column=config.age_key,
+    )
+
+    human_map = build_human_entrez_map(gene_table)
+    mouse_map = build_mouse_ortholog_map(ortholog_table)
+    clocks = _load_clocks(model_paths)
+
+    results: dict[str, pd.DataFrame] = {}
+    for level in config.levels:
+        cell_assignment_key = f"metacell_id_{level}"
+        tidy = _run_level(
+            adata,
+            level=level,
+            clocks=clocks,
+            human_map=human_map,
+            mouse_map=mouse_map,
+            config=config,
+            cell_assignment_key=cell_assignment_key,
+        )
+        _add_age_acceleration(tidy, clocks=clocks, config=config)
+        results[level] = tidy
+
+        if not tidy.empty:
+            adata.uns[f"nasp_clocks_{level}"] = tidy.reset_index()
+        if save_tables and not tidy.empty:
+            tidy.to_csv(output_path / f"clock_{level}_metacells.csv")
+        logger.info("[clock] level=%s | metacells=%d", level, tidy.shape[0])
+
+    broadcast = results.get(config.broadcast_level)
+    if annotate_adata and broadcast is not None and not broadcast.empty:
+        _broadcast_to_obs(
+            adata,
+            broadcast,
+            cell_assignment_key=f"metacell_id_{config.broadcast_level}",
+        )
+
+    if save_adata:
+        normalize_h5ad_string_storage(adata)
+        adata.write_h5ad(output_path / f"{Path(h5ad_path).stem}_clocks.h5ad")
+
+    return results
 
 
 def _parse_model_spec(
@@ -167,16 +274,28 @@ def _metacell_counts_frame(
 
 def _stratum_indices(
     metacell_obs: pd.DataFrame,
-    split_by: str | None,
+    split_by: Sequence[str] | None,
 ) -> list[tuple[str, np.ndarray]]:
-    """Return (stratum_label, positional indices) for each stratum."""
-    if split_by is None:
+    """Return (stratum_label, positional indices) for each stratum.
+
+    Args:
+      metacell_obs: Metacell-level obs frame.
+      split_by: One or more columns whose unique combinations define strata,
+        or None for a single stratum spanning all metacells.
+
+    Returns:
+      A list of (composite label, positional indices) pairs.
+    """
+    if not split_by:
         return [("all", np.arange(metacell_obs.shape[0]))]
     positions = np.arange(metacell_obs.shape[0])
-    grouped = pd.Series(positions).groupby(
-        metacell_obs[split_by].astype(str).to_numpy(),
-        sort=True,
+    composite = (
+        metacell_obs[list(split_by)]
+        .astype(str)
+        .agg(" | ".join, axis=1)
+        .to_numpy()
     )
+    grouped = pd.Series(positions).groupby(composite, sort=True)
     return [(str(label), group.to_numpy()) for label, group in grouped]
 
 
@@ -346,85 +465,6 @@ def _broadcast_to_obs(
         adata.obs[f"{column_prefix}{column}"] = (
             assignment.map(series).astype(float).to_numpy()
         )
-
-
-def run_tissue_clock_analysis(
-    *,
-    h5ad_path: str | Path,
-    output_dir: str | Path,
-    gene_table: pd.DataFrame,
-    ortholog_table: pd.DataFrame,
-    model_paths: Sequence[str | Path],
-    config: ClockConfig | None = None,
-    save_tables: bool = True,
-    annotate_adata: bool = True,
-    save_adata: bool = False,
-) -> dict[str, pd.DataFrame]:
-    """Run the transcriptomic-clock workflow on one tissue h5ad.
-
-    Args:
-      h5ad_path: Path to a single tissue h5ad (cellxgene-standardized).
-      output_dir: Directory for tidy tables and the annotated h5ad.
-      gene_table: tAge human gene table (Ensembl -> human Entrez).
-      ortholog_table: tAge ortholog table (human Entrez -> mouse Entrez).
-      model_paths: Paths to the clock .pkl models to apply.
-      config: Run configuration. Defaults to `ClockConfig()`.
-      save_tables: Write one tidy CSV per level to `output_dir`.
-      annotate_adata: Broadcast the configured level's predictions to `.obs`.
-      save_adata: Write the annotated AnnData to `output_dir`.
-
-    Returns:
-      Mapping of level name to its tidy metacell DataFrame.
-    """
-    config = config or ClockConfig()
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    adata, _ = read_h5ad(h5ad_path)
-    add_development_stage_age_obs(
-        adata,
-        stage_column=config.development_stage_key,
-        age_column=config.age_key,
-    )
-
-    human_map = build_human_entrez_map(gene_table)
-    mouse_map = build_mouse_ortholog_map(ortholog_table)
-    clocks = _load_clocks(model_paths)
-
-    results: dict[str, pd.DataFrame] = {}
-    for level in config.levels:
-        cell_assignment_key = f"metacell_id_{level}"
-        tidy = _run_level(
-            adata,
-            level=level,
-            clocks=clocks,
-            human_map=human_map,
-            mouse_map=mouse_map,
-            config=config,
-            cell_assignment_key=cell_assignment_key,
-        )
-        _add_age_acceleration(tidy, clocks=clocks, config=config)
-        results[level] = tidy
-
-        if not tidy.empty:
-            adata.uns[f"nasp_clocks_{level}"] = tidy.reset_index()
-        if save_tables and not tidy.empty:
-            tidy.to_csv(output_path / f"clock_{level}_metacells.csv")
-        logger.info("[clock] level=%s | metacells=%d", level, tidy.shape[0])
-
-    broadcast = results.get(config.broadcast_level)
-    if annotate_adata and broadcast is not None and not broadcast.empty:
-        _broadcast_to_obs(
-            adata,
-            broadcast,
-            cell_assignment_key=f"metacell_id_{config.broadcast_level}",
-        )
-
-    if save_adata:
-        normalize_h5ad_string_storage(adata)
-        adata.write_h5ad(output_path / f"{Path(h5ad_path).stem}_clocks.h5ad")
-
-    return results
 
 
 def discover_tissue_h5ads(directory: str | Path) -> list[Path]:

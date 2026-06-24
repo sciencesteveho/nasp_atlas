@@ -57,9 +57,9 @@ def run_tabula_sapiens_scoring_analysis(
             adata,
             use_rep=single_tissue_use_rep,
             random_state=random_state,
-            min_dist=0.3,
+            min_dist=0.425,
         )
-        point_size /= 20
+        point_size /= 7.5
 
     # Init visualizer and plot metadata
     viz = SCVisualizer(output_dir=output_dir)
