@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
 import anndata as ad  # type: ignore
+import numpy as np
+import pandas as pd
 from nasp_compendium import GeneModules  # type: ignore
 
 from nasp_atlas.cellxgene.metadata import add_development_stage_age_obs
@@ -19,6 +22,9 @@ from nasp_atlas.single_cell.module_scoring import score_scanpy_modules
 from nasp_atlas.single_cell.scprocessor import SCProcessor
 from nasp_atlas.single_cell.visualization import SCVisualizer
 from nasp_atlas.single_cell.visualization import UmapPanelSpec
+
+
+logger = logging.getLogger(__name__)
 
 
 def run_tabula_sapiens_scoring_analysis(
@@ -39,6 +45,7 @@ def run_tabula_sapiens_scoring_analysis(
     plot_modules: bool = False,
     score_scanpy: bool = False,
     score_aucell: bool = False,
+    score_table_filename: str = "tabula_sapiens_module_scores.csv.gz",
     single_tissue: str | None = None,
     single_tissue_use_rep: str | None = "X_scvi",
 ) -> None:
@@ -106,7 +113,7 @@ def run_tabula_sapiens_scoring_analysis(
         )
 
     # Scoring functions and viz
-    score_cmap = SCVisualizer.umap_expression_cmap("viridis")
+    score_tables: list[pd.DataFrame] = []
     if score_scanpy:
         scanpy_modules = score_scanpy_modules(
             adata,
@@ -114,17 +121,23 @@ def run_tabula_sapiens_scoring_analysis(
             gene_symbol_column=gene_symbol_column,
             random_state=random_state,
         )
+        scanpy_score_keys = [
+            module_score_name(module, scorer="scanpy")
+            for module in scanpy_modules
+        ]
+        scanpy_obs = cast(pd.DataFrame, adata.obs)
+        scanpy_scores = scanpy_obs.loc[:, scanpy_score_keys].copy()
+        score_tables.append(scanpy_scores)
+        scanpy_limit = _symmetric_score_limit(scanpy_scores)
         viz.plot_multi_obs_umap_panel(
             adata,
-            obs_keys=[
-                module_score_name(module, scorer="scanpy")
-                for module in scanpy_modules
-            ],
+            obs_keys=scanpy_score_keys,
             filename="tabula_sapiens_scanpy_module_umaps",
-            cmap=score_cmap,
+            cmap="RdBu_r",
             ncols=5,
             size=point_size,
-            vmin=0,
+            vmin=-scanpy_limit,
+            vmax=scanpy_limit,
         )
 
     if score_aucell:
@@ -133,18 +146,44 @@ def run_tabula_sapiens_scoring_analysis(
             selected_module_ids,
             gene_symbol_column=gene_symbol_column,
         )
+        auc_score_keys = [
+            module_score_name(module, scorer="aucell") for module in auc_modules
+        ]
+        auc_obs = cast(pd.DataFrame, adata_auc.obs)
+        auc_scores = auc_obs.loc[:, auc_score_keys].copy()
+        score_tables.append(auc_scores)
+        auc_limit = _symmetric_score_limit(auc_scores)
         viz.plot_multi_obs_umap_panel(
             adata_auc,
-            obs_keys=[
-                module_score_name(module, scorer="aucell")
-                for module in auc_modules
-            ],
+            obs_keys=auc_score_keys,
             filename="tabula_sapiens_aucell_module_umaps",
-            cmap=score_cmap,
+            cmap="RdBu_r",
             ncols=5,
             size=point_size,
-            vmin=0,
+            vmin=-auc_limit,
+            vmax=auc_limit,
         )
+
+    if score_tables:
+        scores = pd.concat(score_tables, axis="columns")
+        score_path = Path(output_dir) / score_table_filename
+        scores.to_csv(
+            score_path,
+            index=True,
+            index_label="obs_name",
+            compression="infer",
+        )
+        logger.info("[tabula_sapiens] module scores -> %s", score_path)
+
+
+def _symmetric_score_limit(scores: pd.DataFrame) -> float:
+    """Return a non-zero symmetric color limit for signed score panels."""
+    values = scores.to_numpy(dtype=float, copy=False)
+    finite_values = np.abs(values[np.isfinite(values)])
+    if finite_values.size == 0:
+        return 1.0
+    limit = float(finite_values.max())
+    return limit if limit > 0 else 1.0
 
 
 def _plot_tabula_sapiens_metadata_umaps(

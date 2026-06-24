@@ -646,6 +646,51 @@ def test_visualizer_umap_panel_does_not_call_scanpy_embedding(
     assert (tmp_path / "direct_obs_panel.png").exists()
 
 
+def test_multi_obs_umap_panel_delegates_to_generic_renderer(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The numeric convenience API uses the generic panel renderer."""
+    adata = ad.AnnData(
+        X=np.ones((2, 1)),
+        obs=pd.DataFrame(
+            {"signed_score": [-1.0, 2.0]},
+            index=["cell_a", "cell_b"],
+        ),
+        var=pd.DataFrame(index=["gene_a"]),
+    )
+    captured = {}
+
+    def capture_plot(self, adata_arg, panels, **kwargs):
+        captured["adata"] = adata_arg
+        captured["panels"] = panels
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(SCVisualizer, "plot_umap_panel", capture_plot)
+    viz = SCVisualizer(output_dir=tmp_path)
+
+    viz.plot_multi_obs_umap_panel(
+        adata,
+        obs_keys=["signed_score", "missing"],
+        filename="signed_scores",
+        cmap="RdBu_r",
+        vmin=-2.0,
+        vmax=2.0,
+    )
+
+    assert captured["adata"] is adata
+    assert captured["panels"] == [
+        {
+            "obs_key": "signed_score",
+            "kind": "numeric",
+            "cmap": "RdBu_r",
+            "vmin": -2.0,
+            "vmax": 2.0,
+        }
+    ]
+    assert captured["kwargs"]["filename"] == "signed_scores"
+
+
 def test_visualizer_gene_umap_uses_x_not_raw_by_default(
     tmp_path,
     monkeypatch,

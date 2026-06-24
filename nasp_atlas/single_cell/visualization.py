@@ -473,7 +473,7 @@ class SCVisualizer:
         ncols: int = 4,
         panel_w: float = 1.75,
         panel_h: float = 1.75,
-        cmap: Colormap | None = None,
+        cmap: Colormap | str | None = None,
         row_hspace: float = 0.22,
         cbar_height: str = "27.5%",
         cbar_width: str = "4%",
@@ -483,6 +483,9 @@ class SCVisualizer:
         vmax: float | None = None,
     ) -> None:
         """Save a multi-panel UMAP figure for numeric obs columns.
+
+        This is a convenience wrapper around :meth:`plot_umap_panel` for
+        applying one numeric style to several observation columns.
 
         Args:
           adata: AnnData object with UMAP embedding computed.
@@ -502,12 +505,6 @@ class SCVisualizer:
             using `umap_expression_cmap`.
           vmax: Upper color limit.
         """
-        self._set_matplotlib_publication_parameters()
-        out = self.output_dir / filename
-        cmap = (
-            cmap if cmap is not None else self.umap_expression_cmap("viridis")
-        )
-
         valid_keys = [key for key in obs_keys if key in adata.obs.columns]
         if not valid_keys:
             logger.warning(
@@ -515,56 +512,34 @@ class SCVisualizer:
             )
             return
 
-        nrows = math.ceil(len(valid_keys) / ncols)
-        fig, axes = plt.subplots(
-            nrows,
-            ncols,
-            figsize=(panel_w * ncols, panel_h * nrows),
-            squeeze=False,
+        numeric_cmap = (
+            cmap if cmap is not None else self.umap_expression_cmap("viridis")
         )
-
-        for ax, obs_key in zip(axes.flat, valid_keys, strict=False):
-            sc.pl.embedding(
-                adata,
-                basis=basis,
-                color=obs_key,
-                ax=ax,
-                show=False,
-                frameon=False,
-                size=size,
-                color_map=cmap,
-                vmin=vmin,
-                vmax=vmax,
-                colorbar_loc=None,
-            )
-            ax.set_xlabel("")
-            ax.set_ylabel("")
-            ax.set_title(obs_key)
-            ax.set_aspect("equal", adjustable="box")
-            ax.set_box_aspect(1)
-
-            for spine in ax.spines.values():
-                spine.set_visible(False)
-
-            cax = inset_axes(
-                ax,
-                width=cbar_width,
-                height=cbar_height,
-                loc="center left",
-                bbox_to_anchor=(1.02 + cbar_pad, 0.0, 1, 1),
-                bbox_transform=ax.transAxes,
-                borderpad=0,
-            )
-            cb = fig.colorbar(ax.collections[0], cax=cax)
-            cb.ax.tick_params(length=1.5, pad=0.5)
-
-        for ax in axes.flat[len(valid_keys) :]:
-            ax.axis("off")
-
-        fig.subplots_adjust(hspace=row_hspace, wspace=0.35)
-        fig.savefig(f"{out}.png", dpi=self.dpi, bbox_inches="tight")
-        plt.close(fig)
-        logger.info("[plot] multi-obs UMAP panel -> %s", out)
+        panels: list[UmapPanelSpec] = [
+            {
+                "obs_key": key,
+                "kind": "numeric",
+                "cmap": numeric_cmap,
+                "vmin": vmin,
+                "vmax": vmax,
+            }
+            for key in valid_keys
+        ]
+        self.plot_umap_panel(
+            adata,
+            panels=panels,
+            filename=filename,
+            basis=basis,
+            ncols=ncols,
+            panel_w=panel_w,
+            panel_h=panel_h,
+            size=size,
+            row_hspace=row_hspace,
+            col_wspace=0.35,
+            cbar_height=cbar_height,
+            cbar_width=cbar_width,
+            cbar_pad=cbar_pad,
+        )
 
     def plot_marker_dotplot(
         self,
@@ -1619,6 +1594,7 @@ class SCVisualizer:
                 cbar_height=cbar_height,
                 cbar_width=cbar_width,
                 cbar_pad=cbar_pad,
+                ticks=panel.cbar_ticks,
             )
             return
 
