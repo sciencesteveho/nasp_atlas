@@ -46,7 +46,7 @@ def preprocess_metacells(
         count_threshold=count_threshold,
         percent_threshold=percent_threshold,
     )
-    mapped = _map_counts_to_model_features(
+    mapped = map_counts_to_model_features(
         filtered, human_entrez_map, mouse_ortholog_map
     )
     normalized = _rle_normalize(mapped)
@@ -121,7 +121,7 @@ def build_mouse_ortholog_map(
     return pd.Series(mouse.to_numpy(), index=source.to_numpy())
 
 
-def _map_counts_to_model_features(
+def map_counts_to_model_features(
     counts: pd.DataFrame,
     human_entrez_map: pd.Series,
     mouse_ortholog_map: pd.Series,

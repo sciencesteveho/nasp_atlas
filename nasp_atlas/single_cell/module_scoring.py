@@ -161,13 +161,14 @@ def score_aucell_modules(
             "Load or copy backed data into memory before scoring."
         )
 
-    warnings.filterwarnings(
-        "ignore",
-        message="pkg_resources is deprecated as an API.*",
-        category=UserWarning,
-    )
-    from pyscenic.aucell import GeneSignature  # type: ignore
-    from pyscenic.aucell import aucell  # type: ignore
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="pkg_resources is deprecated as an API.*",
+            category=UserWarning,
+        )
+        from pyscenic.aucell import GeneSignature  # type: ignore
+        from pyscenic.aucell import aucell  # type: ignore
 
     adata_auc = adata.copy()
     symbols = adata_auc.var[gene_symbol_column].astype(str)

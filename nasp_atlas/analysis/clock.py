@@ -16,6 +16,7 @@ from nasp_atlas.cellxgene.metadata import add_development_stage_age_obs
 from nasp_atlas.single_cell.clocks.model import SPECIES_MAX_LIFESPAN
 from nasp_atlas.single_cell.clocks.model import ClockModel
 from nasp_atlas.single_cell.clocks.model import load_clock
+from nasp_atlas.single_cell.clocks.model import model_feature_coverage
 from nasp_atlas.single_cell.clocks.model import predict_metacells
 from nasp_atlas.single_cell.clocks.preprocess import build_human_entrez_map
 from nasp_atlas.single_cell.clocks.preprocess import build_mouse_ortholog_map
@@ -34,6 +35,7 @@ REPRESENTATION_TOKENS = {
 }
 STRATUM_COLUMN = "stratum"
 LEVEL_COLUMN = "level"
+FEATURE_COVERAGE_SUFFIX = "_feature_coverage"
 
 
 @dataclass
@@ -319,14 +321,18 @@ def _predict_stratum(
     stratum_frame = base_obs.copy()
     for clock in clocks:
         _, representation, column_prefix = _clock_metadata(clock.name)
+        features = representations[representation]
         prediction = predict_metacells(
             clock,
-            representations[representation],
+            features,
             species=config.species,
             return_std=True,
         )
         stratum_frame[f"{column_prefix}_tage"] = prediction["tage"]
         stratum_frame[f"{column_prefix}_tage_std"] = prediction["tage_std"]
+        stratum_frame[f"{column_prefix}{FEATURE_COVERAGE_SUFFIX}"] = (
+            model_feature_coverage(features, clock)
+        )
     return stratum_frame
 
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast, overload
@@ -13,13 +12,9 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import sklearn.pipeline  # type: ignore
-from sklearn.exceptions import InconsistentVersionWarning  # type: ignore
-from sklearn.impute import SimpleImputer  # type: ignore
 
 
 logger = logging.getLogger(__name__)
-
-warnings.filterwarnings("ignore", category=InconsistentVersionWarning)
 
 SPECIES_MAX_LIFESPAN = {
     "human": 122.5,
@@ -71,15 +66,6 @@ class ClockModel:
     supports_std: bool
 
 
-def _patch_simple_imputer(imputer: SimpleImputer) -> None:
-    """Restore the `_fill_dtype` attribute on imputers from older sklearn."""
-    if not hasattr(imputer, "_fill_dtype"):
-        statistics = getattr(imputer, "statistics_", None)
-        imputer._fill_dtype = (  # type: ignore
-            np.float64 if statistics is None else statistics.dtype
-        )
-
-
 def _final_estimator(estimator: _ClockEstimator) -> object:
     """Return the terminal estimator of a Pipeline, or the estimator itself."""
     if isinstance(estimator, sklearn.pipeline.Pipeline):
@@ -113,9 +99,6 @@ def load_clock(
     estimator = cast(_ClockEstimator, joblib.load(model_path))
 
     if isinstance(estimator, sklearn.pipeline.Pipeline):
-        for _, step in estimator.steps:
-            if isinstance(step, SimpleImputer):
-                _patch_simple_imputer(step)
         feature_names = tuple(str(name) for name in estimator.feature_names_in_)
     else:
         estimator_with_features = cast(_FeaturedEstimator, estimator)
@@ -151,10 +134,18 @@ def align_to_model_features(
       A tuple of (aligned_features, coverage) where coverage is the fraction of
       model features present in the input matrix.
     """
-    present = features.columns.intersection(pd.Index(clock.feature_names))
-    coverage = len(present) / len(clock.feature_names)
+    coverage = model_feature_coverage(features, clock)
     aligned = features.reindex(columns=clock.feature_names, fill_value=0.0)
     return aligned, coverage
+
+
+def model_feature_coverage(
+    features: pd.DataFrame,
+    clock: ClockModel,
+) -> float:
+    """Return the fraction of model features present in an input matrix."""
+    present = features.columns.intersection(pd.Index(clock.feature_names))
+    return len(present) / len(clock.feature_names)
 
 
 def predict_metacells(
