@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import gc
 import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import cast
 
 import anndata as ad  # type: ignore
-import numpy as np
 import pandas as pd
 from nasp_compendium import GeneModules  # type: ignore
 
@@ -139,6 +139,7 @@ def run_tabula_sapiens_scoring_analysis(
 
     # Scoring functions and viz
     score_tables: list[pd.DataFrame] = []
+    scanpy_scores: pd.DataFrame | None = None
     if score_scanpy:
         scanpy_modules = score_scanpy_modules(
             adata,
@@ -158,56 +159,62 @@ def run_tabula_sapiens_scoring_analysis(
             output_dir=output_dir,
             filename=score_table_filename,
         )
-        scanpy_limit = _symmetric_score_limit(scanpy_scores)
         viz.plot_multi_obs_umap_panel(
             adata,
             obs_keys=scanpy_score_keys,
             filename="tabula_sapiens_scanpy_module_umaps",
-            cmap="RdBu_r",
+            cmap="RdYlBu_r",
             ncols=5,
             size=point_size,
-            vmin=-scanpy_limit,
-            vmax=scanpy_limit,
+            vmin=None,
+            vmax=None,
         )
+        del scanpy_obs, scanpy_modules, scanpy_score_keys
+        if not score_aucell:
+            score_tables.clear()
+            scanpy_scores = None
+            gc.collect()
 
     if score_aucell:
-        adata_auc, _, auc_modules = score_aucell_modules(
+        adata_auc, auc_df, auc_modules = score_aucell_modules(
             adata,
             selected_module_ids,
             gene_symbol_column=gene_symbol_column,
         )
-        auc_score_keys = [
-            module_score_name(module, scorer="aucell") for module in auc_modules
-        ]
-        auc_obs = cast(pd.DataFrame, adata_auc.obs)
-        auc_scores = auc_obs.loc[:, auc_score_keys].copy()
-        score_tables.append(auc_scores)
-        _write_score_tables(
-            score_tables,
-            output_dir=output_dir,
-            filename=score_table_filename,
-        )
-        auc_limit = _symmetric_score_limit(auc_scores)
-        viz.plot_multi_obs_umap_panel(
-            adata_auc,
-            obs_keys=auc_score_keys,
-            filename="tabula_sapiens_aucell_module_umaps",
-            cmap="RdBu_r",
-            ncols=5,
-            size=point_size,
-            vmin=-auc_limit,
-            vmax=auc_limit,
-        )
-
-
-def _symmetric_score_limit(scores: pd.DataFrame) -> float:
-    """Return a non-zero symmetric color limit for signed score panels."""
-    values = scores.to_numpy(dtype=float, copy=False)
-    finite_values = np.abs(values[np.isfinite(values)])
-    if finite_values.size == 0:
-        return 1.0
-    limit = float(finite_values.max())
-    return limit if limit > 0 else 1.0
+        auc_score_keys: list[str] | None = None
+        auc_obs: pd.DataFrame | None = None
+        auc_scores: pd.DataFrame | None = None
+        try:
+            auc_score_keys = [
+                module_score_name(module, scorer="aucell")
+                for module in auc_modules
+            ]
+            auc_obs = cast(pd.DataFrame, adata_auc.obs)
+            auc_scores = auc_obs.loc[:, auc_score_keys].copy()
+            score_tables.append(auc_scores)
+            _write_score_tables(
+                score_tables,
+                output_dir=output_dir,
+                filename=score_table_filename,
+            )
+            viz.plot_multi_obs_umap_panel(
+                adata_auc,
+                obs_keys=auc_score_keys,
+                filename="tabula_sapiens_aucell_module_umaps",
+                cmap="RdYlBu_r",
+                ncols=5,
+                size=point_size,
+                vmin=None,
+                vmax=None,
+            )
+        finally:
+            del adata_auc, auc_df, auc_modules
+            score_tables.clear()
+            auc_score_keys = None
+            auc_obs = None
+            auc_scores = None
+            scanpy_scores = None
+            gc.collect()
 
 
 def _write_score_tables(

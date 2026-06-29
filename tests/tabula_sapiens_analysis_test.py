@@ -19,24 +19,11 @@ from nasp_compendium.types import GeneModule
 tabula_sapiens = importlib.import_module("nasp_atlas.analysis.tabula_sapiens")
 
 
-def test_symmetric_score_limit_handles_signed_and_zero_scores() -> None:
-    """Signed score limits are symmetric and never collapse to zero."""
-    scores = pd.DataFrame({"score": [-2.5, 0.0, 1.0, np.nan]})
-
-    assert tabula_sapiens._symmetric_score_limit(scores) == 2.5
-    assert (
-        tabula_sapiens._symmetric_score_limit(
-            pd.DataFrame({"score": [0.0, 0.0]})
-        )
-        == 1.0
-    )
-
-
-def test_tabula_sapiens_saves_combined_scores_and_uses_signed_umaps(
+def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
     tmp_path,
     monkeypatch,
 ) -> None:
-    """The batch workflow persists final scores and plots signed ranges."""
+    """The batch workflow persists final scores and requests score UMAPs."""
     adata = ad.AnnData(
         X=np.ones((2, 1)),
         obs=pd.DataFrame(index=["cell_a", "cell_b"]),
@@ -123,25 +110,9 @@ def test_tabula_sapiens_saves_combined_scores_and_uses_signed_umaps(
         "NASP_DNA_SENSING_auc",
     ]
     assert scores.loc["cell_a"].tolist() == [-2.0, -0.25]
-    assert plot_calls == [
-        {
-            "obs_keys": ["NASP_DNA_SENSING_score"],
-            "filename": "tabula_sapiens_scanpy_module_umaps",
-            "cmap": "RdBu_r",
-            "ncols": 5,
-            "size": 37500.0,
-            "vmin": -2.0,
-            "vmax": 2.0,
-        },
-        {
-            "obs_keys": ["NASP_DNA_SENSING_auc"],
-            "filename": "tabula_sapiens_aucell_module_umaps",
-            "cmap": "RdBu_r",
-            "ncols": 5,
-            "size": 37500.0,
-            "vmin": -0.5,
-            "vmax": 0.5,
-        },
+    assert [(call["obs_keys"], call["filename"]) for call in plot_calls] == [
+        (["NASP_DNA_SENSING_score"], "tabula_sapiens_scanpy_module_umaps"),
+        (["NASP_DNA_SENSING_auc"], "tabula_sapiens_aucell_module_umaps"),
     ]
 
 

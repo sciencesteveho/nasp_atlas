@@ -559,8 +559,8 @@ class SCVisualizer:
         cell_size: float = 0.1,
         min_width: float = 1.5,
         min_height: float = 1.5,
-        cbar_height: str = "17.5%",
-        cbar_width: str = "3%",
+        cbar_height: str | float = 0.36,
+        cbar_width: str | float = 0.07,
         cbar_pad: float = 0.02,
         cbar_title: str | None = None,
         vmin: float | None = 0,
@@ -581,8 +581,10 @@ class SCVisualizer:
           cell_size: Width and height of each heatmap cell in inches.
           min_width: Minimum heatmap panel width in inches.
           min_height: Minimum heatmap panel height in inches.
-          cbar_height: Inset colorbar height as a percentage.
-          cbar_width: Inset colorbar width as a percentage.
+          cbar_height: Inset colorbar height. Floats are inches; strings such
+            as "17.5%" are relative to the heatmap axis.
+          cbar_width: Inset colorbar width. Floats are inches; strings such as
+            "3%" are relative to the heatmap axis.
           cbar_pad: Padding between heatmap and colorbar.
           cbar_title: Optional title drawn above the heatmap colorbar.
           vmin: Lower color limit. Defaults to 0 so zero maps to gray when
@@ -1981,8 +1983,8 @@ class SCVisualizer:
     def _add_embedding_colorbar(
         fig: Any,
         ax: Axes,
-        cbar_height: str,
-        cbar_width: str,
+        cbar_height: str | float,
+        cbar_width: str | float,
         cbar_pad: float,
         mappable: Any | None = None,
         ticks: Sequence[float] | None = None,
