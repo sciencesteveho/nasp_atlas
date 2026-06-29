@@ -776,6 +776,48 @@ def test_visualizer_gene_expression_heatmap_groups_obs(
     assert (tmp_path / "gene_expression_heatmap.png").exists()
 
 
+def test_visualizer_score_heatmap_groups_obs_scores(tmp_path) -> None:
+    """Score heatmaps aggregate obs scores across requested obs groups."""
+    adata = ad.AnnData(
+        X=np.ones((3, 1)),
+        obs=pd.DataFrame(
+            {
+                "cell_type": pd.Categorical(
+                    ["b_cell", "t_cell", "b_cell"],
+                    categories=["t_cell", "b_cell"],
+                ),
+                "module_a": [1.0, -2.0, 3.0],
+                "module_b": [0.0, 4.0, 2.0],
+            },
+            index=["cell_a", "cell_b", "cell_c"],
+        ),
+        var=pd.DataFrame(index=["gene_a"]),
+    )
+    viz = SCVisualizer(output_dir=tmp_path)
+
+    grouped = viz._group_obs_scores_by_obs(
+        adata=adata,
+        score_keys=["module_a", "module_b"],
+        labels=["Module A", "Module B"],
+        groupby="cell_type",
+    )
+
+    assert grouped.index.tolist() == ["t_cell", "b_cell"]
+    assert grouped.columns.tolist() == ["Module A", "Module B"]
+    assert grouped.loc["t_cell"].tolist() == [-2.0, 4.0]
+    assert grouped.loc["b_cell"].tolist() == [2.0, 1.0]
+
+    viz.plot_grouped_obs_score_heatmap(
+        adata,
+        score_keys=["module_a", "module_b"],
+        groupby="cell_type",
+        filename="score_heatmap",
+        score_labels=["Module A", "Module B"],
+    )
+
+    assert (tmp_path / "score_heatmap.png").exists()
+
+
 def test_add_development_stage_age_obs() -> None:
     """CELLxGENE metadata helper adds numeric age values."""
     adata = ad.AnnData(

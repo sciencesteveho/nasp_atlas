@@ -484,6 +484,7 @@ class SCVisualizer:
         size: float = 8.0,
         vmin: float | None = 0,
         vmax: float | None = None,
+        center_zero: bool = False,
     ) -> None:
         """Save a multi-panel UMAP figure for numeric obs columns.
 
@@ -507,6 +508,8 @@ class SCVisualizer:
           vmin: Lower color limit. Defaults to 0 so zero maps to gray when
             using `umap_expression_cmap`.
           vmax: Upper color limit.
+          center_zero: Whether to derive per-panel symmetric color limits
+            around zero when explicit limits are not supplied.
         """
         valid_keys = [key for key in obs_keys if key in adata.obs.columns]
         if not valid_keys:
@@ -518,16 +521,25 @@ class SCVisualizer:
         numeric_cmap = (
             cmap if cmap is not None else self.umap_expression_cmap("viridis")
         )
-        panels: list[UmapPanelSpec] = [
-            {
-                "obs_key": key,
-                "kind": "numeric",
-                "cmap": numeric_cmap,
-                "vmin": vmin,
-                "vmax": vmax,
-            }
-            for key in valid_keys
-        ]
+        panels: list[UmapPanelSpec] = []
+        for key in valid_keys:
+            panel_vmin = vmin
+            panel_vmax = vmax
+            if center_zero and (panel_vmin is None or panel_vmax is None):
+                limit = self._symmetric_obs_limit(adata, key)
+                if panel_vmin is None:
+                    panel_vmin = -limit
+                if panel_vmax is None:
+                    panel_vmax = limit
+            panels.append(
+                {
+                    "obs_key": key,
+                    "kind": "numeric",
+                    "cmap": numeric_cmap,
+                    "vmin": panel_vmin,
+                    "vmax": panel_vmax,
+                }
+            )
         self.plot_umap_panel(
             adata,
             panels=panels,
@@ -667,6 +679,130 @@ class SCVisualizer:
         self._save_figure_and_log(
             fig, out, "[plot] multi-gene expression heatmap -> %s"
         )
+
+    def plot_grouped_obs_score_heatmap(
+        self,
+        adata: Any,
+        score_keys: Sequence[str],
+        *,
+        groupby: str,
+        filename: str,
+        score_labels: Sequence[str] | None = None,
+        cmap: Colormap | str = "RdYlBu_r",
+        obs_order: Sequence[str] | None = None,
+        cell_size: float = 0.18,
+        min_width: float = 1.5,
+        min_height: float = 1.5,
+        cbar_height: str | float = 0.36,
+        cbar_width: str | float = 0.07,
+        cbar_pad: float = 0.02,
+        cbar_title: str | None = "Mean score",
+        vmin: float | None = None,
+        vmax: float | None = None,
+        center_zero: bool = True,
+    ) -> None:
+        """Save mean observation scores as a grouped heatmap.
+
+        Args:
+          adata: AnnData object containing score columns in obs.
+          score_keys: Numeric obs score columns to aggregate.
+          groupby: Observation column used for heatmap rows.
+          filename: Output filename under output_dir.
+          score_labels: Optional labels for score columns. Defaults to
+            `score_keys`.
+          cmap: Colormap for score values.
+          obs_order: Optional ordered subset of group labels for heatmap rows.
+          cell_size: Width and height of each heatmap cell in inches.
+          min_width: Minimum heatmap panel width in inches.
+          min_height: Minimum heatmap panel height in inches.
+          cbar_height: Inset colorbar height. Floats are inches; strings are
+            relative to the heatmap axis.
+          cbar_width: Inset colorbar width. Floats are inches; strings are
+            relative to the heatmap axis.
+          cbar_pad: Padding between heatmap and colorbar.
+          cbar_title: Optional vertical colorbar label.
+          vmin: Lower color limit. When omitted with center_zero=True, the
+            lower limit is the negative maximum absolute grouped score.
+          vmax: Upper color limit. When omitted with center_zero=True, the
+            upper limit is the maximum absolute grouped score.
+          center_zero: Whether to derive symmetric color limits around zero
+            when explicit limits are not supplied.
+        """
+        self._set_matplotlib_publication_parameters()
+        out = self.output_dir / filename
+        if groupby not in adata.obs.columns:
+            raise KeyError(f"obs column not found for score heatmap: {groupby}")
+
+        valid_score_keys = [key for key in score_keys if key in adata.obs]
+        if not valid_score_keys:
+            logger.warning(
+                "[plot] No valid score keys found for heatmap %s. Skipping.",
+                filename,
+            )
+            return
+
+        labels = (
+            list(score_labels)
+            if score_labels is not None
+            else list(valid_score_keys)
+        )
+        if len(labels) != len(valid_score_keys):
+            raise ValueError("score_labels must match score_keys length")
+
+        grouped_scores = self._group_obs_scores_by_obs(
+            adata=adata,
+            score_keys=valid_score_keys,
+            labels=labels,
+            groupby=groupby,
+            obs_order=obs_order,
+        )
+        if grouped_scores.empty:
+            logger.warning(
+                "[plot] No valid groups found for score heatmap %s. Skipping.",
+                filename,
+            )
+            return
+
+        values = grouped_scores.to_numpy(dtype=float)
+        if center_zero and (vmin is None or vmax is None):
+            finite = np.abs(values[np.isfinite(values)])
+            limit = float(finite.max()) if finite.size else 1.0
+            if limit <= 0.0:
+                limit = 1.0
+            if vmin is None:
+                vmin = -limit
+            if vmax is None:
+                vmax = limit
+
+        n_groups, n_scores = grouped_scores.shape
+        panel_w = max(min_width, n_scores * cell_size)
+        panel_h = max(min_height, n_groups * cell_size)
+        fig, ax = plt.subplots(figsize=(panel_w, panel_h))
+        image = ax.imshow(
+            values,
+            aspect="equal",
+            cmap=cmap,
+            interpolation="nearest",
+            vmin=vmin,
+            vmax=vmax,
+        )
+        ax.set_box_aspect(n_groups / n_scores)
+        self._style_score_heatmap_axis(
+            ax=ax,
+            score_labels=grouped_scores.columns.tolist(),
+            groups=grouped_scores.index.tolist(),
+        )
+        self._add_embedding_colorbar(
+            fig=fig,
+            ax=ax,
+            mappable=image,
+            cbar_height=cbar_height,
+            cbar_width=cbar_width,
+            cbar_pad=cbar_pad,
+            title=cbar_title,
+        )
+
+        self._save_figure_and_log(fig, out, "[plot] score heatmap -> %s")
 
     def plot_marker_dotplot(
         self,
@@ -1225,6 +1361,63 @@ class SCVisualizer:
         grouped = mean_exp.loc[categories, ordered_var_names].T
         grouped.index = ordered_labels
         return grouped
+
+    @staticmethod
+    def _group_obs_scores_by_obs(
+        *,
+        adata: Any,
+        score_keys: list[str],
+        labels: list[str],
+        groupby: str,
+        obs_order: Sequence[str] | None = None,
+    ) -> pd.DataFrame:
+        """Return mean obs scores with obs groups on rows and scores on
+        columns.
+        """
+        obs = cast(pd.DataFrame, adata.obs)
+        score_df = obs.loc[:, [*score_keys, groupby]].copy()
+        score_df[groupby] = score_df[groupby].astype(str)
+
+        if obs_order is not None:
+            categories = [str(category) for category in obs_order]
+        elif hasattr(obs[groupby], "cat"):
+            categories = [
+                str(category) for category in obs[groupby].cat.categories
+            ]
+        else:
+            categories = sorted(
+                str(category)
+                for category in pd.Series(score_df[groupby]).dropna().unique()
+            )
+
+        mean_scores = score_df.groupby(groupby, observed=True)[
+            score_keys
+        ].mean()
+        categories = [
+            category for category in categories if category in mean_scores.index
+        ]
+        if not categories:
+            return pd.DataFrame(columns=labels)
+
+        grouped = mean_scores.loc[categories, score_keys]
+        grouped.columns = labels
+        return grouped
+
+    @staticmethod
+    def _symmetric_obs_limit(adata: Any, obs_key: str) -> float:
+        """Return a non-zero symmetric color limit for one numeric obs
+        column.
+        """
+        obs = cast(pd.DataFrame, adata.obs)
+        values = pd.to_numeric(obs[obs_key], errors="coerce").to_numpy(
+            dtype=float,
+            copy=False,
+        )
+        finite = np.abs(values[np.isfinite(values)])
+        if finite.size == 0:
+            return 1.0
+        limit = float(finite.max())
+        return limit if limit > 0.0 else 1.0
 
     @staticmethod
     def _compute_dotplot_stats(
@@ -1817,6 +2010,36 @@ class SCVisualizer:
         ax.tick_params(axis="both", which="major", length=0, pad=2.1)
 
         ax.set_xticks(np.arange(-0.5, len(genes), 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, len(groups), 1), minor=True)
+        ax.grid(which="minor", color="white", linewidth=0.25)
+        ax.tick_params(axis="both", which="minor", length=0)
+
+        for lbl in ax.get_xticklabels() + ax.get_yticklabels():
+            lbl.set_visible(True)
+            lbl.set_clip_on(False)
+
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+    @staticmethod
+    def _style_score_heatmap_axis(
+        *,
+        ax: Axes,
+        score_labels: list[str],
+        groups: list[str],
+    ) -> None:
+        """Apply shared publication styling to an obs-score heatmap."""
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        ax.set_xticks(range(len(score_labels)))
+        ax.set_xticklabels(
+            score_labels, rotation=90, ha="center", va="top", color="black"
+        )
+        ax.set_yticks(range(len(groups)))
+        ax.set_yticklabels(groups, color="black")
+        ax.tick_params(axis="both", which="major", length=0, pad=2.1)
+
+        ax.set_xticks(np.arange(-0.5, len(score_labels), 1), minor=True)
         ax.set_yticks(np.arange(-0.5, len(groups), 1), minor=True)
         ax.grid(which="minor", color="white", linewidth=0.25)
         ax.tick_params(axis="both", which="minor", length=0)

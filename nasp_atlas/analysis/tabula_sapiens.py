@@ -48,10 +48,41 @@ def run_tabula_sapiens_scoring_analysis(
     score_aucell: bool = False,
     score_table_filename: str = "tabula_sapiens_module_scores.csv.gz",
     heatmap_obs_keys: Sequence[str] | None = None,
+    score_heatmap_obs_key: str | None = None,
     single_tissue: str | None = None,
     single_tissue_use_rep: str | None = "X_scvi",
 ) -> None:
-    """Run Tabula Sapiens metadata plots and NASP module scoring."""
+    """Run Tabula Sapiens metadata plots and NASP module scoring.
+
+    Args:
+      h5ad_path: Input h5ad path.
+      output_dir: Directory where plots and score tables are written.
+      subset_fraction: Optional row fraction to load for exploratory runs.
+      random_state: Random seed used for subsetting and recomputed UMAPs.
+      tissue_key: Obs column identifying tissues.
+      cell_type_key: Obs column identifying cell types.
+      sex_key: Obs column identifying donor sex.
+      development_stage_key: Obs column with CELLxGENE development stage.
+      age_key: Obs column to hold numeric age in years.
+      gene_symbol_column: Var column containing gene symbols.
+      expression_layer: Expression layer used for gene-expression plots.
+      module_ids: Optional module IDs to score and plot. Defaults to all
+        modules from `GeneModules`.
+      metadata_panels: Optional metadata UMAP panel specification.
+      sensor_group: Sensor group name used to select sensor genes.
+      plot_modules: Whether to plot per-module marker-gene UMAPs and heatmaps.
+      score_scanpy: Whether to score modules with scanpy.
+      score_aucell: Whether to score modules with AUCell.
+      score_table_filename: Output score table filename under `output_dir`.
+      heatmap_obs_keys: Obs columns used for sensor/module gene-expression
+        heatmaps. Defaults to tissue and cell type.
+      score_heatmap_obs_key: Obs column used for scanpy/AUCell score heatmaps.
+        Defaults to `cell_type_key`; pass `tissue_key` for atlas-wide tissue
+        summaries.
+      single_tissue: If set, recompute neighbors/UMAP for one tissue.
+      single_tissue_use_rep: Representation used for single-tissue UMAP
+        recomputation.
+    """
     # Load data
     adata, _ = read_h5ad(
         h5ad_path,
@@ -90,6 +121,7 @@ def run_tabula_sapiens_scoring_analysis(
         cell_type_key=cell_type_key,
         heatmap_obs_keys=heatmap_obs_keys,
     )
+    score_heatmap_groupby_key = score_heatmap_obs_key or cell_type_key
 
     # Sensor-specific UMAP
     sensors = GeneModules.sensors(sensor_group)
@@ -168,6 +200,18 @@ def run_tabula_sapiens_scoring_analysis(
             size=point_size,
             vmin=None,
             vmax=None,
+            center_zero=True,
+        )
+        viz.plot_grouped_obs_score_heatmap(
+            adata,
+            score_keys=scanpy_score_keys,
+            groupby=score_heatmap_groupby_key,
+            filename=(
+                "tabula_sapiens_scanpy_module_score_heatmap_by_"
+                f"{_safe_filename_token(score_heatmap_groupby_key)}"
+            ),
+            score_labels=[str(module.module_id) for module in scanpy_modules],
+            cmap="RdYlBu_r",
         )
         del scanpy_obs, scanpy_modules, scanpy_score_keys
         if not score_aucell:
@@ -206,6 +250,18 @@ def run_tabula_sapiens_scoring_analysis(
                 size=point_size,
                 vmin=None,
                 vmax=None,
+                center_zero=True,
+            )
+            viz.plot_grouped_obs_score_heatmap(
+                adata_auc,
+                score_keys=auc_score_keys,
+                groupby=score_heatmap_groupby_key,
+                filename=(
+                    "tabula_sapiens_aucell_module_score_heatmap_by_"
+                    f"{_safe_filename_token(score_heatmap_groupby_key)}"
+                ),
+                score_labels=[str(module.module_id) for module in auc_modules],
+                cmap="RdYlBu_r",
             )
         finally:
             del adata_auc, auc_df, auc_modules

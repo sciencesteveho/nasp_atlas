@@ -26,7 +26,10 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
     """The batch workflow persists final scores and requests score UMAPs."""
     adata = ad.AnnData(
         X=np.ones((2, 1)),
-        obs=pd.DataFrame(index=["cell_a", "cell_b"]),
+        obs=pd.DataFrame(
+            {"cell_type": ["T cell", "B cell"]},
+            index=["cell_a", "cell_b"],
+        ),
         var=pd.DataFrame(
             {"feature_name": ["CGAS"]},
             index=["gene_a"],
@@ -40,6 +43,7 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
         gene_id_output="symbols",
     )
     plot_calls: list[dict[str, object]] = []
+    score_heatmap_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(
         tabula_sapiens,
@@ -69,6 +73,15 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
         tabula_sapiens.SCVisualizer,
         "plot_multi_obs_umap_panel",
         capture_score_plot,
+    )
+
+    def capture_score_heatmap(*args, **kwargs) -> None:
+        score_heatmap_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        tabula_sapiens.SCVisualizer,
+        "plot_grouped_obs_score_heatmap",
+        capture_score_heatmap,
     )
 
     def fake_scanpy_scores(adata_arg, *args, **kwargs):
@@ -114,6 +127,21 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
         (["NASP_DNA_SENSING_score"], "tabula_sapiens_scanpy_module_umaps"),
         (["NASP_DNA_SENSING_auc"], "tabula_sapiens_aucell_module_umaps"),
     ]
+    assert [
+        (call["score_keys"], call["groupby"], call["filename"])
+        for call in score_heatmap_calls
+    ] == [
+        (
+            ["NASP_DNA_SENSING_score"],
+            "cell_type",
+            "tabula_sapiens_scanpy_module_score_heatmap_by_cell_type",
+        ),
+        (
+            ["NASP_DNA_SENSING_auc"],
+            "cell_type",
+            "tabula_sapiens_aucell_module_score_heatmap_by_cell_type",
+        ),
+    ]
 
 
 def test_tabula_sapiens_saves_scanpy_scores_before_aucell_failure(
@@ -157,6 +185,11 @@ def test_tabula_sapiens_saves_scanpy_scores_before_aucell_failure(
     monkeypatch.setattr(
         tabula_sapiens.SCVisualizer,
         "plot_multi_obs_umap_panel",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        tabula_sapiens.SCVisualizer,
+        "plot_grouped_obs_score_heatmap",
         lambda *args, **kwargs: None,
     )
 
