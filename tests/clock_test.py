@@ -7,11 +7,19 @@ import os
 
 os.environ.setdefault("NUMBA_CACHE_DIR", "/tmp/numba")
 
+from typing import cast
+
+import joblib  # type: ignore
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LinearRegression
+from sklearn.pipeline import Pipeline
 
 import nasp_atlas.analysis.clock as clock_analysis
 from nasp_atlas.single_cell.clocks.model import ClockModel
+from nasp_atlas.single_cell.clocks.model import load_clock
 from nasp_atlas.single_cell.clocks.model import model_feature_coverage
 from nasp_atlas.single_cell.clocks.model import predict_metacells
 
@@ -19,8 +27,8 @@ from nasp_atlas.single_cell.clocks.model import predict_metacells
 class _Estimator:
     """Minimal estimator used to exercise the prediction contract."""
 
-    def predict(self, features: pd.DataFrame) -> np.ndarray:
-        return features.sum(axis=1).to_numpy()
+    def predict(self, X: pd.DataFrame) -> npt.NDArray[np.float64]:
+        return X.sum(axis=1).to_numpy(dtype=float)
 
 
 def test_predict_metacells_has_stable_dataframe_return_type() -> None:
@@ -37,8 +45,40 @@ def test_predict_metacells_has_stable_dataframe_return_type() -> None:
 
     assert isinstance(prediction, pd.DataFrame)
     assert prediction.loc["cell", "tage"] == 1.0
-    assert np.isnan(prediction.loc["cell", "tage_std"])
+    assert pd.isna(prediction.loc["cell", "tage_std"])
     assert model_feature_coverage(features, clock) == 0.5
+
+
+def test_load_clock_patches_legacy_simple_imputer_fill_dtype(tmp_path) -> None:
+    """Loaded legacy sklearn imputers predict under current sklearn."""
+    training = pd.DataFrame(
+        {
+            "a": [1.0, np.nan, 3.0],
+            "b": [2.0, 4.0, 6.0],
+        }
+    )
+    estimator = Pipeline(
+        [
+            ("imputer", SimpleImputer()),
+            ("regressor", LinearRegression()),
+        ]
+    )
+    estimator.fit(training, np.array([1.0, 2.0, 3.0]))
+    delattr(estimator.named_steps["imputer"], "_fill_dtype")
+    model_path = tmp_path / "legacy_clock.pkl"
+    joblib.dump(estimator, model_path)
+
+    clock = load_clock(model_path)
+    prediction = predict_metacells(
+        clock,
+        pd.DataFrame({"a": [np.nan], "b": [5.0]}, index=["cell"]),
+        species="unknown",
+    )
+
+    loaded = cast(Pipeline, clock.estimator)
+    tage = cast(float, prediction.loc["cell", "tage"])
+    assert hasattr(loaded.named_steps["imputer"], "_fill_dtype")
+    assert np.isfinite(tage)
 
 
 def test_predict_stratum_keeps_coverage_separate_per_clock(monkeypatch) -> None:

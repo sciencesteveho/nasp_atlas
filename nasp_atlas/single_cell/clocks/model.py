@@ -5,12 +5,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Protocol, cast, overload
+from typing import Any, Protocol, cast
 
 import joblib  # type: ignore
 import numpy as np
-import numpy.typing as npt
 import pandas as pd
+import sklearn.base  # type: ignore
+import sklearn.impute  # type: ignore
 import sklearn.pipeline  # type: ignore
 
 
@@ -26,17 +27,6 @@ SPECIES_MAX_LIFESPAN = {
 
 class _ClockEstimator(Protocol):
     """Estimator interface used by clock prediction."""
-
-    @overload
-    def predict(self, X: pd.DataFrame) -> npt.NDArray[np.float64]: ...
-
-    @overload
-    def predict(
-        self,
-        X: pd.DataFrame,
-        *,
-        return_std: Literal[True],
-    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]: ...
 
     def predict(self, X: pd.DataFrame, *args: Any, **kwargs: Any) -> Any:
         """Predict from an aligned feature matrix."""
@@ -73,6 +63,30 @@ def _final_estimator(estimator: _ClockEstimator) -> object:
     return estimator
 
 
+def _patch_sklearn_estimator_compatibility(estimator: object) -> None:
+    """Patch loaded sklearn estimators for known serialization drift."""
+    for _, step in _iter_sklearn_estimators(estimator):
+        if (
+            isinstance(step, sklearn.impute.SimpleImputer)
+            and not hasattr(step, "_fill_dtype")
+            and hasattr(step, "_fit_dtype")
+        ):
+            step._fill_dtype = step._fit_dtype  # type: ignore
+
+
+def _iter_sklearn_estimators(estimator: object) -> list[tuple[str, object]]:
+    """Return an estimator or its direct Pipeline steps."""
+    if isinstance(estimator, sklearn.pipeline.Pipeline):
+        return [
+            (name, step)
+            for name, step in estimator.steps
+            if step != "passthrough"
+        ]
+    if isinstance(estimator, sklearn.base.BaseEstimator):
+        return [(type(estimator).__name__, estimator)]
+    return []
+
+
 def load_clock(
     model_path: str | Path,
     *,
@@ -97,6 +111,7 @@ def load_clock(
         raise FileNotFoundError(f"Model not found: {model_path}")
 
     estimator = cast(_ClockEstimator, joblib.load(model_path))
+    _patch_sklearn_estimator_compatibility(estimator)
 
     if isinstance(estimator, sklearn.pipeline.Pipeline):
         feature_names = tuple(str(name) for name in estimator.feature_names_in_)

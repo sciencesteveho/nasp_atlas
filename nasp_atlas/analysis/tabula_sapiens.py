@@ -34,6 +34,7 @@ def run_tabula_sapiens_scoring_analysis(
     subset_fraction: float | None = None,
     random_state: int = 0,
     tissue_key: str = "tissue_in_publication",
+    cell_type_key: str = "cell_type",
     sex_key: str = "sex",
     development_stage_key: str = "development_stage",
     age_key: str = "age_years",
@@ -46,6 +47,7 @@ def run_tabula_sapiens_scoring_analysis(
     score_scanpy: bool = False,
     score_aucell: bool = False,
     score_table_filename: str = "tabula_sapiens_module_scores.csv.gz",
+    heatmap_obs_keys: Sequence[str] | None = None,
     single_tissue: str | None = None,
     single_tissue_use_rep: str | None = "X_scvi",
 ) -> None:
@@ -66,7 +68,7 @@ def run_tabula_sapiens_scoring_analysis(
             random_state=random_state,
             min_dist=0.425,
         )
-        point_size /= 7.5
+        point_size /= 4
 
     # Init visualizer and plot metadata
     viz = SCVisualizer(output_dir=output_dir)
@@ -83,6 +85,12 @@ def run_tabula_sapiens_scoring_analysis(
         size=point_size,
     )
 
+    heatmap_groupby_keys = _resolve_heatmap_obs_keys(
+        tissue_key=tissue_key,
+        cell_type_key=cell_type_key,
+        heatmap_obs_keys=heatmap_obs_keys,
+    )
+
     # Sensor-specific UMAP
     sensors = GeneModules.sensors(sensor_group)
     viz.plot_multi_gene_umap_panel(
@@ -93,6 +101,15 @@ def run_tabula_sapiens_scoring_analysis(
         expression_layer=expression_layer,
         ncols=6,
         size=point_size,
+    )
+    _plot_gene_expression_heatmaps_by_obs(
+        adata=adata,
+        genes=sensors,
+        viz=viz,
+        filename_prefix="NA_SENSORS",
+        groupby_keys=heatmap_groupby_keys,
+        gene_symbol_column=gene_symbol_column,
+        expression_layer=expression_layer,
     )
 
     if module_ids is None:
@@ -111,6 +128,14 @@ def run_tabula_sapiens_scoring_analysis(
             ncols=6,
             size=point_size,
         )
+        _plot_module_gene_heatmaps_by_obs(
+            adata=adata,
+            module_ids=selected_module_ids,
+            viz=viz,
+            groupby_keys=heatmap_groupby_keys,
+            gene_symbol_column=gene_symbol_column,
+            expression_layer=expression_layer,
+        )
 
     # Scoring functions and viz
     score_tables: list[pd.DataFrame] = []
@@ -128,6 +153,11 @@ def run_tabula_sapiens_scoring_analysis(
         scanpy_obs = cast(pd.DataFrame, adata.obs)
         scanpy_scores = scanpy_obs.loc[:, scanpy_score_keys].copy()
         score_tables.append(scanpy_scores)
+        _write_score_tables(
+            score_tables,
+            output_dir=output_dir,
+            filename=score_table_filename,
+        )
         scanpy_limit = _symmetric_score_limit(scanpy_scores)
         viz.plot_multi_obs_umap_panel(
             adata,
@@ -152,6 +182,11 @@ def run_tabula_sapiens_scoring_analysis(
         auc_obs = cast(pd.DataFrame, adata_auc.obs)
         auc_scores = auc_obs.loc[:, auc_score_keys].copy()
         score_tables.append(auc_scores)
+        _write_score_tables(
+            score_tables,
+            output_dir=output_dir,
+            filename=score_table_filename,
+        )
         auc_limit = _symmetric_score_limit(auc_scores)
         viz.plot_multi_obs_umap_panel(
             adata_auc,
@@ -164,17 +199,6 @@ def run_tabula_sapiens_scoring_analysis(
             vmax=auc_limit,
         )
 
-    if score_tables:
-        scores = pd.concat(score_tables, axis="columns")
-        score_path = Path(output_dir) / score_table_filename
-        scores.to_csv(
-            score_path,
-            index=True,
-            index_label="obs_name",
-            compression="infer",
-        )
-        logger.info("[tabula_sapiens] module scores -> %s", score_path)
-
 
 def _symmetric_score_limit(scores: pd.DataFrame) -> float:
     """Return a non-zero symmetric color limit for signed score panels."""
@@ -184,6 +208,116 @@ def _symmetric_score_limit(scores: pd.DataFrame) -> float:
         return 1.0
     limit = float(finite_values.max())
     return limit if limit > 0 else 1.0
+
+
+def _write_score_tables(
+    score_tables: Sequence[pd.DataFrame],
+    *,
+    output_dir: str | Path,
+    filename: str,
+) -> None:
+    """Persist the currently available score columns."""
+    if not score_tables:
+        return
+
+    scores = pd.concat(score_tables, axis="columns")
+    score_path = Path(output_dir) / filename
+    scores.to_csv(
+        score_path,
+        index=True,
+        index_label="obs_name",
+        compression="infer",
+    )
+    logger.info("[tabula_sapiens] module scores -> %s", score_path)
+
+
+def _resolve_heatmap_obs_keys(
+    *,
+    tissue_key: str,
+    cell_type_key: str,
+    heatmap_obs_keys: Sequence[str] | None,
+) -> tuple[str, ...]:
+    """Return deduplicated obs keys used for expression heatmaps."""
+    requested_keys = (
+        (tissue_key, cell_type_key)
+        if heatmap_obs_keys is None
+        else tuple(heatmap_obs_keys)
+    )
+    return tuple(dict.fromkeys(requested_keys))
+
+
+def _plot_gene_expression_heatmaps_by_obs(
+    *,
+    adata: ad.AnnData,
+    genes: Sequence[str],
+    viz: SCVisualizer,
+    filename_prefix: str,
+    groupby_keys: Sequence[str],
+    gene_symbol_column: str,
+    expression_layer: str | None,
+) -> None:
+    """Plot one gene-expression heatmap for each requested obs key."""
+    gene_list = list(genes)
+    if not gene_list:
+        return
+
+    for groupby_key in groupby_keys:
+        viz.plot_multi_gene_expression_heatmap(
+            adata=adata,
+            genes=gene_list,
+            groupby=groupby_key,
+            filename=(
+                f"{filename_prefix}_gene_expression_heatmap_by_"
+                f"{_safe_filename_token(groupby_key)}"
+            ),
+            gene_symbol_column=gene_symbol_column,
+            expression_layer=expression_layer,
+        )
+
+
+def _plot_module_gene_heatmaps_by_obs(
+    *,
+    adata: ad.AnnData,
+    module_ids: Sequence[str],
+    viz: SCVisualizer,
+    groupby_keys: Sequence[str],
+    gene_symbol_column: str,
+    expression_layer: str | None,
+) -> None:
+    """Plot module marker-gene heatmaps for each requested obs key."""
+    for module_id in module_ids:
+        module_genes = GeneModules.genes(
+            module_id,
+            adata=adata,
+            gene_symbol_column=gene_symbol_column,
+            output="symbols",
+        )
+        if not module_genes:
+            logger.info("%s: no matched genes; skipping heatmaps", module_id)
+            continue
+
+        logger.info(
+            "%s: plotting %s marker gene heatmaps",
+            module_id,
+            len(module_genes),
+        )
+        _plot_gene_expression_heatmaps_by_obs(
+            adata=adata,
+            genes=module_genes,
+            viz=viz,
+            filename_prefix=module_id,
+            groupby_keys=groupby_keys,
+            gene_symbol_column=gene_symbol_column,
+            expression_layer=expression_layer,
+        )
+
+
+def _safe_filename_token(value: str) -> str:
+    """Return a filesystem-safe token for generated plot filenames."""
+    token = "".join(
+        char if char.isalnum() or char in "._-" else "_" for char in value
+    )
+    return token.strip("_") or "obs"
 
 
 def _plot_tabula_sapiens_metadata_umaps(

@@ -62,6 +62,7 @@ class ClockConfig:
       chronological_clock_key: clock_key used for age acceleration.
       broadcast_level: Level whose predictions are broadcast to `.obs`.
       random_seed: Seed used throughout.
+      shuffle_metacells: Whether to randomize cells before metacell pooling.
     """
 
     counts_layer: str | None = "decontXcounts"
@@ -82,6 +83,7 @@ class ClockConfig:
     chronological_clock_key: str = "chronoage"
     broadcast_level: str = "cell_type"
     random_seed: int = 42
+    shuffle_metacells: bool = True
 
     def level_grouping(self, level: str) -> tuple[list[str], list[str] | None]:
         """Return (group_by, split_by) for an aggregation level.
@@ -358,6 +360,7 @@ def _run_level(
         counts_layer=config.counts_layer,
         coverage_threshold=config.coverage_threshold,
         carry_obs=carry_obs,
+        shuffle=config.shuffle_metacells,
         random_seed=config.random_seed,
         cell_assignment_key=cell_assignment_key,
     )

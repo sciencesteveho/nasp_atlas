@@ -142,7 +142,10 @@ class SCVisualizer:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-        self.expression_cmap = self.umap_expression_cmap()
+        self.expression_cmap = self.umap_expression_cmap(
+            "RdYlBu_r",
+            blue_blend=0.35,
+        )
         self.dotplot_cmap = self.pastelize_cmap("Blues", blend=0.35)
 
         logging.getLogger("matplotlib.category").setLevel(logging.WARNING + 1)
@@ -296,9 +299,7 @@ class SCVisualizer:
 
         fig.subplots_adjust(hspace=row_hspace, wspace=col_wspace)
         out = self.output_dir / filename
-        fig.savefig(f"{out}.png", dpi=self.dpi, bbox_inches="tight")
-        plt.close(fig)
-        logger.info("[plot] UMAP panel -> %s", out)
+        self._save_figure_and_log(fig, out, "[plot] UMAP panel -> %s")
 
     def plot_obs_umap_panel(
         self,
@@ -345,7 +346,7 @@ class SCVisualizer:
         panel_w: float = 1.75,
         panel_h: float = 1.75,
         cmap: Colormap | None = None,
-        expression_layer: str | None = "log1p",
+        expression_layer: str | None = None,
         use_raw: bool = False,
         gene_symbol_column: str | None = None,
         row_hspace: float = 0.22,
@@ -376,7 +377,9 @@ class SCVisualizer:
         """
         self._set_matplotlib_publication_parameters()
         out = self.output_dir / filename
-        cmap = cmap if cmap is not None else self.expression_cmap
+        cmap = (
+            cmap if cmap is not None else self.umap_expression_cmap("RdYlBu_r")
+        )
         if expression_layer is not None and use_raw:
             raise ValueError(
                 "use_raw=True cannot be combined with expression_layer"
@@ -435,7 +438,7 @@ class SCVisualizer:
             )
             ax.set_xlabel("")
             ax.set_ylabel("")
-            ax.set_title(label)
+            ax.set_title(label, fontstyle="italic", pad=0.0)
             ax.set_aspect("equal", adjustable="box")
             ax.set_box_aspect(1)
 
@@ -459,9 +462,9 @@ class SCVisualizer:
             ax.axis("off")
 
         fig.subplots_adjust(hspace=row_hspace, wspace=0.35)
-        fig.savefig(f"{out}.png", dpi=self.dpi, bbox_inches="tight")
-        plt.close(fig)
-        logger.info("[plot] multi-gene UMAP panel -> %s", out)
+        self._save_figure_and_log(
+            fig, out, "[plot] multi-gene UMAP panel -> %s"
+        )
 
     def plot_multi_obs_umap_panel(
         self,
@@ -484,8 +487,8 @@ class SCVisualizer:
     ) -> None:
         """Save a multi-panel UMAP figure for numeric obs columns.
 
-        This is a convenience wrapper around :meth:`plot_umap_panel` for
-        applying one numeric style to several observation columns.
+        This is a convenience wrapper around `plot_umap_panel` for applying one
+        numeric style to several observation columns.
 
         Args:
           adata: AnnData object with UMAP embedding computed.
@@ -539,6 +542,128 @@ class SCVisualizer:
             cbar_height=cbar_height,
             cbar_width=cbar_width,
             cbar_pad=cbar_pad,
+        )
+
+    def plot_multi_gene_expression_heatmap(
+        self,
+        adata: Any,
+        genes: list[str],
+        *,
+        groupby: str,
+        filename: str,
+        cmap: Colormap | None = None,
+        expression_layer: str | None = None,
+        use_raw: bool = False,
+        gene_symbol_column: str | None = None,
+        obs_order: Sequence[str] | None = None,
+        cell_size: float = 0.1,
+        min_width: float = 1.5,
+        min_height: float = 1.5,
+        cbar_height: str = "17.5%",
+        cbar_width: str = "3%",
+        cbar_pad: float = 0.02,
+        cbar_title: str | None = None,
+        vmin: float | None = 0,
+        vmax: float | None = None,
+    ) -> None:
+        """Save mean gene expression as a grouped square-cell heatmap.
+
+        Args:
+          adata: AnnData object containing expression values.
+          genes: Gene names to plot.
+          groupby: Observation column used for heatmap rows.
+          filename: Output filename under output_dir.
+          cmap: Colormap for expression values.
+          expression_layer: Layer to use for expression values.
+          use_raw: Whether to use adata.raw when expression_layer is None.
+          gene_symbol_column: Optional adata.var column used to resolve symbols.
+          obs_order: Optional ordered subset of group labels for heatmap rows.
+          cell_size: Width and height of each heatmap cell in inches.
+          min_width: Minimum heatmap panel width in inches.
+          min_height: Minimum heatmap panel height in inches.
+          cbar_height: Inset colorbar height as a percentage.
+          cbar_width: Inset colorbar width as a percentage.
+          cbar_pad: Padding between heatmap and colorbar.
+          cbar_title: Optional title drawn above the heatmap colorbar.
+          vmin: Lower color limit. Defaults to 0 so zero maps to gray when
+            using `umap_expression_cmap`.
+          vmax: Upper color limit.
+        """
+        self._set_matplotlib_publication_parameters()
+        out = self.output_dir / filename
+        cmap = cmap if cmap is not None else self.expression_cmap
+        if expression_layer is not None and use_raw:
+            raise ValueError(
+                "use_raw=True cannot be combined with expression_layer"
+            )
+        if groupby not in adata.obs.columns:
+            raise KeyError(f"obs column not found for heatmap: {groupby}")
+
+        resolved = self._resolve_genes(
+            adata,
+            genes,
+            gene_symbol_column=gene_symbol_column,
+        )
+        if not resolved.var_names:
+            logger.warning(
+                "[plot] No valid genes found for %s. Skipping.", filename
+            )
+            return
+
+        expr_kwargs: dict[str, Any] = {"layer": expression_layer}
+        if expression_layer is None:
+            expr_kwargs["use_raw"] = use_raw
+        expr_df = sc.get.obs_df(
+            adata,
+            keys=[*resolved.var_names, groupby],
+            **expr_kwargs,
+        )
+        grouped_expression = self._group_gene_expression_by_obs(
+            adata=adata,
+            expr_df=expr_df,
+            var_names=resolved.var_names,
+            labels=resolved.labels,
+            groupby=groupby,
+            obs_order=obs_order,
+        )
+        if grouped_expression.empty:
+            logger.warning(
+                "[plot] No valid groups found for heatmap %s. Skipping.",
+                filename,
+            )
+            return
+
+        n_genes, n_groups = grouped_expression.shape
+        heatmap_values = grouped_expression.T.to_numpy(dtype=float)
+        panel_w = max(min_width, n_genes * cell_size)
+        panel_h = max(min_height, n_groups * cell_size)
+        fig, ax = plt.subplots(figsize=(panel_w, panel_h))
+        image = ax.imshow(
+            heatmap_values,
+            aspect="equal",
+            cmap=cmap,
+            interpolation="nearest",
+            vmin=vmin,
+            vmax=vmax,
+        )
+        ax.set_box_aspect(n_groups / n_genes)
+        self._style_gene_expression_heatmap_axis(
+            ax=ax,
+            genes=grouped_expression.index.tolist(),
+            groups=grouped_expression.columns.tolist(),
+        )
+        self._add_embedding_colorbar(
+            fig=fig,
+            ax=ax,
+            mappable=image,
+            cbar_height=cbar_height,
+            cbar_width=cbar_width,
+            cbar_pad=cbar_pad,
+            title=cbar_title,
+        )
+
+        self._save_figure_and_log(
+            fig, out, "[plot] multi-gene expression heatmap -> %s"
         )
 
     def plot_marker_dotplot(
@@ -955,9 +1080,18 @@ class SCVisualizer:
             ax.axis("off")
 
         fig.tight_layout()
+        self._save_figure_and_log(fig, out, "[plot] annotation violins -> %s")
+
+    def _save_figure_and_log(
+        self,
+        fig: Figure,
+        out: Path,
+        log_message: str,
+    ) -> None:
+        """Save a figure as PNG, close it, and log the output path."""
         fig.savefig(f"{out}.png", dpi=self.dpi, bbox_inches="tight")
         plt.close(fig)
-        logger.info("[plot] annotation violins -> %s", out)
+        logger.info(log_message, out)
 
     @staticmethod
     def _resolve_genes(
@@ -1045,6 +1179,50 @@ class SCVisualizer:
             idx += len(resolved.var_names)
 
         return _DotplotGenes(var_names, labels, group_labels, group_positions)
+
+    @staticmethod
+    def _group_gene_expression_by_obs(
+        *,
+        adata: Any,
+        expr_df: pd.DataFrame,
+        var_names: list[str],
+        labels: list[str],
+        groupby: str,
+        obs_order: Sequence[str] | None = None,
+    ) -> pd.DataFrame:
+        """Return mean expression with genes on rows and obs groups."""
+        expr_df = expr_df.copy()
+        expr_df[groupby] = expr_df[groupby].astype(str)
+
+        if obs_order is not None:
+            categories = [str(category) for category in obs_order]
+        elif hasattr(adata.obs[groupby], "cat"):
+            categories = [
+                str(category) for category in adata.obs[groupby].cat.categories
+            ]
+        else:
+            categories = sorted(
+                str(category)
+                for category in pd.Series(expr_df[groupby]).dropna().unique()
+            )
+
+        mean_exp = expr_df.groupby(groupby, observed=True)[var_names].mean()
+        categories = [
+            category for category in categories if category in mean_exp.index
+        ]
+        if not categories:
+            return pd.DataFrame(index=labels)
+
+        gene_means = expr_df[var_names].mean(axis=0)
+        ordered_var_names = gene_means.sort_values(ascending=False).index
+        label_lookup = dict(zip(var_names, labels, strict=True))
+        ordered_labels = [
+            label_lookup[var_name] for var_name in ordered_var_names
+        ]
+
+        grouped = mean_exp.loc[categories, ordered_var_names].T
+        grouped.index = ordered_labels
+        return grouped
 
     @staticmethod
     def _compute_dotplot_stats(
@@ -1152,6 +1330,8 @@ class SCVisualizer:
         ax.set_xticklabels(
             labels, rotation=90, ha="center", va="top", color="black"
         )
+        for label in ax.get_xticklabels():
+            label.set_fontstyle("italic")
         ax.set_yticks(range(n_groups))
         ax.set_yticklabels(stats.categories, color="black")
         ax.set_xlim(-0.5, n_genes - 0.5)
@@ -1615,6 +1795,38 @@ class SCVisualizer:
         ax.set_title(panel.title, pad=2)
 
     @staticmethod
+    def _style_gene_expression_heatmap_axis(
+        *,
+        ax: Axes,
+        genes: list[str],
+        groups: list[str],
+    ) -> None:
+        """Apply shared publication styling to a gene-expression heatmap."""
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        ax.set_xticks(range(len(genes)))
+        ax.set_xticklabels(
+            genes, rotation=90, ha="center", va="top", color="black"
+        )
+        for label in ax.get_xticklabels():
+            label.set_fontstyle("italic")
+        ax.set_yticks(range(len(groups)))
+        ax.set_yticklabels(groups, color="black")
+        ax.tick_params(axis="both", which="major", length=0, pad=2.1)
+
+        ax.set_xticks(np.arange(-0.5, len(genes), 1), minor=True)
+        ax.set_yticks(np.arange(-0.5, len(groups), 1), minor=True)
+        ax.grid(which="minor", color="white", linewidth=0.25)
+        ax.tick_params(axis="both", which="minor", length=0)
+
+        for lbl in ax.get_xticklabels() + ax.get_yticklabels():
+            lbl.set_visible(True)
+            lbl.set_clip_on(False)
+
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+
+    @staticmethod
     def _resolve_umap_panel_specs(
         adata: Any,
         panels: Sequence[str | UmapPanelSpec],
@@ -1774,6 +1986,7 @@ class SCVisualizer:
         cbar_pad: float,
         mappable: Any | None = None,
         ticks: Sequence[float] | None = None,
+        title: str | None = None,
     ) -> None:
         """Add an inset colorbar beside an embedding panel."""
         cax = inset_axes(
@@ -1791,6 +2004,8 @@ class SCVisualizer:
             ticks=ticks,
         )
         cbar.ax.tick_params(length=1.5, pad=0.5)
+        if title is not None:
+            cbar.ax.set_ylabel(title, rotation=270, labelpad=4, va="bottom")
 
     @staticmethod
     def _add_axes(
@@ -1856,10 +2071,23 @@ class SCVisualizer:
     @staticmethod
     def umap_expression_cmap(
         cmap_name: str = "RdYlBu_r",
+        *,
+        blue_blend: float = 0.0,
     ) -> ListedColormap:
-        """Returns a matplotlib cmap with light gray at zero values."""
+        """Returns a matplotlib cmap with light gray at zero values.
+
+        Args:
+          cmap_name: Base colormap name.
+          blue_blend: Blend the lower, blue side toward white. 0.0 leaves the
+            colormap unchanged; 1.0 makes the blue side white.
+        """
         base = plt.colormaps[cmap_name].resampled(256)
         colors = base(np.linspace(0, 1, 256))
+        if blue_blend:
+            midpoint = len(colors) // 2
+            colors[:midpoint, :3] = (
+                colors[:midpoint, :3] * (1 - blue_blend) + blue_blend
+            )
         colors[0] = mcolors.to_rgba("#eeeeee")
         return mcolors.ListedColormap(colors)
 

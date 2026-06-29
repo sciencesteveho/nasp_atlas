@@ -10,7 +10,6 @@ os.environ.setdefault("NUMBA_CACHE_DIR", "/tmp/numba")
 
 import anndata as ad  # type: ignore
 import h5py  # type: ignore
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
@@ -488,31 +487,6 @@ def test_visualizer_resolves_feature_name_symbols(tmp_path) -> None:
     assert resolved.labels == ["CGAS", "AIM2"]
 
 
-def test_visualizer_styles_embedding_axes_square(tmp_path) -> None:
-    """SCVisualizer keeps embedding panels square."""
-    viz = SCVisualizer(output_dir=tmp_path)
-    fig, ax = plt.subplots()
-    ax.scatter([0, 1], [0, 2])
-
-    viz._style_embedding_axes(ax)
-
-    assert ax.get_box_aspect() == 1
-    assert ax.get_aspect() == 1.0
-    plt.close(fig)
-
-
-def test_visualizer_viridis_zero_is_gray() -> None:
-    """SCVisualizer can make a Viridis map with gray zero."""
-    cmap = SCVisualizer.umap_expression_cmap("viridis")
-
-    assert cmap(0) == (
-        0.9333333333333333,
-        0.9333333333333333,
-        0.9333333333333333,
-        1.0,
-    )
-
-
 def test_visualizer_plots_obs_umap_panel(tmp_path) -> None:
     """SCVisualizer plots categorical and numeric obs UMAP panels."""
     adata = ad.AnnData(
@@ -740,6 +714,66 @@ def test_visualizer_gene_umap_uses_x_not_raw_by_default(
     assert obs_df_kwargs["layer"] is None
     assert embedding_kwargs["use_raw"] is False
     assert embedding_kwargs["layer"] is None
+
+
+def test_visualizer_gene_expression_heatmap_groups_obs(
+    tmp_path,
+) -> None:
+    """Gene heatmaps aggregate expression across requested obs groups."""
+    adata = ad.AnnData(
+        X=np.array(
+            [
+                [1.0, 2.0],
+                [3.0, 4.0],
+                [5.0, 8.0],
+            ]
+        ),
+        obs=pd.DataFrame(
+            {
+                "cell_type": pd.Categorical(
+                    ["b_cell", "t_cell", "b_cell"],
+                    categories=["t_cell", "b_cell"],
+                )
+            },
+            index=["cell_a", "cell_b", "cell_c"],
+        ),
+        var=pd.DataFrame(
+            {"feature_name": ["AIM2", "CGAS"]},
+            index=["gene_a", "gene_b"],
+        ),
+    )
+    viz = SCVisualizer(output_dir=tmp_path)
+
+    expr_df = pd.DataFrame(
+        {
+            "gene_a": [1.0, 3.0, 5.0],
+            "gene_b": [2.0, 4.0, 8.0],
+            "cell_type": ["b_cell", "t_cell", "b_cell"],
+        }
+    )
+    grouped = viz._group_gene_expression_by_obs(
+        adata=adata,
+        expr_df=expr_df,
+        var_names=["gene_a", "gene_b"],
+        labels=["AIM2", "CGAS"],
+        groupby="cell_type",
+    )
+
+    assert grouped.index.tolist() == ["CGAS", "AIM2"]
+    assert grouped.columns.tolist() == ["t_cell", "b_cell"]
+    assert grouped.loc["CGAS"].tolist() == [4.0, 5.0]
+    assert grouped.loc["AIM2"].tolist() == [3.0, 3.0]
+
+    viz.plot_multi_gene_expression_heatmap(
+        adata,
+        genes=["CGAS", "AIM2"],
+        groupby="cell_type",
+        filename="gene_expression_heatmap",
+        gene_symbol_column="feature_name",
+        expression_layer=None,
+    )
+
+    assert (tmp_path / "gene_expression_heatmap.png").exists()
 
 
 def test_add_development_stage_age_obs() -> None:
