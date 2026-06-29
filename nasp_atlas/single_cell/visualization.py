@@ -688,7 +688,7 @@ class SCVisualizer:
         groupby: str,
         filename: str,
         score_labels: Sequence[str] | None = None,
-        cmap: Colormap | str = "RdYlBu_r",
+        cmap: Colormap | str = "RdBu_r",
         obs_order: Sequence[str] | None = None,
         cell_size: float = 0.18,
         min_width: float = 1.5,

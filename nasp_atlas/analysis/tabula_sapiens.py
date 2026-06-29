@@ -195,7 +195,7 @@ def run_tabula_sapiens_scoring_analysis(
             adata,
             obs_keys=scanpy_score_keys,
             filename="tabula_sapiens_scanpy_module_umaps",
-            cmap="RdYlBu_r",
+            cmap="RdBu_r",
             ncols=5,
             size=point_size,
             vmin=None,
@@ -211,7 +211,7 @@ def run_tabula_sapiens_scoring_analysis(
                 f"{_safe_filename_token(score_heatmap_groupby_key)}"
             ),
             score_labels=[str(module.module_id) for module in scanpy_modules],
-            cmap="RdYlBu_r",
+            cmap="RdBu_r",
         )
         del scanpy_obs, scanpy_modules, scanpy_score_keys
         if not score_aucell:
@@ -245,7 +245,7 @@ def run_tabula_sapiens_scoring_analysis(
                 adata_auc,
                 obs_keys=auc_score_keys,
                 filename="tabula_sapiens_aucell_module_umaps",
-                cmap="RdYlBu_r",
+                cmap="RdBu_r",
                 ncols=5,
                 size=point_size,
                 vmin=None,
@@ -261,7 +261,7 @@ def run_tabula_sapiens_scoring_analysis(
                     f"{_safe_filename_token(score_heatmap_groupby_key)}"
                 ),
                 score_labels=[str(module.module_id) for module in auc_modules],
-                cmap="RdYlBu_r",
+                cmap="RdBu_r",
             )
         finally:
             del adata_auc, auc_df, auc_modules
