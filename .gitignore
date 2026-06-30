@@ -54,6 +54,7 @@ venv.bak/
 *.db
 
 # Private facing local directories
-development/
+development/*
+!development/plot_combined_clock_regressions.py
 data/
 results/

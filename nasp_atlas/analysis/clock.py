@@ -191,7 +191,7 @@ def run_tissue_clock_analysis(
         if save_tables and not tidy.empty:
             tidy.to_csv(output_path / f"clock_{level}_metacells.csv")
         if plot_regressions and not tidy.empty:
-            _plot_clock_regressions(
+            plot_clock_regressions(
                 tidy,
                 output_dir=output_path,
                 level=level,
@@ -467,7 +467,7 @@ def _add_age_acceleration(
         tidy[f"{column_prefix}_age_accel_years"] = acceleration * max_lifespan
 
 
-def _plot_clock_regressions(
+def plot_clock_regressions(
     tidy: pd.DataFrame,
     *,
     output_dir: str | Path,
@@ -495,6 +495,22 @@ def _plot_clock_regressions(
                 "_regression.png"
             ),
         )
+
+
+def _plot_clock_regressions(
+    tidy: pd.DataFrame,
+    *,
+    output_dir: str | Path,
+    level: str,
+    age_key: str,
+) -> None:
+    """Backwards-compatible wrapper for clock regression plotting."""
+    plot_clock_regressions(
+        tidy,
+        output_dir=output_dir,
+        level=level,
+        age_key=age_key,
+    )
 
 
 def _plot_clock_regression(

@@ -8,6 +8,8 @@ import os
 os.environ.setdefault("NUMBA_CACHE_DIR", "/tmp/numba")
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
+import importlib.util
+from pathlib import Path
 from typing import cast
 
 import joblib  # type: ignore
@@ -148,4 +150,58 @@ def test_clock_regression_plots_written_for_prediction_columns(
 
     assert (
         tmp_path / "clock_tissue_chronoage_scaleddiff_tage_regression.png"
+    ).exists()
+
+
+def test_combined_clock_regression_dev_module_combines_tissue_tables(
+    tmp_path,
+) -> None:
+    """Development helper pools per-tissue clock tables before plotting."""
+    module_path = (
+        Path(__file__).parents[1]
+        / "development"
+        / "plot_combined_clock_regressions.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "plot_combined_clock_regressions",
+        module_path,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    root = tmp_path / "clock_root"
+    for tissue, ages, predictions in (
+        ("liver", [20.0, 30.0], [18.0, 31.0]),
+        ("lung", [40.0, 50.0], [39.0, 52.0]),
+    ):
+        tissue_dir = root / tissue
+        tissue_dir.mkdir(parents=True)
+        pd.DataFrame(
+            {
+                "age_years": ages,
+                "chronoage_scaleddiff_tage": predictions,
+            }
+        ).to_csv(tissue_dir / "clock_tissue_metacells.csv", index=False)
+
+    output_dir = tmp_path / "combined"
+    results = module.plot_combined_clock_regressions(
+        clock_root=root,
+        output_dir=output_dir,
+        levels=("tissue",),
+    )
+
+    combined = results["tissue"]
+    assert combined.shape[0] == 4
+    assert combined["clock_source_dir"].tolist() == [
+        "liver",
+        "liver",
+        "lung",
+        "lung",
+    ]
+    assert (output_dir / "clock_tissue_combined_metacells.csv").exists()
+    assert (
+        output_dir
+        / "clock_combined_tissue_chronoage_scaleddiff_tage_regression.png"
     ).exists()
