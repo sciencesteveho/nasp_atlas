@@ -7,7 +7,7 @@ predicted-vs-chronological-age regression plots used during each single-tissue
 clock run.
 
 Example:
-    python development/plot_combined_clock_regressions.py \
+    python plot_combined_clock_regressions.py \
         results/tabula_sapiens_clocks/10x \
         --output-dir results/tabula_sapiens_clocks/10x/combined_regressions
 """

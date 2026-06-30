@@ -24,6 +24,11 @@ SPECIES_MAX_LIFESPAN = {
     "monkey": 39.0,
 }
 
+NORMALIZED_AGE_SCALE = 100.0
+MODEL_TYPE_PREFIXES = ("br", "en")
+CHRONOLOGICAL_CLOCK_KEYS = ("chronoage", "chronologicalage")
+NORMALIZED_AGE_CLOCK_KEYS = ("normalizedage", "normalized_age")
+
 
 class _ClockEstimator(Protocol):
     """Estimator interface used by clock prediction."""
@@ -132,14 +137,43 @@ def load_clock(
     )
 
 
+def _clock_key(clock_name: str | Path) -> str:
+    """Infer the biological clock target from a serialized model name."""
+    parts = Path(clock_name).stem.lower().split("_")
+    if len(parts) > 1 and parts[0] in MODEL_TYPE_PREFIXES:
+        return parts[1]
+    return parts[0] if parts else ""
+
+
+def clock_prediction_scale(clock_name: str | Path, species: str) -> float:
+    """Return the unit conversion factor for one clock output.
+
+    Chronological-age clocks are trained in relative lifespan units and are
+    converted to species-specific years. Normalized-age clocks are converted to
+    percent of expected lifespan. Mortality and lifespan-effect clocks are
+    already in their model units and are not lifespan-scaled.
+
+    Args:
+      clock_name: Serialized model name or path.
+      species: Query species used for chronological-age clock scaling.
+
+    Returns:
+      Multiplicative factor applied to point predictions and predictive std.
+    """
+    key = _clock_key(clock_name)
+    if key in CHRONOLOGICAL_CLOCK_KEYS:
+        return SPECIES_MAX_LIFESPAN.get(species, 1.0)
+    return NORMALIZED_AGE_SCALE if key in NORMALIZED_AGE_CLOCK_KEYS else 1.0
+
+
 def align_to_model_features(
     features: pd.DataFrame,
     clock: ClockModel,
 ) -> tuple[pd.DataFrame, float]:
     """Align a relative-feature matrix to a model's ordered features.
 
-    Features absent from the matrix are filled with zero, representing zero
-    relative deviation from the stratum reference.
+    Features absent from the matrix are left as NaN so the fitted model
+    pipeline's training-median imputer handles them.
 
     Args:
       features: Metacells x mouse-Entrez relative features.
@@ -150,7 +184,7 @@ def align_to_model_features(
       model features present in the input matrix.
     """
     coverage = model_feature_coverage(features, clock)
-    aligned = features.reindex(columns=clock.feature_names, fill_value=0.0)
+    aligned = features.reindex(columns=clock.feature_names)
     return aligned, coverage
 
 
@@ -175,8 +209,7 @@ def predict_metacells(
     Args:
       clock: Loaded clock model.
       features: Metacells x mouse-Entrez relative features for one stratum.
-      species: Query species; selects the max-lifespan adjustment applied to
-        the models' relative output.
+      species: Query species; selects chronological-age lifespan scaling.
       return_std: Request the predictive standard deviation when supported.
 
     Returns:
@@ -197,10 +230,9 @@ def predict_metacells(
         point = clock.estimator.predict(aligned)
         std = np.full(point.shape, np.nan)
 
-    adjustment = SPECIES_MAX_LIFESPAN.get(species)
-    if adjustment is not None:
-        point = point * adjustment
-        std = std * adjustment
+    adjustment = clock_prediction_scale(clock.name, species)
+    point = point * adjustment
+    std = std * adjustment
 
     return pd.DataFrame(
         {"tage": point, "tage_std": std},

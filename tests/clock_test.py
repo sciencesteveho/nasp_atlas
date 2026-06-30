@@ -34,6 +34,37 @@ class _Estimator:
         return X.sum(axis=1).to_numpy(dtype=float)
 
 
+class _StdEstimator:
+    """Estimator with deterministic point and std predictions."""
+
+    def predict(
+        self,
+        X: pd.DataFrame,
+        *,
+        return_std: bool = False,
+    ) -> (
+        npt.NDArray[np.float64]
+        | tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]
+    ):
+        point = np.full(X.shape[0], 0.5, dtype=float)
+        return (
+            (point, np.full(X.shape[0], 0.1, dtype=float))
+            if return_std
+            else point
+        )
+
+
+class _CapturingEstimator:
+    """Estimator that stores its aligned input matrix."""
+
+    def __init__(self) -> None:
+        self.seen: pd.DataFrame | None = None
+
+    def predict(self, X: pd.DataFrame) -> npt.NDArray[np.float64]:
+        self.seen = X.copy()
+        return np.zeros(X.shape[0], dtype=float)
+
+
 def test_predict_metacells_has_stable_dataframe_return_type() -> None:
     """Prediction metadata does not change the function's return shape."""
     clock = ClockModel(
@@ -50,6 +81,56 @@ def test_predict_metacells_has_stable_dataframe_return_type() -> None:
     assert prediction.loc["cell", "tage"] == 1.0
     assert pd.isna(prediction.loc["cell", "tage_std"])
     assert model_feature_coverage(features, clock) == 0.5
+
+
+def test_missing_model_features_are_left_for_model_imputation() -> None:
+    """Feature alignment leaves absent model inputs as NaN, not zero."""
+    estimator = _CapturingEstimator()
+    clock = ClockModel(
+        name="BR_Chronoage_test_scaleddiff",
+        estimator=estimator,
+        feature_names=("a", "missing"),
+        supports_std=False,
+    )
+    features = pd.DataFrame({"a": [1.0]}, index=["cell"])
+
+    predict_metacells(clock, features, species="unknown")
+
+    assert estimator.seen is not None
+    assert pd.isna(estimator.seen.loc["cell", "missing"])
+
+
+def test_prediction_scaling_depends_on_clock_target() -> None:
+    """Only chronological clocks receive species lifespan scaling."""
+    features = pd.DataFrame({"a": [1.0]}, index=["cell"])
+    clock_args = {
+        "estimator": _StdEstimator(),
+        "feature_names": ("a",),
+        "supports_std": True,
+    }
+
+    chrono = predict_metacells(
+        ClockModel(name="BR_Chronoage_test_scaleddiff", **clock_args),
+        features,
+        species="human",
+    )
+    normalized = predict_metacells(
+        ClockModel(name="BR_NormalizedAge_test_scaleddiff", **clock_args),
+        features,
+        species="human",
+    )
+    mortality = predict_metacells(
+        ClockModel(name="BR_Mortality_test_scaleddiff", **clock_args),
+        features,
+        species="human",
+    )
+
+    assert chrono.loc["cell", "tage"] == 61.25
+    assert chrono.loc["cell", "tage_std"] == 12.25
+    assert normalized.loc["cell", "tage"] == 50.0
+    assert normalized.loc["cell", "tage_std"] == 10.0
+    assert mortality.loc["cell", "tage"] == 0.5
+    assert mortality.loc["cell", "tage_std"] == 0.1
 
 
 def test_load_clock_patches_legacy_simple_imputer_fill_dtype(tmp_path) -> None:
