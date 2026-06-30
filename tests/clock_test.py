@@ -6,6 +6,7 @@ import os
 
 
 os.environ.setdefault("NUMBA_CACHE_DIR", "/tmp/numba")
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
 from typing import cast
 
@@ -124,3 +125,27 @@ def test_predict_stratum_keeps_coverage_separate_per_clock(monkeypatch) -> None:
     ].unique()
     assert chronoage_coverage.tolist() == [0.5]
     assert mortality_coverage.tolist() == [1.0]
+
+
+def test_clock_regression_plots_written_for_prediction_columns(
+    tmp_path,
+) -> None:
+    """Clock regression helper writes one plot per prediction column."""
+    tidy = pd.DataFrame(
+        {
+            "age_years": [20.0, 30.0, 40.0, 50.0],
+            "chronoage_scaleddiff_tage": [18.0, 29.0, 42.0, 51.0],
+            "chronoage_scaleddiff_tage_std": [1.0, 1.0, 1.0, 1.0],
+        }
+    )
+
+    clock_analysis._plot_clock_regressions(
+        tidy,
+        output_dir=tmp_path,
+        level="tissue",
+        age_key="age_years",
+    )
+
+    assert (
+        tmp_path / "clock_tissue_chronoage_scaleddiff_tage_regression.png"
+    ).exists()

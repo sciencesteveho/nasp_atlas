@@ -818,6 +818,33 @@ def test_visualizer_score_heatmap_groups_obs_scores(tmp_path) -> None:
     assert (tmp_path / "score_heatmap.png").exists()
 
 
+def test_visualizer_score_barplot_orders_groups_by_mean(tmp_path) -> None:
+    """Score barplots order obs groups from largest to smallest mean score."""
+    adata = ad.AnnData(
+        X=np.ones((6, 1)),
+        obs=pd.DataFrame(
+            {
+                "cell_type": ["B", "B", "T", "T", "Mono", "Mono"],
+                "module_score": [1.0, 3.0, 5.0, 7.0, -1.0, 1.0],
+            },
+            index=[f"cell_{index}" for index in range(6)],
+        ),
+        var=pd.DataFrame(index=["gene_a"]),
+    )
+    viz = SCVisualizer(output_dir=tmp_path)
+
+    summary = viz.plot_grouped_obs_score_barplot(
+        adata,
+        score_key="module_score",
+        groupby="cell_type",
+        filename="score_barplot",
+    )
+
+    assert summary.index.tolist() == ["T", "B", "Mono"]
+    assert summary["mean"].tolist() == [6.0, 2.0, 0.0]
+    assert (tmp_path / "score_barplot.png").exists()
+
+
 def test_add_development_stage_age_obs() -> None:
     """CELLxGENE metadata helper adds numeric age values."""
     adata = ad.AnnData(

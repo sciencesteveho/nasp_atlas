@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import cast
 
 import anndata as ad  # type: ignore
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy import stats  # type: ignore
 
 from nasp_atlas.cellxgene.metadata import add_development_stage_age_obs
 from nasp_atlas.single_cell.clocks.model import SPECIES_MAX_LIFESPAN
@@ -123,6 +125,7 @@ def run_tissue_clock_analysis(
     save_tables: bool = True,
     annotate_adata: bool = True,
     save_adata: bool = False,
+    plot_regressions: bool = True,
 ) -> dict[str, pd.DataFrame]:
     """Run the transcriptomic-clock workflow on one tissue h5ad.
 
@@ -136,6 +139,8 @@ def run_tissue_clock_analysis(
       save_tables: Write one tidy CSV per level to `output_dir`.
       annotate_adata: Broadcast the configured level's predictions to `.obs`.
       save_adata: Write the annotated AnnData to `output_dir`.
+      plot_regressions: Write predicted-vs-chronological-age regression plots
+        for every clock prediction column at each non-empty level.
 
     Returns:
       Mapping of level name to its tidy metacell DataFrame.
@@ -185,6 +190,13 @@ def run_tissue_clock_analysis(
             adata.uns[f"nasp_clocks_{level}"] = tidy.reset_index()
         if save_tables and not tidy.empty:
             tidy.to_csv(output_path / f"clock_{level}_metacells.csv")
+        if plot_regressions and not tidy.empty:
+            _plot_clock_regressions(
+                tidy,
+                output_dir=output_path,
+                level=level,
+                age_key=config.age_key,
+            )
         logger.info("[clock] level=%s | metacells=%d", level, tidy.shape[0])
 
     broadcast = results.get(config.broadcast_level)
@@ -453,6 +465,132 @@ def _add_age_acceleration(
         acceleration = predicted_relative - expected_centered
         tidy[f"{column_prefix}_age_accel"] = acceleration
         tidy[f"{column_prefix}_age_accel_years"] = acceleration * max_lifespan
+
+
+def _plot_clock_regressions(
+    tidy: pd.DataFrame,
+    *,
+    output_dir: str | Path,
+    level: str,
+    age_key: str,
+) -> None:
+    """Plot predicted clock age against chronological age for each clock."""
+    if age_key not in tidy.columns:
+        logger.warning("[clock.%s] age column missing; skip regressions", level)
+        return
+
+    prediction_columns = [
+        column
+        for column in tidy.columns
+        if column.endswith("_tage") and not column.endswith("_tage_std")
+    ]
+    for prediction_column in prediction_columns:
+        _plot_clock_regression(
+            tidy,
+            age_key=age_key,
+            prediction_column=prediction_column,
+            output_path=(
+                Path(output_dir)
+                / f"clock_{level}_{_safe_filename_token(prediction_column)}"
+                "_regression.png"
+            ),
+        )
+
+
+def _plot_clock_regression(
+    tidy: pd.DataFrame,
+    *,
+    age_key: str,
+    prediction_column: str,
+    output_path: Path,
+) -> None:
+    """Plot one predicted-vs-chronological-age regression figure."""
+    plot_df = tidy.loc[:, [age_key, prediction_column]].apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
+    plot_df = plot_df.dropna()
+    if plot_df.shape[0] < 2:
+        logger.info(
+            "[clock] skip regression %s (%d valid points)",
+            prediction_column,
+            plot_df.shape[0],
+        )
+        return
+
+    x = plot_df[age_key].to_numpy(dtype=float)
+    y = plot_df[prediction_column].to_numpy(dtype=float)
+    fig, ax = plt.subplots(figsize=(2.0, 2.0))
+    density = _point_density(x, y)
+    if density is None:
+        ax.scatter(x, y, s=5, linewidths=0, alpha=0.75, rasterized=True)
+    else:
+        order = np.argsort(density)
+        scatter = ax.scatter(
+            x[order],
+            y[order],
+            c=density[order],
+            cmap="viridis",
+            s=5,
+            linewidths=0,
+            alpha=0.75,
+            rasterized=True,
+        )
+        cbar = fig.colorbar(scatter, ax=ax, fraction=0.046, pad=0.03)
+        cbar.ax.tick_params(length=1.5, pad=0.5)
+        cbar.ax.set_ylabel("Point density", rotation=270, labelpad=5)
+
+    if np.unique(x).size >= 2:
+        slope, intercept = np.polyfit(x, y, deg=1)
+        x_line = np.array([float(np.min(x)), float(np.max(x))])
+        ax.plot(
+            x_line,
+            slope * x_line + intercept,
+            color="black",
+            linewidth=0.75,
+        )
+        if np.unique(y).size >= 2:
+            pearson = cast(tuple[float, float], stats.pearsonr(x, y))
+            r_value = pearson[0]
+            ax.text(
+                0.03,
+                0.97,
+                f"r={r_value:.2f}",
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+            )
+
+    ax.set_xlabel("Chronological age")
+    ax.set_ylabel("Predicted age")
+    ax.set_title(prediction_column, pad=2)
+    for spine in ax.spines.values():
+        spine.set_linewidth(0.25)
+    fig.savefig(output_path, dpi=450, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("[clock] regression plot -> %s", output_path)
+
+
+def _point_density(
+    x: np.ndarray,
+    y: np.ndarray,
+) -> np.ndarray | None:
+    """Return kernel-density estimates for scatter points when possible."""
+    if x.size < 4 or np.unique(x).size < 2 or np.unique(y).size < 2:
+        return None
+    try:
+        density = stats.gaussian_kde(np.vstack([x, y]))(np.vstack([x, y]))
+    except (ValueError, np.linalg.LinAlgError):
+        return None
+    return np.asarray(density, dtype=float)
+
+
+def _safe_filename_token(value: str) -> str:
+    """Return a filesystem-safe token for generated plot filenames."""
+    token = "".join(
+        char if char.isalnum() or char in "._-" else "_" for char in value
+    )
+    return token.strip("_") or "clock"
 
 
 def _broadcast_to_obs(
