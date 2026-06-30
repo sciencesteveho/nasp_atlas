@@ -47,6 +47,7 @@ def run_tabula_sapiens_scoring_analysis(
     score_scanpy: bool = False,
     score_aucell: bool = False,
     score_table_filename: str = "tabula_sapiens_module_scores.csv.gz",
+    heatmap_groupby: str | None = None,
     heatmap_obs_keys: Sequence[str] | None = None,
     score_heatmap_obs_key: str | None = None,
     single_tissue: str | None = None,
@@ -74,11 +75,14 @@ def run_tabula_sapiens_scoring_analysis(
       score_scanpy: Whether to score modules with scanpy.
       score_aucell: Whether to score modules with AUCell.
       score_table_filename: Output score table filename under `output_dir`.
+      heatmap_groupby: Obs column used for all gene-expression and module-score
+        heatmaps. Use this for the common case where every heatmap should be
+        summarized at the same level, such as tissue or cell type.
       heatmap_obs_keys: Obs columns used for sensor/module gene-expression
-        heatmaps. Defaults to tissue and cell type.
+        heatmaps. Defaults to `heatmap_groupby` when set, otherwise tissue and
+        cell type.
       score_heatmap_obs_key: Obs column used for scanpy/AUCell score heatmaps.
-        Defaults to `cell_type_key`; pass `tissue_key` for atlas-wide tissue
-        summaries.
+        Defaults to `heatmap_groupby` when set, otherwise `cell_type_key`.
       single_tissue: If set, recompute neighbors/UMAP for one tissue.
       single_tissue_use_rep: Representation used for single-tissue UMAP
         recomputation.
@@ -116,12 +120,13 @@ def run_tabula_sapiens_scoring_analysis(
         size=point_size,
     )
 
-    heatmap_groupby_keys = _resolve_heatmap_obs_keys(
+    heatmap_groupby_keys, score_heatmap_groupby_key = _resolve_heatmap_groupby(
         tissue_key=tissue_key,
         cell_type_key=cell_type_key,
+        heatmap_groupby=heatmap_groupby,
         heatmap_obs_keys=heatmap_obs_keys,
+        score_heatmap_obs_key=score_heatmap_obs_key,
     )
-    score_heatmap_groupby_key = score_heatmap_obs_key or cell_type_key
 
     # Sensor-specific UMAP
     sensors = GeneModules.sensors(sensor_group)
@@ -292,6 +297,35 @@ def _write_score_tables(
         compression="infer",
     )
     logger.info("[tabula_sapiens] module scores -> %s", score_path)
+
+
+def _resolve_heatmap_groupby(
+    *,
+    tissue_key: str,
+    cell_type_key: str,
+    heatmap_groupby: str | None,
+    heatmap_obs_keys: Sequence[str] | None,
+    score_heatmap_obs_key: str | None,
+) -> tuple[tuple[str, ...], str]:
+    """Return groupings for expression and score heatmaps."""
+    if heatmap_groupby is not None:
+        return (
+            _resolve_heatmap_obs_keys(
+                tissue_key=tissue_key,
+                cell_type_key=cell_type_key,
+                heatmap_obs_keys=heatmap_obs_keys or (heatmap_groupby,),
+            ),
+            score_heatmap_obs_key or heatmap_groupby,
+        )
+
+    return (
+        _resolve_heatmap_obs_keys(
+            tissue_key=tissue_key,
+            cell_type_key=cell_type_key,
+            heatmap_obs_keys=heatmap_obs_keys,
+        ),
+        score_heatmap_obs_key or cell_type_key,
+    )
 
 
 def _resolve_heatmap_obs_keys(

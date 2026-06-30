@@ -144,6 +144,113 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
     ]
 
 
+def test_tabula_sapiens_heatmap_groupby_controls_all_heatmaps(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A single heatmap_groupby value controls expression and score heatmaps."""
+    adata = ad.AnnData(
+        X=np.ones((2, 1)),
+        obs=pd.DataFrame(
+            {
+                "tissue_in_publication": ["lung", "blood"],
+                "cell_type": ["T cell", "B cell"],
+            },
+            index=["cell_a", "cell_b"],
+        ),
+        var=pd.DataFrame({"feature_name": ["CGAS"]}, index=["gene_a"]),
+    )
+    module = GeneModule(
+        module_id="NASP_DNA_SENSING",
+        positive_genes=("CGAS",),
+        inverse_genes=(),
+        context_dependent_genes=(),
+        gene_id_output="symbols",
+    )
+    expression_heatmap_calls: list[dict[str, object]] = []
+    score_heatmap_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        tabula_sapiens,
+        "read_h5ad",
+        lambda *args, **kwargs: (adata, adata.n_obs),
+    )
+    monkeypatch.setattr(
+        tabula_sapiens,
+        "_plot_tabula_sapiens_metadata_umaps",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        tabula_sapiens.GeneModules,
+        "sensors",
+        lambda *args, **kwargs: ["CGAS"],
+    )
+    monkeypatch.setattr(
+        tabula_sapiens.SCVisualizer,
+        "plot_multi_gene_umap_panel",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        tabula_sapiens.SCVisualizer,
+        "plot_multi_obs_umap_panel",
+        lambda *args, **kwargs: None,
+    )
+
+    def capture_expression_heatmap(*args, **kwargs) -> None:
+        expression_heatmap_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        tabula_sapiens.SCVisualizer,
+        "plot_multi_gene_expression_heatmap",
+        capture_expression_heatmap,
+    )
+
+    def fake_scanpy_scores(adata_arg, *args, **kwargs):
+        adata_arg.obs["NASP_DNA_SENSING_score"] = [1.0, 2.0]
+        return [module]
+
+    monkeypatch.setattr(
+        tabula_sapiens,
+        "score_scanpy_modules",
+        fake_scanpy_scores,
+    )
+
+    def capture_score_heatmap(*args, **kwargs) -> None:
+        score_heatmap_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        tabula_sapiens.SCVisualizer,
+        "plot_grouped_obs_score_heatmap",
+        capture_score_heatmap,
+    )
+
+    tabula_sapiens.run_tabula_sapiens_scoring_analysis(
+        h5ad_path=tmp_path / "input.h5ad",
+        output_dir=tmp_path,
+        module_ids=["NASP_DNA_SENSING"],
+        heatmap_groupby="tissue_in_publication",
+        score_scanpy=True,
+    )
+
+    assert [
+        (call["groupby"], call["filename"]) for call in expression_heatmap_calls
+    ] == [
+        (
+            "tissue_in_publication",
+            "NA_SENSORS_gene_expression_heatmap_by_tissue_in_publication",
+        ),
+    ]
+    assert [
+        (call["groupby"], call["filename"]) for call in score_heatmap_calls
+    ] == [
+        (
+            "tissue_in_publication",
+            "tabula_sapiens_scanpy_module_score_heatmap_by_"
+            "tissue_in_publication",
+        ),
+    ]
+
+
 def test_tabula_sapiens_saves_scanpy_scores_before_aucell_failure(
     tmp_path,
     monkeypatch,
