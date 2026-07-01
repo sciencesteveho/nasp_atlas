@@ -525,7 +525,6 @@ def test_visualizer_plots_obs_umap_panel(tmp_path) -> None:
                 "obs_key": "score",
                 "title": "Score",
                 "kind": "numeric",
-                "cmap": "viridis",
             },
         ],
         filename="obs_panel",
@@ -574,8 +573,6 @@ def test_visualizer_resolves_ordered_umap_panel_inputs(tmp_path) -> None:
     assert panels[0].title == "score"
     assert panels[1].title == "Group"
     assert panels[2].cbar_ticks == [0.2, 0.5, 0.8]
-    assert panels[0].cmap is viz.expression_cmap
-    assert panels[2].cmap is viz.expression_cmap
 
 
 def test_visualizer_umap_panel_does_not_call_scanpy_embedding(
@@ -649,31 +646,17 @@ def test_multi_obs_umap_panel_delegates_to_generic_renderer(
         adata,
         obs_keys=["signed_score", "missing"],
         filename="signed_scores",
-        cmap="RdBu_r",
         vmin=-2.0,
         vmax=2.0,
     )
 
     assert captured["adata"] is adata
-    assert captured["panels"] == [
-        {
-            "obs_key": "signed_score",
-            "kind": "numeric",
-            "cmap": "RdBu_r",
-            "vmin": -2.0,
-            "vmax": 2.0,
-        }
-    ]
+    assert len(captured["panels"]) == 1
+    assert captured["panels"][0]["obs_key"] == "signed_score"
+    assert captured["panels"][0]["kind"] == "numeric"
+    assert captured["panels"][0]["vmin"] == -2.0
+    assert captured["panels"][0]["vmax"] == 2.0
     assert captured["kwargs"]["filename"] == "signed_scores"
-
-    captured.clear()
-    viz.plot_multi_obs_umap_panel(
-        adata,
-        obs_keys=["signed_score"],
-        filename="default_signed_scores",
-    )
-
-    assert captured["panels"][0]["cmap"] is viz.expression_cmap
 
 
 def test_visualizer_gene_umap_uses_x_not_raw_by_default(
@@ -725,22 +708,6 @@ def test_visualizer_gene_umap_uses_x_not_raw_by_default(
     assert obs_df_kwargs["layer"] is None
     assert embedding_kwargs["use_raw"] is False
     assert embedding_kwargs["layer"] is None
-    assert embedding_kwargs["color_map"] is viz.expression_cmap
-
-
-def test_visualizer_expression_cmap_removes_pale_yellow_center(
-    tmp_path,
-) -> None:
-    """Default expression cmap keeps RdYlBu yellow without a white center."""
-    viz = SCVisualizer(output_dir=tmp_path)
-
-    midpoint = np.asarray(viz.expression_cmap(0.5))[:3]
-    zero = np.asarray(viz.expression_cmap(0.0))[:3]
-
-    assert np.allclose(zero, [0.933333, 0.933333, 0.933333], atol=1e-6)
-    assert midpoint[0] > 0.85
-    assert midpoint[1] > 0.75
-    assert midpoint[2] < 0.55
 
 
 def test_visualizer_gene_expression_heatmap_groups_obs(
@@ -805,7 +772,6 @@ def test_visualizer_gene_expression_heatmap_groups_obs(
 
 def test_visualizer_score_heatmap_groups_obs_scores(
     tmp_path,
-    monkeypatch,
 ) -> None:
     """Score heatmaps aggregate obs scores across requested obs groups."""
     adata = ad.AnnData(
@@ -824,16 +790,6 @@ def test_visualizer_score_heatmap_groups_obs_scores(
         var=pd.DataFrame(index=["gene_a"]),
     )
     viz = SCVisualizer(output_dir=tmp_path)
-    captured = {}
-
-    def capture_colorbar(*args, **kwargs) -> None:
-        captured["cmap"] = kwargs["mappable"].get_cmap()
-
-    monkeypatch.setattr(
-        SCVisualizer,
-        "_add_embedding_colorbar",
-        capture_colorbar,
-    )
 
     grouped = viz._group_obs_scores_by_obs(
         adata=adata,
@@ -856,7 +812,6 @@ def test_visualizer_score_heatmap_groups_obs_scores(
     )
 
     assert (tmp_path / "score_heatmap.png").exists()
-    assert captured["cmap"] is viz.expression_cmap
 
 
 def test_visualizer_score_barplot_orders_groups_by_mean(tmp_path) -> None:

@@ -27,7 +27,15 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
     adata = ad.AnnData(
         X=np.ones((2, 1)),
         obs=pd.DataFrame(
-            {"cell_type": ["T cell", "B cell"]},
+            {
+                "cell_type": ["T cell", "B cell"],
+                "assay": ["10x 3' v3", "Smart-seq2"],
+                "sex": ["female", "male"],
+                "development_stage": [
+                    "50-year-old human stage",
+                    "60-year-old human stage",
+                ],
+            },
             index=["cell_a", "cell_b"],
         ),
         var=pd.DataFrame(
@@ -119,10 +127,19 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
     )
     assert scores.index.tolist() == ["cell_a", "cell_b"]
     assert scores.columns.tolist() == [
+        "assay",
+        "sex",
+        "development_stage",
         "NASP_DNA_SENSING_score",
         "NASP_DNA_SENSING_auc",
     ]
-    assert scores.loc["cell_a"].tolist() == [-2.0, -0.25]
+    assert scores.loc["cell_a"].tolist() == [
+        "10x 3' v3",
+        "female",
+        "50-year-old human stage",
+        -2.0,
+        -0.25,
+    ]
     assert [(call["obs_keys"], call["filename"]) for call in plot_calls] == [
         (["NASP_DNA_SENSING_score"], "tabula_sapiens_scanpy_module_umaps"),
         (["NASP_DNA_SENSING_auc"], "tabula_sapiens_aucell_module_umaps"),

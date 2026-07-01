@@ -37,6 +37,7 @@ def run_tabula_sapiens_scoring_analysis(
     cell_type_key: str = "cell_type",
     sex_key: str = "sex",
     development_stage_key: str = "development_stage",
+    assay_key: str = "assay",
     age_key: str = "age_years",
     gene_symbol_column: str = "feature_name",
     expression_layer: str | None = None,
@@ -64,6 +65,7 @@ def run_tabula_sapiens_scoring_analysis(
       cell_type_key: Obs column identifying cell types.
       sex_key: Obs column identifying donor sex.
       development_stage_key: Obs column with CELLxGENE development stage.
+      assay_key: Obs column identifying sequencing assay.
       age_key: Obs column to hold numeric age in years.
       gene_symbol_column: Var column containing gene symbols.
       expression_layer: Expression layer used for gene-expression plots.
@@ -176,6 +178,10 @@ def run_tabula_sapiens_scoring_analysis(
 
     # Scoring functions and viz
     score_tables: list[pd.DataFrame] = []
+    score_metadata = _score_table_obs_metadata(
+        cast(pd.DataFrame, adata.obs),
+        obs_keys=(assay_key, sex_key, development_stage_key),
+    )
     scanpy_scores: pd.DataFrame | None = None
     if score_scanpy:
         scanpy_modules = score_scanpy_modules(
@@ -193,6 +199,7 @@ def run_tabula_sapiens_scoring_analysis(
         score_tables.append(scanpy_scores)
         _write_score_tables(
             score_tables,
+            obs_metadata=score_metadata,
             output_dir=output_dir,
             filename=score_table_filename,
         )
@@ -200,6 +207,7 @@ def run_tabula_sapiens_scoring_analysis(
             adata,
             obs_keys=scanpy_score_keys,
             filename="tabula_sapiens_scanpy_module_umaps",
+            cmap="RdBu_r",
             ncols=5,
             size=point_size,
             vmin=None,
@@ -215,6 +223,7 @@ def run_tabula_sapiens_scoring_analysis(
                 f"{_safe_filename_token(score_heatmap_groupby_key)}"
             ),
             score_labels=[str(module.module_id) for module in scanpy_modules],
+            cmap="RdBu_r",
         )
         del scanpy_obs, scanpy_modules, scanpy_score_keys
         if not score_aucell:
@@ -241,6 +250,7 @@ def run_tabula_sapiens_scoring_analysis(
             score_tables.append(auc_scores)
             _write_score_tables(
                 score_tables,
+                obs_metadata=score_metadata,
                 output_dir=output_dir,
                 filename=score_table_filename,
             )
@@ -248,6 +258,7 @@ def run_tabula_sapiens_scoring_analysis(
                 adata_auc,
                 obs_keys=auc_score_keys,
                 filename="tabula_sapiens_aucell_module_umaps",
+                cmap="RdBu_r",
                 ncols=5,
                 size=point_size,
                 vmin=None,
@@ -263,6 +274,7 @@ def run_tabula_sapiens_scoring_analysis(
                     f"{_safe_filename_token(score_heatmap_groupby_key)}"
                 ),
                 score_labels=[str(module.module_id) for module in auc_modules],
+                cmap="RdBu_r",
             )
         finally:
             del adata_auc, auc_df, auc_modules
@@ -277,6 +289,7 @@ def run_tabula_sapiens_scoring_analysis(
 def _write_score_tables(
     score_tables: Sequence[pd.DataFrame],
     *,
+    obs_metadata: pd.DataFrame | None = None,
     output_dir: str | Path,
     filename: str,
 ) -> None:
@@ -285,6 +298,8 @@ def _write_score_tables(
         return
 
     scores = pd.concat(score_tables, axis="columns")
+    if obs_metadata is not None and not obs_metadata.empty:
+        scores = pd.concat([obs_metadata.reindex(scores.index), scores], axis=1)
     score_path = Path(output_dir) / filename
     scores.to_csv(
         score_path,
@@ -293,6 +308,24 @@ def _write_score_tables(
         compression="infer",
     )
     logger.info("[tabula_sapiens] module scores -> %s", score_path)
+
+
+def _score_table_obs_metadata(
+    obs: pd.DataFrame,
+    *,
+    obs_keys: Sequence[str],
+) -> pd.DataFrame:
+    """Return obs metadata columns to include with score outputs."""
+    available_keys = [key for key in dict.fromkeys(obs_keys) if key in obs]
+    missing_keys = [key for key in dict.fromkeys(obs_keys) if key not in obs]
+    if missing_keys:
+        logger.warning(
+            "[tabula_sapiens] score metadata columns missing: %s",
+            ", ".join(missing_keys),
+        )
+    if not available_keys:
+        return pd.DataFrame(index=obs.index)
+    return obs.loc[:, available_keys].copy()
 
 
 def _resolve_heatmap_groupby(
