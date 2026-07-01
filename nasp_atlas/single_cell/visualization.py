@@ -378,9 +378,7 @@ class SCVisualizer:
         """
         self._set_matplotlib_publication_parameters()
         out = self.output_dir / filename
-        cmap = (
-            cmap if cmap is not None else self.umap_expression_cmap("RdYlBu_r")
-        )
+        cmap = cmap if cmap is not None else self.expression_cmap
         if expression_layer is not None and use_raw:
             raise ValueError(
                 "use_raw=True cannot be combined with expression_layer"
@@ -500,7 +498,7 @@ class SCVisualizer:
           ncols: Number of columns in the panel grid.
           panel_w: Width of each panel in inches.
           panel_h: Height of each panel in inches.
-          cmap: Colormap for values.
+          cmap: Colormap for values. Defaults to `expression_cmap`.
           row_hspace: Vertical spacing between rows.
           cbar_height: Inset colorbar height as a percentage.
           cbar_width: Inset colorbar width as a percentage.
@@ -519,9 +517,7 @@ class SCVisualizer:
             )
             return
 
-        numeric_cmap = (
-            cmap if cmap is not None else self.umap_expression_cmap("viridis")
-        )
+        numeric_cmap = cmap if cmap is not None else self.expression_cmap
         panels: list[UmapPanelSpec] = []
         for key in valid_keys:
             panel_vmin = vmin
@@ -689,7 +685,7 @@ class SCVisualizer:
         groupby: str,
         filename: str,
         score_labels: Sequence[str] | None = None,
-        cmap: Colormap | str = "RdBu_r",
+        cmap: Colormap | str | None = None,
         obs_order: Sequence[str] | None = None,
         cell_size: float = 0.18,
         min_width: float = 1.5,
@@ -711,7 +707,7 @@ class SCVisualizer:
           filename: Output filename under output_dir.
           score_labels: Optional labels for score columns. Defaults to
             `score_keys`.
-          cmap: Colormap for score values.
+          cmap: Colormap for score values. Defaults to `expression_cmap`.
           obs_order: Optional ordered subset of group labels for heatmap rows.
           cell_size: Width and height of each heatmap cell in inches.
           min_width: Minimum heatmap panel width in inches.
@@ -731,6 +727,7 @@ class SCVisualizer:
         """
         self._set_matplotlib_publication_parameters()
         out = self.output_dir / filename
+        cmap = cmap if cmap is not None else self.expression_cmap
         if groupby not in adata.obs.columns:
             raise KeyError(f"obs column not found for score heatmap: {groupby}")
 
@@ -2222,8 +2219,8 @@ class SCVisualizer:
         for spine in ax.spines.values():
             spine.set_visible(False)
 
-    @staticmethod
     def _resolve_umap_panel_specs(
+        self,
         adata: Any,
         panels: Sequence[str | UmapPanelSpec],
     ) -> list[_UmapPanel]:
@@ -2255,7 +2252,7 @@ class SCVisualizer:
                     title=title,
                     kind=kind,
                     color_map=spec.get("color_map"),
-                    cmap=spec.get("cmap", "viridis"),
+                    cmap=spec.get("cmap", self.expression_cmap),
                     legend_loc=spec.get("legend_loc", "right"),
                     legend_ncol=spec.get("legend_ncol", 1),
                     vmin=spec.get("vmin"),
@@ -2469,20 +2466,47 @@ class SCVisualizer:
         cmap_name: str = "RdYlBu_r",
         *,
         blue_blend: float = 0.0,
+        blue_blend_stop: float = 0.40,
+        yellow_blend: float = 0.65,
+        yellow_band: tuple[float, float] = (0.43, 0.57),
+        yellow_color: ColorType = "#ffd92f",
     ) -> ListedColormap:
-        """Returns a matplotlib cmap with light gray at zero values.
+        """Returns an expression cmap with light gray at zero values.
 
         Args:
           cmap_name: Base colormap name.
           blue_blend: Blend the lower, blue side toward white. 0.0 leaves the
             colormap unchanged; 1.0 makes the blue side white.
+          blue_blend_stop: Fractional color-table position where blue blending
+            stops. This avoids whitening the yellow transition in RdYlBu maps.
+          yellow_blend: Strength of the saturated-yellow correction applied to
+            the pale center of RdYlBu maps.
+          yellow_band: Fractional color-table span corrected toward yellow.
+          yellow_color: Color used to reduce the pale center of RdYlBu maps.
         """
         base = plt.colormaps[cmap_name].resampled(256)
         colors = base(np.linspace(0, 1, 256))
         if blue_blend:
-            midpoint = len(colors) // 2
-            colors[:midpoint, :3] = (
-                colors[:midpoint, :3] * (1 - blue_blend) + blue_blend
+            stop = int(np.clip(blue_blend_stop, 0.0, 1.0) * len(colors))
+            colors[:stop, :3] = (
+                colors[:stop, :3] * (1 - blue_blend) + blue_blend
+            )
+        if yellow_blend and cmap_name in {"RdYlBu", "RdYlBu_r"}:
+            positions = np.linspace(0, 1, len(colors))
+            band_start, band_stop = yellow_band
+            band_start = float(np.clip(band_start, 0.0, 1.0))
+            band_stop = float(np.clip(band_stop, band_start, 1.0))
+            band_center = (band_start + band_stop) / 2
+            band_half_width = max(
+                (band_stop - band_start) / 2,
+                np.finfo(float).eps,
+            )
+            weights = 1 - np.abs(positions - band_center) / band_half_width
+            weights = np.clip(weights, 0.0, 1.0) * yellow_blend
+            yellow = np.array(mcolors.to_rgb(yellow_color))
+            colors[:, :3] = (
+                colors[:, :3] * (1 - weights[:, np.newaxis])
+                + yellow * weights[:, np.newaxis]
             )
         colors[0] = mcolors.to_rgba("#eeeeee")
         return mcolors.ListedColormap(colors)
