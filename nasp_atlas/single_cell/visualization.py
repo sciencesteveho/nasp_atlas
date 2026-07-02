@@ -144,6 +144,7 @@ class SCVisualizer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self.expression_cmap = self.pastelize_cmap("YlGnBu", blend=0.20)
+        self.expression_cmap = self.zero_gray_cmap(self.expression_cmap)
         self.dotplot_cmap = self.pastelize_cmap("Blues", blend=0.35)
 
         logging.getLogger("matplotlib.category").setLevel(logging.WARNING + 1)
@@ -200,13 +201,31 @@ class SCVisualizer:
             if color_map is not None and self._is_categorical_obs(adata, col):
                 self._apply_color_map(adata, color_key=col, color_map=color_map)
 
+            plot_kwargs = dict(kwargs)
+            size = plot_kwargs.pop("size", 2.0)
+            if (
+                not self._is_categorical_obs(adata, col)
+                and "color_map" not in plot_kwargs
+                and "cmap" not in plot_kwargs
+            ):
+                plot_kwargs["color_map"] = self.umap_expression_cmap("viridis")
+            elif not self._is_categorical_obs(adata, col):
+                if "color_map" in plot_kwargs:
+                    plot_kwargs["color_map"] = self.zero_gray_cmap(
+                        plot_kwargs["color_map"]
+                    )
+                if "cmap" in plot_kwargs:
+                    plot_kwargs["cmap"] = self.zero_gray_cmap(
+                        plot_kwargs["cmap"]
+                    )
+
             sc.pl.embedding(
                 adata,
                 basis=basis,
                 color=col,
                 ax=ax,
                 title=None,
-                size=kwargs.pop("size", 2.0),
+                size=size,
                 show=False,
                 frameon=True,
                 legend_loc=(
@@ -214,7 +233,7 @@ class SCVisualizer:
                     if self._is_categorical_obs(adata, col)
                     else "right margin"
                 ),
-                **kwargs,
+                **plot_kwargs,
             )
             self._style_embedding_axes(ax)
 
@@ -375,7 +394,9 @@ class SCVisualizer:
         """
         self._set_matplotlib_publication_parameters()
         out = self.output_dir / filename
-        cmap = cmap if cmap is not None else self.expression_cmap
+        cmap = self.zero_gray_cmap(
+            cmap if cmap is not None else self.expression_cmap
+        )
         if expression_layer is not None and use_raw:
             raise ValueError(
                 "use_raw=True cannot be combined with expression_layer"
@@ -531,7 +552,13 @@ class SCVisualizer:
                 {
                     "obs_key": key,
                     "kind": "numeric",
-                    "cmap": numeric_cmap,
+                    "cmap": self.zero_gray_cmap(
+                        numeric_cmap,
+                        zero_position=self._zero_cmap_position(
+                            vmin=panel_vmin,
+                            vmax=panel_vmax,
+                        ),
+                    ),
                     "vmin": panel_vmin,
                     "vmax": panel_vmax,
                 }
@@ -601,7 +628,10 @@ class SCVisualizer:
         """
         self._set_matplotlib_publication_parameters()
         out = self.output_dir / filename
-        cmap = cmap if cmap is not None else self.expression_cmap
+        cmap = self.zero_gray_cmap(
+            cmap if cmap is not None else self.expression_cmap,
+            zero_position=self._zero_cmap_position(vmin=vmin, vmax=vmax),
+        )
         if expression_layer is not None and use_raw:
             raise ValueError(
                 "use_raw=True cannot be combined with expression_layer"
@@ -769,6 +799,10 @@ class SCVisualizer:
                 vmin = -limit
             if vmax is None:
                 vmax = limit
+        cmap = self.zero_gray_cmap(
+            cmap,
+            zero_position=self._zero_cmap_position(vmin=vmin, vmax=vmax),
+        )
 
         n_groups, n_scores = grouped_scores.shape
         panel_w = max(min_width, n_scores * cell_size)
@@ -2116,12 +2150,20 @@ class SCVisualizer:
 
         if kind == "numeric":
             values = pd.to_numeric(adata.obs[obs_key], errors="coerce")
+            cmap = self.zero_gray_cmap(
+                panel.cmap,
+                zero_position=self._zero_cmap_position(
+                    vmin=panel.vmin,
+                    vmax=panel.vmax,
+                    values=values.to_numpy(),
+                ),
+            )
             collection = ax.scatter(
                 xy[:, 0],
                 xy[:, 1],
                 c=values.to_numpy(),
                 s=size,
-                cmap=panel.cmap,
+                cmap=cmap,
                 vmin=panel.vmin,
                 vmax=panel.vmax,
                 linewidths=0,
@@ -2481,6 +2523,62 @@ class SCVisualizer:
             )
         colors[0] = mcolors.to_rgba("#eeeeee")
         return mcolors.ListedColormap(colors)
+
+    @staticmethod
+    def zero_gray_cmap(
+        cmap: Colormap | str,
+        *,
+        zero_position: float | Literal["low", "center", "high"] = "low",
+    ) -> ListedColormap:
+        """Return a copy of `cmap` with the zero position set to light gray."""
+        base = plt.get_cmap(cmap) if isinstance(cmap, str) else cmap
+        colors = base(np.linspace(0, 1, 256))
+        if zero_position == "low":
+            position = 0.0
+        elif zero_position == "center":
+            position = 0.5
+        elif zero_position == "high":
+            position = 1.0
+        else:
+            position = float(np.clip(zero_position, 0.0, 1.0))
+
+        index = round(position * (len(colors) - 1))
+        colors[index] = mcolors.to_rgba("#eeeeee")
+        name = getattr(base, "name", "cmap")
+        return mcolors.ListedColormap(colors, name=f"{name}_zero_gray")
+
+    @staticmethod
+    def _zero_cmap_position(
+        *,
+        vmin: float | None,
+        vmax: float | None,
+        values: Any | None = None,
+    ) -> float | Literal["low"]:
+        """Return the color-table position where numeric zero should appear."""
+        finite_values = np.asarray([], dtype=float)
+        if values is not None:
+            numeric_values = np.asarray(values, dtype=float)
+            finite_values = numeric_values[np.isfinite(numeric_values)]
+
+        lower = (
+            float(vmin)
+            if vmin is not None
+            else float(finite_values.min())
+            if finite_values.size
+            else None
+        )
+        upper = (
+            float(vmax)
+            if vmax is not None
+            else float(finite_values.max())
+            if finite_values.size
+            else None
+        )
+        if lower is None or upper is None or lower == upper:
+            return "low"
+        if lower <= 0 <= upper:
+            return float(np.clip((0 - lower) / (upper - lower), 0.0, 1.0))
+        return "low"
 
     @staticmethod
     def _apply_color_map(
