@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
-
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
-
 import pandas as pd
 
 from nasp_atlas.cellxgene import CategorySchema

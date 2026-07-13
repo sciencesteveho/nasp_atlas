@@ -61,7 +61,7 @@ omit = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["nasp_atlas*"]
+include = ["nasp_atlas*", "run_scripts*"]
 namespaces = true
 
 [tool.setuptools.package-data]

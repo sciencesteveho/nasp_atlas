@@ -3,11 +3,6 @@
 from __future__ import annotations
 
 import dataclasses
-import os
-
-
-os.environ.setdefault("NUMBA_CACHE_DIR", "/tmp/numba")
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
 import anndata as ad  # type: ignore[import]
 import joblib  # type: ignore[import]
