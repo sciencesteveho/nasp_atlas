@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import logging
-import warnings
 from collections.abc import Sequence
 from typing import Literal, TypeAlias, cast
 
-import anndata as ad  # type: ignore
+import anndata as ad  # type: ignore[import]
+import numpy as np
 import pandas as pd
-import scanpy as sc  # type: ignore
-from nasp_compendium import GeneModules  # type: ignore
-from nasp_compendium.types import GeneModule  # type: ignore
+import scanpy as sc  # type: ignore[import]
+import scipy.sparse as sp  # type: ignore[import]
+from nasp_compendium import GeneModules  # type: ignore[import]
+from nasp_compendium.types import GeneModule  # type: ignore[import]
+from pyscenic.aucell import GeneSignature  # type: ignore[import]
+from pyscenic.aucell import aucell  # type: ignore[import]
 
-from nasp_atlas.single_cell.visualization import SCVisualizer
+from nasp_atlas.single_cell.utils import expression_matrix
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,7 @@ def inverse_module_score_name(
     """Return the inverse sub-score column name for a module, if needed."""
     if not module.inverse_genes:
         return None
+
     suffix = "inv" if scorer == "scanpy" else "inv_auc"
     return f"{module.module_id}_{suffix}"
 
@@ -53,26 +57,59 @@ def module_score_name(
     return f"{module.module_id}_{suffix}"
 
 
+def _z_score_standardize(values: pd.Series) -> pd.Series:
+    """Z-score a per-cell sub-score to zero mean and unit variance.
+
+    Per-cell score variance scales with roughly `1 / n_genes`, so a raw
+    `positive - inverse` difference is dominated by whichever arm has fewer
+    genes. Standardizing each arm before combining equalizes the variance the
+    two arms contribute to the signed score. A zero-variance arm is
+    mean-centered.
+    """
+    std = values.std(ddof=0)
+    return (
+        values - values.mean()
+        if np.isclose(std, 0.0)
+        else (values - values.mean()) / std
+    )
+
+
 def combine_module_scores(
     module: GeneModule,
     scores: pd.DataFrame,
     *,
     scorer: ScorerName,
+    standardize: bool = True,
 ) -> pd.Series:
-    """Combine positive and inverse sub-scores into one signed module score."""
+    """Combine positive and inverse sub-scores into one signed module score.
+
+    When both arms are present each is z-scored across cells before subtracting
+    (`standardize=True`) so the smaller arm cannot dominate the composite
+    variance. Single-arm modules are returned in their native scale.
+    """
     positive_name = positive_module_score_name(module, scorer=scorer)
     inverse_name = inverse_module_score_name(module, scorer=scorer)
     score_name = module_score_name(module, scorer=scorer)
 
     if module.positive_genes and inverse_name is not None:
-        combined = scores[positive_name] - scores[inverse_name]
+        positive = cast("pd.Series", scores[positive_name])
+        inverse = cast("pd.Series", scores[inverse_name])
+
+        if standardize:
+            positive = _z_score_standardize(positive)
+            inverse = _z_score_standardize(inverse)
+
+        combined = positive - inverse
         return cast("pd.Series", combined).rename(score_name)
+
     if module.positive_genes:
         positive = cast("pd.Series", scores[positive_name])
         return positive.rename(score_name)
+
     if inverse_name is not None:
         inverse = cast("pd.Series", scores[inverse_name])
         return (-inverse).rename(score_name)
+
     raise ValueError(f"Module {module.module_id!r} has no scorable genes.")
 
 
@@ -80,9 +117,19 @@ def score_scanpy_module(
     adata: ad.AnnData,
     module: GeneModule,
     *,
-    random_state: int = 0,
+    random_state: int = 42,
+    expression_layer: str | None = "log1p",
+    use_raw: bool = False,
 ) -> str:
-    """Score one signed module with `scanpy.tl.score_genes`."""
+    """Score one signed module with scanpy.tl.score_genes."""
+    if adata.n_obs == 0:
+        raise ValueError("Scanpy module scoring requires at least one cell.")
+
+    if expression_layer is not None and use_raw:
+        raise ValueError(
+            "use_raw=True cannot be combined with expression_layer"
+        )
+
     if module.positive_genes:
         sc.tl.score_genes(
             adata,
@@ -92,7 +139,8 @@ def score_scanpy_module(
                 scorer="scanpy",
             ),
             random_state=random_state,
-            use_raw=False,
+            use_raw=use_raw,
+            layer=expression_layer,
         )
 
     inverse_name = inverse_module_score_name(module, scorer="scanpy")
@@ -102,13 +150,17 @@ def score_scanpy_module(
             gene_list=list(module.inverse_genes),
             score_name=inverse_name,
             random_state=random_state,
-            use_raw=False,
+            use_raw=use_raw,
+            layer=expression_layer,
         )
 
     score_name = module_score_name(module, scorer="scanpy")
-    adata.obs[score_name] = combine_module_scores(
+    obs = adata.obs
+    if not isinstance(obs, pd.DataFrame):
+        raise TypeError("score_scanpy_module requires in-memory AnnData obs.")
+    obs[score_name] = combine_module_scores(
         module,
-        adata.obs,  # type: ignore
+        obs,
         scorer="scanpy",
     )
     return score_name
@@ -119,14 +171,28 @@ def score_scanpy_modules(
     module_ids: Sequence[str],
     *,
     gene_symbol_column: str = "feature_name",
-    random_state: int = 0,
+    random_state: int = 42,
+    expression_layer: str | None = "log1p",
+    use_raw: bool = False,
 ) -> list[GeneModule]:
     """Score signed NASP modules with scanpy score_genes."""
+    if adata.n_obs == 0:
+        raise ValueError("Scanpy module scoring requires at least one cell.")
+
+    module_source = adata
+    if use_raw:
+        if adata.raw is None:
+            raise ValueError("use_raw=True requires adata.raw to be set")
+        module_source = ad.AnnData(
+            shape=adata.raw.shape,
+            var=adata.raw.var,
+        )
+
     modules: list[GeneModule] = []
     for module_id in module_ids:
         module = GeneModules.modules(
             module_id,
-            adata=adata,
+            adata=module_source,  # type: ignore[arg-type]  # protocol mismatch
             gene_symbol_column=gene_symbol_column,
             output="var_names",
         )
@@ -143,6 +209,8 @@ def score_scanpy_modules(
             adata,
             module,
             random_state=random_state,
+            expression_layer=expression_layer,
+            use_raw=use_raw,
         )
 
     return modules
@@ -153,45 +221,79 @@ def score_aucell_modules(
     module_ids: Sequence[str],
     *,
     gene_symbol_column: str = "feature_name",
+    expression_layer: str | None = "log1p",
+    use_raw: bool = False,
+    chunk_size: int = 1_000,
+    random_state: int = 42,
+    num_workers: int = 1,
 ) -> tuple[ad.AnnData, pd.DataFrame, list[GeneModule]]:
-    """Score signed NASP modules with pySCENIC AUCell."""
+    """Score signed NASP modules with AUCell.
+
+    The expression matrix is densified one cell-block at a time to manage
+    runtime memory.
+    """
     if adata.isbacked:
         raise ValueError(
             "score_aucell_modules expects an in-memory AnnData. "
             "Load or copy backed data into memory before scoring."
         )
+    if adata.n_obs == 0:
+        raise ValueError("AUCell scoring requires at least one cell.")
+    if chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive; got {chunk_size}.")
+    if num_workers <= 0:
+        raise ValueError(f"num_workers must be positive; got {num_workers}.")
 
-    with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore",
-            message="pkg_resources is deprecated as an API.*",
-            category=UserWarning,
-        )
-        from pyscenic.aucell import GeneSignature  # type: ignore
-        from pyscenic.aucell import aucell  # type: ignore
-
-    adata_auc = adata.copy()
-    symbols = adata_auc.var[gene_symbol_column].astype(str)
-    keep = symbols.notna() & (symbols != "") & ~symbols.duplicated()
-    expression = adata_auc[:, keep.to_numpy()].X
-    if hasattr(expression, "toarray"):
-        expression = expression.toarray()  # type: ignore
-
-    expression_df = pd.DataFrame(
-        expression,  # type: ignore
-        index=adata_auc.obs_names.astype(str),
-        columns=symbols[keep].to_numpy(),
+    source_var_names, source_matrix = expression_matrix(
+        adata,
+        expression_layer=expression_layer,
+        use_raw=use_raw,
     )
+    if source_matrix is None:
+        raise ValueError("AUCell scoring requires an expression matrix.")
+    source_var = (
+        adata.raw.var if use_raw and adata.raw is not None else adata.var
+    )
+    if not isinstance(source_var, pd.DataFrame):
+        raise TypeError("AUCell scoring requires in-memory AnnData var.")
+    source_var = source_var.loc[source_var_names]
+
+    obs = adata.obs
+    if not isinstance(obs, pd.DataFrame):
+        raise TypeError("AUCell scoring requires in-memory AnnData obs.")
+
+    source_adata = ad.AnnData(
+        shape=(adata.n_obs, len(source_var_names)),
+        var=source_var,
+    )
+    fallback_ids = pd.Series(
+        source_var_names,
+        index=source_var.index,
+        dtype=object,
+    )
+    symbols = source_var[gene_symbol_column].astype(object)
+    gene_ids = symbols.where(symbols.notna(), fallback_ids).astype(str)
+    gene_ids = gene_ids.str.strip()
+    gene_ids = gene_ids.where(gene_ids != "", fallback_ids)
+    keep = (gene_ids != "") & ~gene_ids.duplicated()
+    if not bool(keep.any()):
+        raise ValueError(
+            "AUCell scoring requires at least one non-empty gene identifier."
+        )
+    keep_mask = keep.to_numpy()
+    kept_gene_ids = gene_ids[keep].to_numpy()
+    obs_names = adata.obs_names.astype(str)
 
     modules = [
         GeneModules.modules(
             module_id,
-            adata=adata_auc,
+            adata=source_adata,  # type: ignore[arg-type]
             gene_symbol_column=gene_symbol_column,
             output="symbols",
         )
         for module_id in module_ids
     ]
+
     signatures = []
     for module in modules:
         if module.positive_genes:
@@ -214,7 +316,46 @@ def score_aucell_modules(
                 )
             )
 
-    auc_df = aucell(expression_df, signatures)  # type: ignore
+    if not signatures:
+        raise ValueError(
+            "AUCell scoring requires at least one positive or inverse gene "
+            "signature."
+        )
+
+    available_gene_ids = set(kept_gene_ids)
+    if unavailable_signatures := [
+        signature.name
+        for signature in signatures
+        if available_gene_ids.isdisjoint(signature.genes)
+    ]:
+        unavailable = ", ".join(unavailable_signatures)
+        raise ValueError(
+            "AUCell signatures have no genes in the ranking matrix: "
+            f"{unavailable}."
+        )
+
+    auc_parts: list[pd.DataFrame] = []
+    for start in range(0, adata.n_obs, chunk_size):
+        stop = min(start + chunk_size, adata.n_obs)
+        block = source_matrix[start:stop, keep_mask]
+        block_values = (
+            block.toarray() if sp.issparse(block) else np.asarray(block)  # type: ignore[union-attr]
+        )
+        block_df = pd.DataFrame(
+            block_values,
+            index=obs_names[start:stop],
+            columns=kept_gene_ids,
+        )
+        auc_parts.append(
+            aucell(
+                block_df,
+                signatures,
+                seed=random_state,
+                num_workers=num_workers,
+            )
+        )
+
+    auc_df = pd.concat(auc_parts)
     for module in modules:
         score_name = module_score_name(module, scorer="aucell")
         auc_df[score_name] = combine_module_scores(
@@ -222,45 +363,26 @@ def score_aucell_modules(
             auc_df,
             scorer="aucell",
         )
-        adata_auc.obs[score_name] = auc_df[score_name]
+
+    result_var = adata.var
+    if not isinstance(result_var, pd.DataFrame):
+        raise TypeError("AUCell scoring requires in-memory AnnData var.")
+
+    adata_auc = ad.AnnData(X=adata.X, obs=obs.copy(), var=result_var)
+    adata_auc.uns = adata.uns
+    adata_auc.obsm.update(adata.obsm)
+    adata_auc.varm.update(adata.varm)
+    adata_auc.layers.update(adata.layers)
+    adata_auc.obsp.update(adata.obsp)
+    adata_auc.varp.update(adata.varp)
+    if adata.raw is not None:
+        raw_adata = ad.AnnData(X=adata.raw.X, var=adata.raw.var)
+        raw_adata.varm.update(
+            adata.raw.varm  # type: ignore[reportAttributeAccessIssue]
+        )
+        adata_auc.raw = raw_adata
+
+    for score_column in auc_df.columns:
+        adata_auc.obs[score_column] = auc_df[score_column]
 
     return adata_auc, auc_df, modules
-
-
-def plot_module_gene_umaps(
-    adata: ad.AnnData,
-    module_ids: Sequence[str],
-    *,
-    viz: SCVisualizer,
-    gene_symbol_column: str = "feature_name",
-    expression_layer: str | None = None,
-    ncols: int = 6,
-    size: float | None = None,
-) -> None:
-    """Plot one multi-gene UMAP panel per NASP gene module."""
-    point_size = size if size is not None else 120000 / adata.n_obs
-    for module_id in module_ids:
-        module_genes = GeneModules.genes(
-            module_id,
-            adata=adata,
-            gene_symbol_column=gene_symbol_column,
-            output="symbols",
-        )
-        if not module_genes:
-            logger.info("%s: no matched genes; skipping UMAPs", module_id)
-            continue
-
-        logger.info(
-            "%s: plotting %s marker genes",
-            module_id,
-            len(module_genes),
-        )
-        viz.plot_multi_gene_umap_panel(
-            adata=adata,
-            genes=module_genes,
-            filename=f"{module_id}_gene_expression_umaps",
-            gene_symbol_column=gene_symbol_column,
-            expression_layer=expression_layer,
-            ncols=ncols,
-            size=point_size,
-        )

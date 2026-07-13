@@ -5,14 +5,23 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
-import anndata as ad  # type: ignore
+import anndata as ad  # type: ignore[import]
+import matplotlib.cm as mcm
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
-from scipy import stats  # type: ignore
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
+from mpl_toolkits.axes_grid1.inset_locator import (  # type: ignore[import]
+    inset_axes,
+)
+from scipy import stats  # type: ignore[import]
 
 from nasp_atlas.cellxgene.metadata import add_development_stage_age_obs
 from nasp_atlas.single_cell.clocks.model import SPECIES_MAX_LIFESPAN
@@ -24,9 +33,9 @@ from nasp_atlas.single_cell.clocks.preprocess import build_human_entrez_map
 from nasp_atlas.single_cell.clocks.preprocess import build_mouse_ortholog_map
 from nasp_atlas.single_cell.clocks.preprocess import preprocess_metacells
 from nasp_atlas.single_cell.io import read_h5ad
-from nasp_atlas.single_cell.metacells import N_CELLS_COLUMN
 from nasp_atlas.single_cell.metacells import aggregate_metacells
 from nasp_atlas.single_cell.utils import normalize_h5ad_string_storage
+from nasp_atlas.visualization import set_matplotlib_publication_parameters
 
 
 logger = logging.getLogger(__name__)
@@ -40,7 +49,25 @@ LEVEL_COLUMN = "level"
 FEATURE_COVERAGE_SUFFIX = "_feature_coverage"
 
 
-@dataclass
+@dataclass(frozen=True, kw_only=True)
+class ClockRegressionStyle:
+    """Rendering options shared across clock regression plots."""
+
+    cbar_height: str | float = "21%"
+    cbar_width: str | float = "4%"
+    cbar_pad: float = 0.075
+    title: str | None = None
+    x_tick_pad: float = 1
+    y_tick_pad: float = 1
+    x_tick_length: float = 2.5
+    y_tick_length: float = 2.5
+    scatter_cmap: str = "Blues"
+    scatter_cmap_min: float = 0.25
+    scatter_count_bins: int = 30
+    scatter_alpha: float = 0.6
+
+
+@dataclass(frozen=True, kw_only=True)
 class ClockConfig:
     """Parameters to apply the per-tissue transcriptomic clock.
 
@@ -114,7 +141,7 @@ class ClockConfig:
         )
 
 
-def run_tissue_clock_analysis(
+def tissue_clock_analysis(
     *,
     h5ad_path: str | Path,
     output_dir: str | Path,
@@ -214,6 +241,150 @@ def run_tissue_clock_analysis(
     return results
 
 
+def plot_clock_regressions(
+    tidy: pd.DataFrame,
+    *,
+    output_dir: str | Path,
+    level: str,
+    age_key: str,
+    style: ClockRegressionStyle | None = None,
+    cbar_height: str | float | None = None,
+    cbar_width: str | float | None = None,
+    cbar_pad: float | None = None,
+    title: str | None = None,
+    x_tick_pad: float | None = None,
+    y_tick_pad: float | None = None,
+    x_tick_length: float | None = None,
+    y_tick_length: float | None = None,
+    scatter_cmap: str | None = None,
+    scatter_alpha: float | None = None,
+) -> None:
+    """Plot predicted clock age against chronological age for each clock.
+
+    Args:
+      tidy: Tidy metacell frame with chronological and predicted ages.
+      output_dir: Directory where regression images are written.
+      level: Aggregation level token used in output filenames.
+      age_key: Chronological-age column in `tidy`.
+      style: Base rendering controls. Defaults to `ClockRegressionStyle()`.
+      cbar_height: Optional override for inset colorbar height.
+      cbar_width: Optional override for inset colorbar width.
+      cbar_pad: Optional override for plotting-axis to colorbar padding.
+      title: Optional override for each regression plot title.
+      x_tick_pad: Optional override for x-axis tick-label padding.
+      y_tick_pad: Optional override for y-axis tick-label padding.
+      x_tick_length: Optional override for x-axis tick mark length.
+      y_tick_length: Optional override for y-axis tick mark length.
+      scatter_cmap: Optional override for scatter-count colormap.
+      scatter_alpha: Optional override for scatter marker alpha.
+
+    Example Usage:
+      >>> plot_clock_regressions(
+      ...     tidy,
+      ...     output_dir="clock_figures",
+      ...     level="cell_type",
+      ...     age_key="age_years",
+      ...     title="Tabula Sapiens",
+      ...     x_tick_pad=0.25,
+      ...     x_tick_length=1.0,
+      ...     scatter_cmap="Greens",
+      ...     scatter_alpha=0.35,
+      ... )
+    """
+    if age_key not in tidy.columns:
+        logger.warning("[clock.%s] age column missing; skip regressions", level)
+        return
+
+    set_matplotlib_publication_parameters()
+    style = replace(
+        style or ClockRegressionStyle(),
+        **{
+            key: value
+            for key, value in {
+                "cbar_height": cbar_height,
+                "cbar_width": cbar_width,
+                "cbar_pad": cbar_pad,
+                "title": title,
+                "x_tick_pad": x_tick_pad,
+                "y_tick_pad": y_tick_pad,
+                "x_tick_length": x_tick_length,
+                "y_tick_length": y_tick_length,
+                "scatter_cmap": scatter_cmap,
+                "scatter_alpha": scatter_alpha,
+            }.items()
+            if value is not None
+        },
+    )
+    prediction_columns = [
+        column
+        for column in tidy.columns
+        if column.endswith("_tage") and not column.endswith("_tage_std")
+    ]
+    for prediction_column in prediction_columns:
+        _plot_clock_regression(
+            tidy,
+            age_key=age_key,
+            prediction_column=prediction_column,
+            output_path=(
+                Path(output_dir)
+                / f"clock_{level}_{_safe_filename_token(prediction_column)}"
+                "_regression.png"
+            ),
+            style=style,
+        )
+
+
+def metacell_counts_frame(
+    metacell_adata: ad.AnnData,
+    *,
+    ensembl_column: str,
+) -> pd.DataFrame:
+    """Return metacell counts as a metacells x Ensembl-id DataFrame."""
+    var = cast(pd.DataFrame, metacell_adata.var)
+    if ensembl_column in var.columns:
+        gene_ids = var[ensembl_column].astype(str)
+    else:
+        gene_ids = metacell_adata.var_names.astype(str)
+    gene_ids = gene_ids.str.split(".").str[0]
+    return pd.DataFrame(
+        np.asarray(metacell_adata.X),
+        index=metacell_adata.obs_names,
+        columns=gene_ids.to_numpy(),
+    )
+
+
+def stratum_indices(
+    metacell_obs: pd.DataFrame,
+    split_by: Sequence[str] | None,
+) -> list[tuple[str, np.ndarray]]:
+    """Return (stratum_label, positional indices) for each stratum.
+
+    Args:
+      metacell_obs: Metacell-level obs frame.
+      split_by: One or more columns whose unique combinations define strata,
+        or None for a single stratum spanning all metacells.
+
+    Returns:
+      A list of (composite label, positional indices) pairs.
+    """
+    if not split_by:
+        return [("all", np.arange(metacell_obs.shape[0]))]
+    positions = np.arange(metacell_obs.shape[0])
+    composite = (
+        metacell_obs[list(split_by)]
+        .astype(str)
+        .agg(" | ".join, axis=1)
+        .to_numpy()
+    )
+    grouped = pd.Series(positions).groupby(composite, sort=True)
+    return [(str(label), group.to_numpy()) for label, group in grouped]
+
+
+def discover_tissue_h5ads(directory: str | Path) -> list[Path]:
+    """Return sorted tissue h5ad paths in a directory."""
+    return sorted(Path(directory).glob("*.h5ad"))
+
+
 def _parse_model_spec(
     model_path: str | Path,
     *,
@@ -267,52 +438,6 @@ def _load_clocks(model_paths: Sequence[str | Path]) -> list[ClockModel]:
         _clock_metadata(model_path)
         clocks.append(load_clock(model_path))
     return clocks
-
-
-def _metacell_counts_frame(
-    metacell_adata: ad.AnnData,
-    *,
-    ensembl_column: str,
-) -> pd.DataFrame:
-    """Return metacell counts as a metacells x Ensembl-id DataFrame."""
-    var = cast(pd.DataFrame, metacell_adata.var)
-    if ensembl_column in var.columns:
-        gene_ids = var[ensembl_column].astype(str)
-    else:
-        gene_ids = metacell_adata.var_names.astype(str)
-    gene_ids = gene_ids.str.split(".").str[0]
-    return pd.DataFrame(
-        np.asarray(metacell_adata.X),
-        index=metacell_adata.obs_names,
-        columns=gene_ids.to_numpy(),
-    )
-
-
-def _stratum_indices(
-    metacell_obs: pd.DataFrame,
-    split_by: Sequence[str] | None,
-) -> list[tuple[str, np.ndarray]]:
-    """Return (stratum_label, positional indices) for each stratum.
-
-    Args:
-      metacell_obs: Metacell-level obs frame.
-      split_by: One or more columns whose unique combinations define strata,
-        or None for a single stratum spanning all metacells.
-
-    Returns:
-      A list of (composite label, positional indices) pairs.
-    """
-    if not split_by:
-        return [("all", np.arange(metacell_obs.shape[0]))]
-    positions = np.arange(metacell_obs.shape[0])
-    composite = (
-        metacell_obs[list(split_by)]
-        .astype(str)
-        .agg(" | ".join, axis=1)
-        .to_numpy()
-    )
-    grouped = pd.Series(positions).groupby(composite, sort=True)
-    return [(str(label), group.to_numpy()) for label, group in grouped]
 
 
 def _predict_stratum(
@@ -376,14 +501,14 @@ def _run_level(
         random_seed=config.random_seed,
         cell_assignment_key=cell_assignment_key,
     )
-    counts_frame = _metacell_counts_frame(
+    counts_frame = metacell_counts_frame(
         metacell_adata,
         ensembl_column=config.ensembl_column,
     )
 
     stratum_frames: list[pd.DataFrame] = []
     metacell_obs = cast(pd.DataFrame, metacell_adata.obs)
-    strata = _stratum_indices(metacell_obs, split_by)
+    strata = stratum_indices(metacell_obs, split_by)
     for stratum_label, positions in strata:
         if positions.shape[0] < config.min_metacells_per_stratum:
             logger.info(
@@ -467,138 +592,199 @@ def _add_age_acceleration(
         tidy[f"{column_prefix}_age_accel_years"] = acceleration * max_lifespan
 
 
-def plot_clock_regressions(
-    tidy: pd.DataFrame,
-    *,
-    output_dir: str | Path,
-    level: str,
-    age_key: str,
-) -> None:
-    """Plot predicted clock age against chronological age for each clock."""
-    if age_key not in tidy.columns:
-        logger.warning("[clock.%s] age column missing; skip regressions", level)
-        return
-
-    prediction_columns = [
-        column
-        for column in tidy.columns
-        if column.endswith("_tage") and not column.endswith("_tage_std")
-    ]
-    for prediction_column in prediction_columns:
-        _plot_clock_regression(
-            tidy,
-            age_key=age_key,
-            prediction_column=prediction_column,
-            output_path=(
-                Path(output_dir)
-                / f"clock_{level}_{_safe_filename_token(prediction_column)}"
-                "_regression.png"
-            ),
-        )
-
-
-def _plot_clock_regressions(
-    tidy: pd.DataFrame,
-    *,
-    output_dir: str | Path,
-    level: str,
-    age_key: str,
-) -> None:
-    """Backwards-compatible wrapper for clock regression plotting."""
-    plot_clock_regressions(
-        tidy,
-        output_dir=output_dir,
-        level=level,
-        age_key=age_key,
-    )
-
-
 def _plot_clock_regression(
     tidy: pd.DataFrame,
     *,
     age_key: str,
     prediction_column: str,
     output_path: Path,
+    style: ClockRegressionStyle,
 ) -> None:
     """Plot one predicted-vs-chronological-age regression figure."""
-    plot_df = tidy.loc[:, [age_key, prediction_column]].apply(
-        pd.to_numeric,
-        errors="coerce",
+    x, y = _clock_regression_points(
+        tidy,
+        age_key=age_key,
+        prediction_column=prediction_column,
     )
-    plot_df = plot_df.dropna()
-    if plot_df.shape[0] < 2:
+    if x.size < 2:
         logger.info(
             "[clock] skip regression %s (%d valid points)",
             prediction_column,
-            plot_df.shape[0],
+            x.size,
         )
         return
 
-    x = plot_df[age_key].to_numpy(dtype=float)
-    y = plot_df[prediction_column].to_numpy(dtype=float)
-    fig, ax = plt.subplots(figsize=(2.0, 2.0))
-    density = _point_density(x, y)
-    if density is None:
-        ax.scatter(x, y, s=5, linewidths=0, alpha=0.75, rasterized=True)
-    else:
-        order = np.argsort(density)
-        scatter = ax.scatter(
-            x[order],
-            y[order],
-            c=density[order],
-            cmap="viridis",
-            s=5,
-            linewidths=0,
-            alpha=0.75,
-            rasterized=True,
-        )
-        cbar = fig.colorbar(scatter, ax=ax, fraction=0.046, pad=0.03)
-        cbar.ax.tick_params(length=1.5, pad=0.5)
-        cbar.ax.set_ylabel("Point density", rotation=270, labelpad=5)
+    style = replace(
+        style,
+        title=f"{style.title or prediction_column} (n={x.size})",
+    )
+    fig, ax = plt.subplots(figsize=(1.1, 1.1))
+    mappable, ticks = _draw_clock_count_scatter(ax, x, y, style=style)
+    _add_clock_count_colorbar(
+        fig,
+        ax,
+        mappable=mappable,
+        ticks=ticks,
+        style=style,
+    )
+    _style_clock_regression_axes(ax, x, y, style=style)
 
-    if np.unique(x).size >= 2:
-        slope, intercept = np.polyfit(x, y, deg=1)
-        x_line = np.array([float(np.min(x)), float(np.max(x))])
-        ax.plot(
-            x_line,
-            slope * x_line + intercept,
-            color="black",
-            linewidth=0.75,
-        )
-        if np.unique(y).size >= 2:
-            pearson = cast(tuple[float, float], stats.pearsonr(x, y))
-            r_value = pearson[0]
-            ax.text(
-                0.03,
-                0.97,
-                f"r={r_value:.2f}",
-                transform=ax.transAxes,
-                ha="left",
-                va="top",
-            )
-
-    ax.set_xlabel("Chronological age")
-    ax.set_ylabel("Predicted age")
-    ax.set_title(prediction_column, pad=2)
-    for spine in ax.spines.values():
-        spine.set_linewidth(0.25)
     fig.savefig(output_path, dpi=450, bbox_inches="tight")
     plt.close(fig)
     logger.info("[clock] regression plot -> %s", output_path)
 
 
-def _point_density(
-    x: np.ndarray,
-    y: np.ndarray,
-) -> np.ndarray | None:
-    """Return kernel-density estimates for scatter points when possible."""
-    if x.size < 4 or np.unique(x).size < 2 or np.unique(y).size < 2:
-        return None
-    try:
-        density = stats.gaussian_kde(np.vstack([x, y]))(np.vstack([x, y]))
-    except (ValueError, np.linalg.LinAlgError):
-        return None
-    return np.asarray(density, dtype=float)
+def _clock_regression_points(
+    tidy: pd.DataFrame,
+    *,
+    age_key: str,
+    prediction_column: str,
+) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
+    """Return valid chronological and predicted age values for plotting."""
+    plot_df = tidy.loc[:, [age_key, prediction_column]].apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
+    plot_df = plot_df.dropna()
+    return (
+        plot_df[age_key].to_numpy(dtype=float),
+        plot_df[prediction_column].to_numpy(dtype=float),
+    )
+
+
+def _draw_clock_count_scatter(
+    ax: Axes,
+    x: npt.NDArray[np.float64],
+    y: npt.NDArray[np.float64],
+    *,
+    style: ClockRegressionStyle,
+) -> tuple[mcm.ScalarMappable, npt.NDArray[np.int_]]:
+    """Draw metacells colored by integer local count."""
+    counts = _point_bin_counts(x, y, bins=style.scatter_count_bins)
+    order = np.argsort(counts)
+
+    base_cmap = plt.get_cmap(style.scatter_cmap)
+    cmap = mcolors.LinearSegmentedColormap.from_list(
+        f"{style.scatter_cmap}_truncated",
+        base_cmap(np.linspace(style.scatter_cmap_min, 1.0, base_cmap.N)),
+    )
+    min_count = int(np.min(counts))
+    max_count = int(np.max(counts))
+    norm = mcolors.Normalize(vmin=float(min_count), vmax=float(max_count))
+    facecolors = cmap(norm(counts[order]))
+    facecolors[:, -1] = style.scatter_alpha
+
+    ax.scatter(
+        x[order],
+        y[order],
+        s=4,
+        facecolors=facecolors,
+        linewidths=0,
+        rasterized=True,
+    )
+    ticks = np.unique(np.array([min_count, max_count], dtype=int))
+    mappable = mcm.ScalarMappable(norm=norm, cmap=cmap)
+    mappable.set_array(np.array([min_count, max_count], dtype=int))
+    return mappable, ticks
+
+
+def _add_clock_count_colorbar(
+    fig: Figure,
+    ax: Axes,
+    *,
+    mappable: mcm.ScalarMappable,
+    ticks: npt.NDArray[np.int_],
+    style: ClockRegressionStyle,
+) -> None:
+    """Add a compact metacell-count colorbar."""
+    cax = inset_axes(
+        ax,
+        width=style.cbar_width,
+        height=style.cbar_height,
+        loc="center left",
+        bbox_to_anchor=(1.02 + style.cbar_pad, 0.0, 1, 1),
+        bbox_transform=ax.transAxes,
+        borderpad=0,
+    )
+    cbar = fig.colorbar(mappable, cax=cax, ticks=ticks)
+    cbar.ax.tick_params(length=1.5, pad=0.5)
+
+
+def _style_clock_regression_axes(
+    ax: Axes,
+    x: npt.NDArray[np.float64],
+    y: npt.NDArray[np.float64],
+    *,
+    style: ClockRegressionStyle,
+) -> None:
+    """Apply regression annotation, labels, ticks, title, and spines."""
+    if np.unique(x).size >= 2:
+        _add_regression_fit_annotation(x, y, ax)
+
+    ax.set_xlabel("Chronological age")
+    ax.set_ylabel("Predicted relative age")
+    x_tick_params = {"pad": style.x_tick_pad}
+    y_tick_params = {"pad": style.y_tick_pad}
+
+    if style.x_tick_length is not None:
+        x_tick_params["length"] = style.x_tick_length
+    if style.y_tick_length is not None:
+        y_tick_params["length"] = style.y_tick_length
+
+    ax.tick_params(axis="x", **x_tick_params)
+    ax.tick_params(axis="y", **y_tick_params)
+
+    if style.title is not None:
+        ax.set_title(style.title, pad=3)
+
+    for spine in ax.spines.values():
+        spine.set_linewidth(0.25)
+
+
+def _add_regression_fit_annotation(
+    x: npt.NDArray[np.float64],
+    y: npt.NDArray[np.float64],
+    ax: Axes,
+) -> None:
+    """Draw a fitted regression line and Pearson correlation label."""
+    slope, intercept = np.polyfit(x, y, deg=1)
+    x_limits = ax.get_xlim()
+    y_limits = ax.get_ylim()
+    x_line = np.array(x_limits, dtype=float)
+    ax.plot(
+        x_line,
+        slope * x_line + intercept,
+        color="lightskyblue",
+        linewidth=0.5,
+    )
+    ax.set_xlim(x_limits)
+    ax.set_ylim(y_limits)
+    if np.unique(y).size >= 2:
+        pearson = cast(tuple[float, float], stats.pearsonr(x, y))
+        r_value = pearson[0]
+        ax.text(
+            0.03,
+            0.97,
+            f"r={r_value:.2f}",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+        )
+
+
+def _point_bin_counts(
+    x: npt.NDArray[np.float64],
+    y: npt.NDArray[np.float64],
+    *,
+    bins: int,
+) -> npt.NDArray[np.int_]:
+    """Return the local x/y-bin metacell count for each point."""
+    hist, x_edges, y_edges = np.histogram2d(x, y, bins=bins)
+    x_bins = np.searchsorted(x_edges, x, side="right") - 1
+    y_bins = np.searchsorted(y_edges, y, side="right") - 1
+    x_bins = np.clip(x_bins, 0, hist.shape[0] - 1)
+    y_bins = np.clip(y_bins, 0, hist.shape[1] - 1)
+    return hist[x_bins, y_bins].astype(np.int_)
 
 
 def _safe_filename_token(value: str) -> str:
@@ -615,6 +801,7 @@ def _broadcast_to_obs(
     *,
     cell_assignment_key: str,
     column_prefix: str = "clock_",
+    n_cells_column: str = "n_cells",
 ) -> None:
     """Broadcast metacell-level scalar columns to cells via the assignment."""
     assignment = adata.obs[cell_assignment_key].astype(str)
@@ -622,14 +809,9 @@ def _broadcast_to_obs(
     scalar_columns = [
         column for column in tidy.columns if column.endswith(scalar_suffixes)
     ]
-    scalar_columns.append(N_CELLS_COLUMN)
+    scalar_columns.append(n_cells_column)
     for column in scalar_columns:
         series = tidy[column]
         adata.obs[f"{column_prefix}{column}"] = (
             assignment.map(series).astype(float).to_numpy()
         )
-
-
-def discover_tissue_h5ads(directory: str | Path) -> list[Path]:
-    """Return sorted tissue h5ad paths in a directory."""
-    return sorted(Path(directory).glob("*.h5ad"))

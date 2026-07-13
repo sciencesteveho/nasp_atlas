@@ -5,8 +5,9 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 import pandas as pd
 
 
-def _annotate_obs_categories(
+def annotate_obs_categories(
     obs: pd.DataFrame,
+    *,
     source_column: str,
     target_column: str,
     categorizer: Callable[[object], str],
@@ -27,7 +28,7 @@ def _annotate_obs_categories(
     return annotated
 
 
-def _filter_obs_by_category(
+def filter_obs_by_category(
     obs: pd.DataFrame,
     column: str,
     keep: Iterable[str],
@@ -46,7 +47,7 @@ def _filter_obs_by_category(
     return obs.loc[obs[column].isin(keep_set)].copy()
 
 
-def _order_categories(
+def order_categories(
     categories: Iterable[str],
     front: Sequence[str] = (),
     back: Sequence[str] = (),
@@ -73,7 +74,7 @@ def _order_categories(
     return head + middle + tail
 
 
-def _humanize_label(
+def humanize_label(
     text: object,
     display_names: Mapping[str, str] | None = None,
 ) -> str:

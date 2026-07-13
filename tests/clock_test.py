@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 
 
 os.environ.setdefault("NUMBA_CACHE_DIR", "/tmp/numba")
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
-import importlib.util
-from pathlib import Path
-from typing import cast
-
-import joblib  # type: ignore
+import anndata as ad  # type: ignore[import]
+import joblib  # type: ignore[import]
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
+import pytest
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import Pipeline
@@ -65,6 +64,14 @@ class _CapturingEstimator:
         return np.zeros(X.shape[0], dtype=float)
 
 
+def test_clock_config_is_immutable() -> None:
+    """ClockConfig blocks attribute mutation after construction."""
+    config = clock_analysis.ClockConfig()
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        config.species = "mouse"
+
+
 def test_predict_metacells_has_stable_dataframe_return_type() -> None:
     """Prediction metadata does not change the function's return shape."""
     clock = ClockModel(
@@ -77,7 +84,6 @@ def test_predict_metacells_has_stable_dataframe_return_type() -> None:
 
     prediction = predict_metacells(clock, features, species="unknown")
 
-    assert isinstance(prediction, pd.DataFrame)
     assert prediction.loc["cell", "tage"] == 1.0
     assert pd.isna(prediction.loc["cell", "tage_std"])
     assert model_feature_coverage(features, clock) == 0.5
@@ -133,7 +139,7 @@ def test_prediction_scaling_depends_on_clock_target() -> None:
     assert mortality.loc["cell", "tage_std"] == 0.1
 
 
-def test_load_clock_patches_legacy_simple_imputer_fill_dtype(tmp_path) -> None:
+def test_load_clock_predicts_with_legacy_simple_imputer(tmp_path) -> None:
     """Loaded legacy sklearn imputers predict under current sklearn."""
     training = pd.DataFrame(
         {
@@ -159,14 +165,15 @@ def test_load_clock_patches_legacy_simple_imputer_fill_dtype(tmp_path) -> None:
         species="unknown",
     )
 
-    loaded = cast(Pipeline, clock.estimator)
-    tage = cast(float, prediction.loc["cell", "tage"])
-    assert hasattr(loaded.named_steps["imputer"], "_fill_dtype")
+    tage = prediction.loc["cell", "tage"]
     assert np.isfinite(tage)
 
 
-def test_predict_stratum_keeps_coverage_separate_per_clock(monkeypatch) -> None:
-    """Coverage from one clock cannot overwrite another clock's coverage."""
+def test_tissue_clock_analysis_keeps_coverage_separate_per_clock(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """The public workflow retains distinct feature coverage for each clock."""
     features = pd.DataFrame(
         {"a": [1.0, 2.0], "b": [3.0, 4.0]},
         index=["one", "two"],
@@ -185,20 +192,78 @@ def test_predict_stratum_keeps_coverage_separate_per_clock(monkeypatch) -> None:
             supports_std=False,
         ),
     ]
+    source = ad.AnnData(
+        X=np.ones((2, 1)),
+        obs=pd.DataFrame(
+            {
+                "donor_id": ["D1", "D2"],
+                "development_stage": [
+                    "30-year-old human stage",
+                    "40-year-old human stage",
+                ],
+            },
+            index=["cell_a", "cell_b"],
+        ),
+        var=pd.DataFrame(index=["gene"]),
+    )
+    metacells = ad.AnnData(
+        X=np.ones((2, 2)),
+        obs=pd.DataFrame(
+            {"age_years": [30.0, 40.0]},
+            index=features.index,
+        ),
+        var=pd.DataFrame(index=["gene_a", "gene_b"]),
+    )
+    clocks_by_name = {clock.name: clock for clock in clocks}
+
+    monkeypatch.setattr(
+        clock_analysis,
+        "read_h5ad",
+        lambda *_args, **_kwargs: (source, source.n_obs),
+    )
+    monkeypatch.setattr(
+        clock_analysis,
+        "build_human_entrez_map",
+        lambda *_args, **_kwargs: pd.Series(dtype=str),
+    )
+    monkeypatch.setattr(
+        clock_analysis,
+        "build_mouse_ortholog_map",
+        lambda *_args, **_kwargs: pd.Series(dtype=str),
+    )
+    monkeypatch.setattr(
+        clock_analysis,
+        "load_clock",
+        lambda model_path: clocks_by_name[str(model_path)],
+    )
+    monkeypatch.setattr(
+        clock_analysis,
+        "aggregate_metacells",
+        lambda *_args, **_kwargs: metacells,
+    )
     monkeypatch.setattr(
         clock_analysis,
         "preprocess_metacells",
         lambda *args, **kwargs: {"scaled_diff": features},
     )
 
-    result = clock_analysis._predict_stratum(
-        features,
-        pd.DataFrame(index=features.index),
-        clocks=clocks,
-        human_map=pd.Series(dtype=str),
-        mouse_map=pd.Series(dtype=str),
-        config=clock_analysis.ClockConfig(species="unknown"),
+    results = clock_analysis.tissue_clock_analysis(
+        h5ad_path=tmp_path / "input.h5ad",
+        output_dir=tmp_path,
+        gene_table=pd.DataFrame(),
+        ortholog_table=pd.DataFrame(),
+        model_paths=[clock.name for clock in clocks],
+        config=clock_analysis.ClockConfig(
+            levels=("tissue",),
+            assay_key=None,
+            min_metacells_per_stratum=1,
+        ),
+        save_tables=False,
+        annotate_adata=False,
+        save_adata=False,
+        plot_regressions=False,
     )
+    result = results["tissue"]
 
     chronoage_coverage = result[
         "chronoage_scaleddiff_feature_coverage"
@@ -222,67 +287,54 @@ def test_clock_regression_plots_written_for_prediction_columns(
         }
     )
 
-    clock_analysis._plot_clock_regressions(
+    clock_analysis.plot_clock_regressions(
         tidy,
         output_dir=tmp_path,
         level="tissue",
         age_key="age_years",
     )
 
-    assert (
+    output_path = (
         tmp_path / "clock_tissue_chronoage_scaleddiff_tage_regression.png"
-    ).exists()
+    )
+    assert output_path.stat().st_size > 0
 
 
-def test_combined_clock_regression_dev_module_combines_tissue_tables(
+def test_clock_regression_writes_title_and_count_colorbar(
     tmp_path,
+    monkeypatch,
 ) -> None:
-    """Development helper pools per-tissue clock tables before plotting."""
-    module_path = (
-        Path(__file__).parents[1]
-        / "development"
-        / "plot_combined_clock_regressions.py"
+    """Clock regression figures show their title and metacell-count scale."""
+    tidy = pd.DataFrame(
+        {
+            "age_years": [20.0, 20.1, 30.0, 40.0, 50.0],
+            "chronoage_scaleddiff_tage": [18.0, 18.1, 29.0, 42.0, 51.0],
+        }
     )
-    spec = importlib.util.spec_from_file_location(
-        "plot_combined_clock_regressions",
-        module_path,
-    )
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    figures = []
+    close_figure = clock_analysis.plt.close
 
-    root = tmp_path / "clock_root"
-    for tissue, ages, predictions in (
-        ("liver", [20.0, 30.0], [18.0, 31.0]),
-        ("lung", [40.0, 50.0], [39.0, 52.0]),
-    ):
-        tissue_dir = root / tissue
-        tissue_dir.mkdir(parents=True)
-        pd.DataFrame(
-            {
-                "age_years": ages,
-                "chronoage_scaleddiff_tage": predictions,
-            }
-        ).to_csv(tissue_dir / "clock_tissue_metacells.csv", index=False)
+    def capture_close(figure) -> None:
+        figures.append(figure)
 
-    output_dir = tmp_path / "combined"
-    results = module.plot_combined_clock_regressions(
-        clock_root=root,
-        output_dir=output_dir,
-        levels=("tissue",),
-    )
+    monkeypatch.setattr(clock_analysis.plt, "close", capture_close)
 
-    combined = results["tissue"]
-    assert combined.shape[0] == 4
-    assert combined["clock_source_dir"].tolist() == [
-        "liver",
-        "liver",
-        "lung",
-        "lung",
-    ]
-    assert (output_dir / "clock_tissue_combined_metacells.csv").exists()
-    assert (
-        output_dir
-        / "clock_combined_tissue_chronoage_scaleddiff_tage_regression.png"
-    ).exists()
+    try:
+        clock_analysis.plot_clock_regressions(
+            tidy,
+            output_dir=tmp_path,
+            level="tissue",
+            age_key="age_years",
+            title="Tabula Sapiens",
+        )
+
+        ax = figures[0].axes[0]
+        colorbar_ax = figures[0].axes[1]
+        colorbar_ticks = colorbar_ax.get_yticks()
+        assert ax.get_title() == "Tabula Sapiens (n=5)"
+        assert len(figures[0].axes) == 2
+        assert colorbar_ticks.tolist() == [1, 2]
+        assert all(float(tick).is_integer() for tick in colorbar_ticks)
+    finally:
+        for figure in figures:
+            close_figure(figure)

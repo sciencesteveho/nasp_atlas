@@ -54,7 +54,12 @@ venv.bak/
 *.db
 
 # Private facing local directories
+AGENTS.md
+.agents/
+SKILL.md
+skill.md
+skills-lock.json
+.codex/skills/
 development/*
-!development/plot_combined_clock_regressions.py
 data/
 results/

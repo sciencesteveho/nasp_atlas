@@ -2,9 +2,16 @@
 
 import matplotlib.colors as mcolors
 from matplotlib import pyplot as plt
+from matplotlib.typing import ColorType
 
 
-def _set_matplotlib_publication_parameters() -> None:
+__all__ = [
+    "darken_color",
+    "set_matplotlib_publication_parameters",
+]
+
+
+def set_matplotlib_publication_parameters() -> None:
     """Set matplotlib parameters for publication-quality figures."""
     plt.rcParams.update(
         {
@@ -26,9 +33,9 @@ def _set_matplotlib_publication_parameters() -> None:
     )
 
 
-def _darken_color(
-    color: object, factor: float = 0.975
+def darken_color(
+    color: ColorType, factor: float = 0.975
 ) -> tuple[float, float, float]:
     """Return a darker RGB version of a matplotlib-compatible color."""
-    red, green, blue = mcolors.to_rgb(color)  # type: ignore
+    red, green, blue = mcolors.to_rgb(color)
     return red * factor, green * factor, blue * factor

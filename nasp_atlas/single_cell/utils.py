@@ -4,21 +4,74 @@ from __future__ import annotations
 
 import gc
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal, cast
 
-import anndata as ad  # type: ignore
-import h5py  # type: ignore
+import anndata as ad  # type: ignore[import]
+import h5py  # type: ignore[import]
 import numpy as np
 import pandas as pd
+from anndata.typing import XDataType  # type: ignore[import]
 
-from nasp_atlas.single_cell.io import _random_cell_subset
-from nasp_atlas.single_cell.io import _read_csr_rows
+from nasp_atlas.single_cell.io import random_cell_subset
+from nasp_atlas.single_cell.io import read_csr_rows
 from nasp_atlas.single_cell.io import read_h5ad
 
 
 H5adCompression = Literal["gzip", "lzf"]
 SplitCompression = H5adCompression | Literal["source"] | None
+
+
+def expression_matrix(
+    adata: ad.AnnData,
+    var_names: Sequence[str] | None = None,
+    *,
+    expression_layer: str | None,
+    use_raw: bool = False,
+) -> tuple[list[str], XDataType | None]:
+    """Return requested genes and matrix from a layer, raw, or .X."""
+    if expression_layer is not None and use_raw:
+        raise ValueError(
+            "use_raw=True cannot be combined with expression_layer"
+        )
+
+    if use_raw:
+        raw = adata.raw
+        if raw is None:
+            raise ValueError("use_raw=True requires adata.raw to be set")
+
+        return _raw_expression_matrix(raw, var_names)
+
+    names = pd.Index(adata.var_names).astype(str)
+    requested = list(var_names) if var_names is not None else names.tolist()
+    present = [name for name in requested if name in names]
+    if var_names is not None and not present:
+        return present, None
+
+    subset = adata[:, present] if var_names is not None else adata
+    matrix = (
+        subset.layers[expression_layer]
+        if expression_layer is not None
+        else subset.X
+    )
+
+    return present, matrix
+
+
+def _raw_expression_matrix(
+    raw: ad.Raw,
+    var_names: Sequence[str] | None,
+) -> tuple[list[str], XDataType | None]:
+    """Return requested genes and their matrix from an AnnData raw snapshot."""
+    names = pd.Index(raw.var_names).astype(str)
+    requested = list(var_names) if var_names is not None else names.tolist()
+    present = [name for name in requested if name in names]
+    if var_names is not None and not present:
+        return present, None
+
+    matrix = raw[:, present].X if var_names is not None else raw.X
+    return present, matrix
 
 
 def split_anndata_by_obs(
@@ -28,27 +81,25 @@ def split_anndata_by_obs(
     obs_key: str,
     output_name: str,
     subset_fraction: float | None = None,
-    random_state: int = 0,
+    random_state: int = 42,
     compression: SplitCompression = "source",
     backed: bool = False,
 ) -> dict[str, Path]:
     """Write one AnnData file per value in `adata.obs[obs_key]`.
 
-    By default the full matrix is read into memory once and split in
-    memory, which is far faster than per-value backed reads. Set
-    ``backed=True`` to stream from disk when memory is constrained, at
-    the cost of repeated scattered decompression.
+    By default the full matrix is read into memory once and split in memory, Set
+    `backed=True` to stream from disk when memory is constrained at the cost of
+    repeated scattered decompression.
 
-    By default, path inputs preserve the source H5AD matrix compression
-    for the output files. Pass ``compression=None`` to disable output
-    compression.
+    By default, path inputs preserve the source H5AD matrix compression for the
+    output files. Pass `compression=None` to disable output compression.
     """
     source_path: Path | None = None
     close_backed = False
     if isinstance(adata_or_path, ad.AnnData):
         adata = adata_or_path
         if subset_fraction is not None:
-            adata = _random_cell_subset(
+            adata = random_cell_subset(
                 adata,
                 fraction=subset_fraction,
                 random_state=random_state,
@@ -207,11 +258,15 @@ def _iter_h5ad_matrix_datasets(h5: h5py.File) -> list[h5py.Dataset]:
     datasets: list[h5py.Dataset] = []
 
     if "X" in h5:
-        datasets.extend(_matrix_datasets(h5["X"]))  # type: ignore
+        storage = h5["X"]
+        if isinstance(storage, (h5py.Group, h5py.Dataset)):
+            datasets.extend(_matrix_datasets(storage))
 
     raw = h5.get("raw")
     if isinstance(raw, h5py.Group) and "X" in raw:
-        datasets.extend(_matrix_datasets(raw["X"]))  # type: ignore
+        storage = raw["X"]
+        if isinstance(storage, (h5py.Group, h5py.Dataset)):
+            datasets.extend(_matrix_datasets(storage))
 
     return datasets
 
@@ -251,12 +306,15 @@ def _normalize_dataframe_string_storage(frame: pd.DataFrame) -> None:
         series = frame[column]
         if isinstance(series.dtype, pd.StringDtype):
             frame[column] = series.astype(object)
-        elif isinstance(series.dtype, pd.CategoricalDtype):
-            categories = series.cat.categories
-            if isinstance(categories.dtype, pd.StringDtype):
-                frame[column] = series.cat.set_categories(
-                    pd.Index(categories.astype(object), dtype=object)
-                )
+            continue
+        if not isinstance(series.dtype, pd.CategoricalDtype):
+            continue
+
+        categories = series.cat.categories
+        if isinstance(categories.dtype, pd.StringDtype):
+            frame[column] = series.cat.set_categories(
+                pd.Index(categories.astype(object), dtype=object)
+            )
 
 
 def _materialize_obs_subset(
@@ -306,7 +364,7 @@ def _read_backed_raw_x_rows(
             return raw_x[obs_indices, :].copy()
         if isinstance(raw_x, h5py.Group):
             if raw_x.attrs.get("encoding-type") == "csr_matrix":
-                return _read_csr_rows(raw_x, obs_indices)
+                return read_csr_rows(raw_x, obs_indices)
             raise ValueError(
                 "Expected backed AnnData raw.X to be dense or CSR sparse."
             )

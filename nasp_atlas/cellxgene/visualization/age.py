@@ -7,15 +7,15 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
-from nasp_atlas.cellxgene.categorize import _categorize_development_stage
+from nasp_atlas.cellxgene.categorize import categorize_development_stage
 from nasp_atlas.cellxgene.categorize import stage_age_value
-from nasp_atlas.cellxgene.visualization.composition import _annotate_bars
-from nasp_atlas.cellxgene.visualization.composition import _clean_label_series
-from nasp_atlas.cellxgene.visualization.composition import _format_plot_title
-from nasp_atlas.cellxgene.visualization.composition import _plot_stacked_bar
-from nasp_atlas.cellxgene.visualization.composition import _select_plot_obs
-from nasp_atlas.cellxgene.visualization.composition import _validate_columns
-from nasp_atlas.visualization import _darken_color
+from nasp_atlas.cellxgene.visualization.composition import annotate_bars
+from nasp_atlas.cellxgene.visualization.composition import clean_label_series
+from nasp_atlas.cellxgene.visualization.composition import format_plot_title
+from nasp_atlas.cellxgene.visualization.composition import plot_stacked_bar
+from nasp_atlas.cellxgene.visualization.composition import select_plot_obs
+from nasp_atlas.cellxgene.visualization.composition import validate_columns
+from nasp_atlas.visualization import darken_color
 
 
 def _age_labels_and_values(
@@ -23,7 +23,7 @@ def _age_labels_and_values(
     collapsed: bool,
 ) -> tuple[pd.Series, pd.Series]:
     """Return plot labels and numeric sort values for stage labels."""
-    labels = stages.map(_categorize_development_stage) if collapsed else stages
+    labels = stages.map(categorize_development_stage) if collapsed else stages
     age_values = stages.map(stage_age_value)
     return labels, age_values
 
@@ -59,9 +59,9 @@ def _build_age_range_table(
     Returns:
       DF with columns label, n_cells, fraction, and sort_age.
     """
-    _validate_columns(obs, (stage_column,))
-    plot_obs = _select_plot_obs(obs, dataset_id)
-    stages = _clean_label_series(plot_obs[stage_column])
+    validate_columns(obs, (stage_column,))
+    plot_obs = select_plot_obs(obs, dataset_id=dataset_id)
+    stages = clean_label_series(plot_obs[stage_column])
     labels, age_values = _age_labels_and_values(stages, collapsed)
 
     table = pd.DataFrame(
@@ -109,12 +109,12 @@ def _build_age_makeup_table(
       DF with dataset_id, category, n_cells, fraction, sort_age, and any merged
       dataset metadata.
     """
-    _validate_columns(obs, ("dataset_id", stage_column))
+    validate_columns(obs, ("dataset_id", stage_column))
     if obs.empty:
         raise ValueError("Cannot build age makeup table from empty obs.")
 
     plot_obs = obs.loc[:, ["dataset_id", stage_column]].copy()
-    stages = _clean_label_series(plot_obs[stage_column])
+    stages = clean_label_series(plot_obs[stage_column])
     labels, age_values = _age_labels_and_values(stages, collapsed)
 
     age_table = pd.DataFrame(
@@ -151,7 +151,7 @@ def _build_age_makeup_table(
     return counts
 
 
-def _plot_age_ranges(
+def plot_age_ranges(
     obs: pd.DataFrame,
     *,
     outpath: str | Path,
@@ -181,6 +181,13 @@ def _plot_age_ranges(
 
     Returns:
       Path to the written figure file.
+
+    Example Usage:
+      >>> plot_age_ranges(
+      ...     obs,
+      ...     outpath="age_ranges.png",
+      ...     stage_column="development_stage",
+      ... )
     """
     counts = _build_age_range_table(
         obs,
@@ -188,7 +195,7 @@ def _plot_age_ranges(
         stage_column=stage_column,
         collapsed=collapsed,
     )
-    plot_obs = _select_plot_obs(obs, dataset_id)
+    plot_obs = select_plot_obs(obs, dataset_id=dataset_id)
     total_cells = int(counts["n_cells"].sum())
     if "dataset_id" in plot_obs:
         n_datasets = int(plot_obs["dataset_id"].nunique())
@@ -206,7 +213,7 @@ def _plot_age_ranges(
     fig, ax = plt.subplots(figsize=(fig_width_in, fig_height))
 
     colors = sns.color_palette(cmap, n_colors=len(counts))
-    edge_colors = [_darken_color(color, factor=0.80) for color in colors]
+    edge_colors = [darken_color(color, factor=0.80) for color in colors]
 
     ax.barh(
         y_positions,
@@ -217,7 +224,7 @@ def _plot_age_ranges(
         edgecolor=edge_colors,
     )
 
-    _annotate_bars(
+    annotate_bars(
         ax=ax,
         y_positions=y_positions,
         n_cells=n_cells,
@@ -228,7 +235,7 @@ def _plot_age_ranges(
     ax.set_yticks(y_positions)
     ax.set_yticklabels(labels)
     ax.set_xlabel("Cells")
-    title = _format_plot_title(
+    title = format_plot_title(
         dataset_id=dataset_id, total_cells=total_cells, n_datasets=n_datasets
     )
     ax.set_title(f"Age ranges\n{title}")
@@ -249,7 +256,7 @@ def _plot_age_ranges(
     return output_path
 
 
-def _plot_age_makeup(
+def plot_age_makeup(
     obs: pd.DataFrame,
     datasets: pd.DataFrame,
     *,
@@ -275,6 +282,13 @@ def _plot_age_makeup(
       bar_height_in: Height of each dataset bar.
       fig_width_in: Figure width.
       cmap: Colormap palette to use.
+
+    Example Usage:
+      >>> plot_age_makeup(
+      ...     obs,
+      ...     datasets,
+      ...     outpath="age_makeup.png",
+      ... )
     """
     makeup = _build_age_makeup_table(
         obs,
@@ -283,7 +297,7 @@ def _plot_age_makeup(
         dataset_meta=datasets,
     )
     category_order = _ordered_age_categories(makeup)
-    _plot_stacked_bar(
+    plot_stacked_bar(
         makeup=makeup,
         outpath=outpath,
         category_order=category_order,

@@ -6,21 +6,13 @@ import logging
 from collections.abc import Sequence
 from typing import Any, cast
 
-import anndata as ad  # type: ignore
+import anndata as ad  # type: ignore[import]
 import numpy as np
 import pandas as pd
-import scipy.sparse as sp  # type: ignore
-
-from nasp_atlas.single_cell.utils import snake_case
+import scipy.sparse as sp  # type: ignore[import]
 
 
 logger = logging.getLogger(__name__)
-
-METACELL_ID_COLUMN = "metacell_id"
-N_CELLS_COLUMN = "n_cells"
-GROUP_KEY_DELIMITER = "___"
-
-
 CountMatrix = sp.spmatrix | np.ndarray
 
 
@@ -35,7 +27,10 @@ def aggregate_metacells(
     random_seed: int | None = None,
     metacell_prefix: str = "metacell",
     cell_assignment_key: str | None = None,
+    metacell_id_column: str = "metacell_id",
+    n_cells_column: str = "n_cells",
     coverage_column: str = "cumulative_coverage",
+    group_key_delimiter: str = "___",
 ) -> ad.AnnData:
     """Aggregate single cells into metacells within obs groups.
 
@@ -58,13 +53,16 @@ def aggregate_metacells(
       cell_assignment_key: When set, the source `adata.obs` gains this column
         mapping each cell to its metacell identifier, enabling per-cell
         broadcasts of metacell-level results.
+      metacell_id_column: Name of the generated metacell identifier column.
+      n_cells_column: Name of the metacell obs column storing cell counts.
       coverage_column: Name of the metacell obs column storing cumulative
         coverage.
+      group_key_delimiter: Delimiter used internally for composite group keys.
 
     Returns:
       A metacell-level AnnData with summed counts in `.X`, the grouping columns
-      plus carried obs, `n_cells`, and `cumulative_coverage` in `.obs`, and the
-      original `.var` preserved.
+      plus carried obs, the requested cell-count and coverage columns in
+      `.obs`, and the original `.var` preserved.
     """
     if missing := [
         column for column in group_by if column not in adata.obs.columns
@@ -80,7 +78,9 @@ def aggregate_metacells(
         raise ValueError("AnnData has no count matrix in .X.")
     counts_matrix = cast(CountMatrix, counts_matrix)
     metadata = cast(pd.DataFrame, adata.obs)
-    composite_key = _group_keys(metadata, group_by)
+    composite_key = _group_keys(
+        metadata, group_by, delimiter=group_key_delimiter
+    )
     unique_groups = composite_key.unique()
 
     logger.info(
@@ -108,7 +108,7 @@ def aggregate_metacells(
             )
         )
 
-        key_values = str(group_value).split(GROUP_KEY_DELIMITER)
+        key_values = str(group_value).split(group_key_delimiter)
         carried = _carry_constant_obs(metadata, cell_indices, carry_obs)
         group_metacell_ids = [
             f"{metacell_prefix}_{metacell_counter + local_index}"
@@ -120,8 +120,8 @@ def aggregate_metacells(
                 zip(group_by, key_values, strict=True)
             )
             record |= carried
-            record[METACELL_ID_COLUMN] = metacell_id
-            record[N_CELLS_COLUMN] = int(cells_per_metacell[local_index])
+            record[metacell_id_column] = metacell_id
+            record[n_cells_column] = int(cells_per_metacell[local_index])
             record[coverage_column] = float(coverage[local_index])
             block_obs.append(record)
 
@@ -132,7 +132,7 @@ def aggregate_metacells(
         block_counts.append(metacell_counts)
 
     metacell_matrix = np.vstack(block_counts)
-    obs_frame = pd.DataFrame(block_obs).set_index(METACELL_ID_COLUMN)
+    obs_frame = pd.DataFrame(block_obs).set_index(metacell_id_column)
 
     metacell_adata = ad.AnnData(
         X=metacell_matrix,
@@ -146,7 +146,7 @@ def aggregate_metacells(
     logger.info(
         "[metacells] built %d metacells (median cells/metacell=%.0f)",
         metacell_adata.n_obs,
-        float(np.median(obs_frame[N_CELLS_COLUMN])),
+        float(np.median(obs_frame[n_cells_column])),
     )
     return metacell_adata
 
@@ -252,10 +252,15 @@ def aggregate_counts_by_coverage(
     )
 
 
-def _group_keys(metadata: pd.DataFrame, group_by: Sequence[str]) -> pd.Series:
+def _group_keys(
+    metadata: pd.DataFrame,
+    group_by: Sequence[str],
+    *,
+    delimiter: str,
+) -> pd.Series:
     """Build a single composite key per cell from the grouping columns."""
     string_frame = metadata[list(group_by)].astype(str)
-    return string_frame.agg(GROUP_KEY_DELIMITER.join, axis=1)
+    return string_frame.agg(delimiter.join, axis=1)
 
 
 def _carry_constant_obs(
@@ -284,8 +289,3 @@ def _carry_constant_obs(
             unique_values[0] if len(unique_values) == 1 else np.nan
         )
     return carried
-
-
-def _metacell_stratum_label(values: Sequence[str]) -> str:
-    """Return a filesystem-safe stratum label from grouping values."""
-    return snake_case(GROUP_KEY_DELIMITER.join(str(value) for value in values))

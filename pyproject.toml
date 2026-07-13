@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nasp_atlas"
 version = "0.1.0"
-description = "Curation and analyses of NASP in publicly-available single-cell atlases."
+description = "Single-cell analyses of nucleic-acid-sensing pathways in public atlases."
 readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = { text = "Apache-2.0" }
@@ -19,6 +19,8 @@ classifiers = [
 dependencies = [
   "anndata==0.12.6",
   "cellxgene_census==1.17.0",
+  "decoupler==2.2.0",
+  "harmonypy==2.0.0",
   "h5py==3.16.0",
   "matplotlib==3.10.9",
   "nasp_compendium @ git+https://github.com/sciencesteveho/nasp_compendium.git",
@@ -66,7 +68,7 @@ namespaces = true
 "nasp_atlas.cellxgene.configs" = ["*.yaml"]
 
 [tool.ruff]
-src = ["nasp_atlas", "tests"]
+src = ["nasp_atlas", "run_scripts", "tests"]
 extend-include = [ "*.ipynb" ]
 target-version = "py311"
 line-length = 80
@@ -94,6 +96,17 @@ select = [
   "RUF",  # Ruff-specific rules
   "C4",     # flake8-comprehensions
   "BLE",    # flake8-blind-except
+  "ANN001", # Missing parameter annotations.
+  "ANN002", # Missing *args annotations.
+  "ANN003", # Missing **kwargs annotations.
+  "ANN201", # Missing public return annotations.
+  "ANN202", # Missing private return annotations.
+  "ANN204", # Missing special-method return annotations.
+  "ANN205", # Missing static-method return annotations.
+  "ANN206", # Missing class-method return annotations.
+  "G",      # flake8-logging-format
+  "PGH003", # Require targeted type-ignore codes.
+  "PLC0415", # Keep imports at module scope.
   "RUF100", # unused noqa
   "D",   # pydocstyle
 ]
@@ -128,10 +141,18 @@ lines-after-imports = 2
 ]
 
 "*_test.py" = [
+  "ANN001",  # Standard pytest fixtures and small local fakes may be untyped.
+  "ANN002",
+  "ANN003",
+  "ANN202",
   "E402",  # Allow test-local imports after setup when needed.
 ]
 
 "tests/**/*.py" = [
+  "ANN001",
+  "ANN002",
+  "ANN003",
+  "ANN202",
   "E402",
 ]
 
@@ -150,6 +171,7 @@ pythonVersion = "3.11"
 typeCheckingMode = "standard"
 include = [
   "nasp_atlas",
+  "run_scripts",
 ]
 
 exclude = [

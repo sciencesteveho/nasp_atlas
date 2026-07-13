@@ -16,7 +16,7 @@ import pandas as pd
 import yaml
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class CategorySchema:
     """Category schema for disease and tissue metadata labels."""
 
@@ -52,7 +52,7 @@ class CategorySchema:
 
     def categorize_disease(self, raw: object) -> str:
         """Map a raw disease label to a configured broad category."""
-        return _categorize_raw_label(
+        return categorize_raw_label(
             raw,
             patterns=self.disease_patterns,
             match_normal_exactly=self.disease_match_normal_exactly,
@@ -61,7 +61,7 @@ class CategorySchema:
 
     def categorize_tissue(self, raw: object) -> str:
         """Map a raw tissue label to a configured broad category."""
-        return _categorize_raw_label(
+        return categorize_raw_label(
             raw,
             patterns=self.tissue_patterns,
             match_normal_exactly=self.tissue_match_normal_exactly,
@@ -85,12 +85,12 @@ def _load_default_category_schema() -> CategorySchema:
     return load_category_schema()
 
 
-def _categorize_disease(raw: object) -> str:
+def categorize_disease(raw: object) -> str:
     """Map a raw disease label to the default broad category."""
     return _load_default_category_schema().categorize_disease(raw)
 
 
-def _categorize_tissue(raw: object) -> str:
+def categorize_tissue(raw: object) -> str:
     """Map a raw tissue label to the default broad category."""
     return _load_default_category_schema().categorize_tissue(raw)
 
@@ -171,7 +171,7 @@ def _is_missing(value: object) -> bool:
     return isinstance(value, str) and not value.strip()
 
 
-def _match_first(
+def match_first(
     value: str,
     patterns: dict[str, tuple[str, ...]],
     *,
@@ -191,7 +191,7 @@ def _match_first(
     return "other"
 
 
-def _categorize_raw_label(
+def categorize_raw_label(
     raw: object,
     patterns: dict[str, tuple[str, ...]],
     *,
@@ -207,14 +207,14 @@ def _categorize_raw_label(
     if overrides and label in overrides:
         return overrides[label]
 
-    return _match_first(
+    return match_first(
         label,
         patterns,
         match_normal_exactly=match_normal_exactly,
     )
 
 
-def _collapse_sex_series(values: pd.Series) -> str:
+def collapse_sex_series(values: pd.Series) -> str:
     """Collapse sex annotations, merging male and female when both are
     present.
     """
@@ -334,7 +334,7 @@ def _stage_range_label(age: float, stage: str) -> str:
     return f"{int(age)}yo"
 
 
-def _categorize_development_stage(stage: object) -> str:
+def categorize_development_stage(stage: object) -> str:
     """Map a raw development-stage label to an approximate age-range label."""
     if _is_missing(stage):
         return "unknown"
@@ -348,7 +348,7 @@ def _categorize_development_stage(stage: object) -> str:
     return _stage_range_label(age, stage_string)
 
 
-def _summarize_development_stage(
+def summarize_development_stage(
     values: pd.Series,
     delimiter: str = ", ",
 ) -> str:

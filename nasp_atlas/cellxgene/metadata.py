@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import anndata as ad  # type: ignore
+import anndata as ad  # type: ignore[import]
 import numpy as np
 import pandas as pd
 

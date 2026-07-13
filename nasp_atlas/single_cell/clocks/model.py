@@ -7,12 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-import joblib  # type: ignore
+import joblib  # type: ignore[import]
 import numpy as np
 import pandas as pd
-import sklearn.base  # type: ignore
-import sklearn.impute  # type: ignore
-import sklearn.pipeline  # type: ignore
+import sklearn.base  # type: ignore[import]
+import sklearn.impute  # type: ignore[import]
+import sklearn.pipeline  # type: ignore[import]
 
 
 logger = logging.getLogger(__name__)
@@ -76,7 +76,7 @@ def _patch_sklearn_estimator_compatibility(estimator: object) -> None:
             and not hasattr(step, "_fill_dtype")
             and hasattr(step, "_fit_dtype")
         ):
-            step._fill_dtype = step._fit_dtype  # type: ignore
+            step._fill_dtype = step._fit_dtype  # type: ignore[attr-defined]
 
 
 def _iter_sklearn_estimators(estimator: object) -> list[tuple[str, object]]:

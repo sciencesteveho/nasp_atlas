@@ -9,7 +9,7 @@ from dataclasses import field
 from typing import Any, Literal
 
 
-@dataclass
+@dataclass(frozen=True, kw_only=True)
 class EmbeddingConfig:
     """Configuration for the embedding pipeline.
 

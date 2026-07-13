@@ -41,7 +41,7 @@ def preprocess_metacells(
         "scaled_diff": median-subtracted scaled values.
         "yugene_diff": median-subtracted YuGene values.
     """
-    filtered = _filter_low_count_genes(
+    filtered = filter_low_count_genes(
         counts,
         count_threshold=count_threshold,
         percent_threshold=percent_threshold,
@@ -161,7 +161,7 @@ def map_counts_to_model_features(
     return mouse_counts
 
 
-def _filter_low_count_genes(
+def filter_low_count_genes(
     counts: pd.DataFrame,
     *,
     count_threshold: float = 10.0,

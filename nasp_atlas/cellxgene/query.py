@@ -6,28 +6,51 @@ from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Self
 
-import cellxgene_census  # type: ignore
+import cellxgene_census  # type: ignore[import]
 import pandas as pd
 
-from nasp_atlas.cellxgene.categorize import _collapse_sex_series
-from nasp_atlas.cellxgene.categorize import _summarize_development_stage
+from nasp_atlas.cellxgene.categorize import collapse_sex_series
+from nasp_atlas.cellxgene.categorize import summarize_development_stage
 from nasp_atlas.cellxgene.config import CXGMetadataConfig
-from nasp_atlas.cellxgene.filter import _annotate_obs_categories
-from nasp_atlas.cellxgene.filter import _filter_obs_by_category
-from nasp_atlas.cellxgene.visualization.age import _plot_age_makeup
-from nasp_atlas.cellxgene.visualization.age import _plot_age_ranges
-from nasp_atlas.cellxgene.visualization.composition import _metadata_barplot
-from nasp_atlas.cellxgene.visualization.composition import _plot_category_makeup
-from nasp_atlas.cellxgene.visualization.sankey import _metadata_sankey
-from nasp_atlas.common import _collapse_unique_series
-from nasp_atlas.visualization import _set_matplotlib_publication_parameters
+from nasp_atlas.cellxgene.filter import annotate_obs_categories
+from nasp_atlas.cellxgene.filter import filter_obs_by_category
+from nasp_atlas.cellxgene.visualization import metadata_barplot
+from nasp_atlas.cellxgene.visualization import metadata_sankey
+from nasp_atlas.cellxgene.visualization import plot_age_makeup
+from nasp_atlas.cellxgene.visualization import plot_age_ranges
+from nasp_atlas.cellxgene.visualization import plot_category_makeup
+from nasp_atlas.common import collapse_unique_series
+from nasp_atlas.visualization import set_matplotlib_publication_parameters
 
 
 class CXGMetadata:
-    """Stateful workflow for CELLxGENE metadata querying and visualization."""
+    """Stateful workflow for CELLxGENE metadata querying and visualization.
+
+    Example Usage:
+      >>> import pandas as pd
+      >>> from nasp_atlas.cellxgene import CategorySchema
+      >>> from nasp_atlas.cellxgene import CXGMetadataConfig
+      >>> schema = CategorySchema(
+      ...     disease_patterns={"normal": ("healthy",)},
+      ...     tissue_patterns={"lung": ("lung",)},
+      ... )
+      >>> config = CXGMetadataConfig(category_schema=schema)
+      >>> metadata = CXGMetadata(
+      ...     datasets=pd.DataFrame({"dataset_id": ["ds1"]}),
+      ...     obs=pd.DataFrame(
+      ...         {"disease": ["healthy"], "tissue": ["lung"]}
+      ...     ),
+      ...     config=config,
+      ... )
+      >>> metadata = metadata.annotate_default_categories()
+      >>> lung = metadata.filter_tissues(["lung"])
+      >>> lung.obs["tissue_category"].tolist()
+      ['lung']
+    """
 
     def __init__(
         self,
+        *,
         datasets: pd.DataFrame,
         obs: pd.DataFrame,
         config: CXGMetadataConfig | None = None,
@@ -37,7 +60,7 @@ class CXGMetadata:
         self.obs = obs
         self.config = config or CXGMetadataConfig()
 
-        _set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
 
     def annotate_obs_categories(
         self,
@@ -47,7 +70,7 @@ class CXGMetadata:
         categorizer: Callable[[object], str],
     ) -> Self:
         """Add a broad-category column to obs."""
-        self.obs = _annotate_obs_categories(
+        self.obs = annotate_obs_categories(
             self.obs,
             source_column=source_column,
             target_column=target_column,
@@ -69,43 +92,6 @@ class CXGMetadata:
         )
         return self
 
-    def _ensure_default_category_column(self, category_column: str) -> None:
-        """Create a default category column when a default plot needs it."""
-        if category_column in self.obs.columns:
-            return
-
-        if category_column == "disease_category":
-            self.annotate_obs_categories(
-                source_column="disease",
-                target_column=category_column,
-                categorizer=self.config.categorize_disease,
-            )
-            return
-
-        if category_column == "tissue_category":
-            self.annotate_obs_categories(
-                source_column="tissue",
-                target_column=category_column,
-                categorizer=self.config.categorize_tissue,
-            )
-
-    def _categorizer_for_label_column(
-        self,
-        label_column: str,
-    ) -> Callable[[object], str] | None:
-        """Return the configured categorizer for a metadata label column."""
-        if label_column == "disease":
-            return self.config.categorize_disease
-
-        if label_column == "tissue":
-            return self.config.categorize_tissue
-
-        return (
-            str
-            if label_column in {"disease_category", "tissue_category"}
-            else None
-        )
-
     def filter_by_category(
         self,
         *,
@@ -113,7 +99,7 @@ class CXGMetadata:
         keep: Iterable[str],
     ) -> Self:
         """Restrict obs to rows whose category value is in keep."""
-        self.obs = _filter_obs_by_category(
+        self.obs = filter_obs_by_category(
             self.obs,
             column=column,
             keep=keep,
@@ -136,14 +122,6 @@ class CXGMetadata:
         """Restrict obs to selected tissue categories."""
         return self._filter_by_category(column, keep)
 
-    def _filter_by_category(self, column, keep):
-        """Ensure the category column exists and filter obs by selected
-        values.
-        """
-        self._ensure_default_category_column(column)
-        self.filter_by_category(column=column, keep=keep)
-        return self
-
     def plot_category_makeup(
         self,
         *,
@@ -154,7 +132,7 @@ class CXGMetadata:
         datasets_per_plot: int = 35,
     ) -> None:
         """Plot dataset makeup along one categorical axis."""
-        _plot_category_makeup(
+        plot_category_makeup(
             obs=self.obs,
             datasets=self.datasets,
             category_column=category_column,
@@ -230,7 +208,7 @@ class CXGMetadata:
         cmap: str = "tab20",
     ) -> None:
         """Plot metadata barplot for current obs or one dataset."""
-        _metadata_barplot(
+        metadata_barplot(
             obs=self.obs,
             dataset_id=dataset_id,
             label_column=label_column,
@@ -253,7 +231,7 @@ class CXGMetadata:
         cmap: str = "tab20",
     ) -> Path:
         """Plot metadata Sankey for current obs or one dataset."""
-        return _metadata_sankey(
+        return metadata_sankey(
             obs=self.obs,
             dataset_id=dataset_id,
             label_column=label_column,
@@ -276,7 +254,7 @@ class CXGMetadata:
         cmap: str = "tab20",
     ) -> Path:
         """Plot development-stage age ranges for current obs or one dataset."""
-        return _plot_age_ranges(
+        return plot_age_ranges(
             obs=self.obs,
             outpath=outpath,
             dataset_id=dataset_id,
@@ -299,7 +277,7 @@ class CXGMetadata:
         cmap: str = "tab20c",
     ) -> None:
         """Plot dataset makeup across development-stage age ranges."""
-        _plot_age_makeup(
+        plot_age_makeup(
             obs=self.obs,
             datasets=self.datasets,
             outpath=outpath,
@@ -340,15 +318,15 @@ class CXGMetadata:
                 n_cells=("dataset_id", "size"),
                 n_donors=("donor_id", "nunique"),
                 n_cell_types=("cell_type", "nunique"),
-                assays=("assay", _collapse_unique_series),
-                tissues=("tissue", _collapse_unique_series),
-                diseases=("disease", _collapse_unique_series),
-                sexes=("sex", _collapse_sex_series),
+                assays=("assay", collapse_unique_series),
+                tissues=("tissue", collapse_unique_series),
+                diseases=("disease", collapse_unique_series),
+                sexes=("sex", collapse_sex_series),
                 age_terms=(
                     "development_stage",
-                    _summarize_development_stage,
+                    summarize_development_stage,
                 ),
-                suspension_types=("suspension_type", _collapse_unique_series),
+                suspension_types=("suspension_type", collapse_unique_series),
             )
             .reset_index()
         )
@@ -407,6 +385,53 @@ class CXGMetadata:
             obs_cols=query_config.obs_cols,
         )
         return cls(datasets=datasets, obs=obs, config=query_config)
+
+    def _ensure_default_category_column(self, category_column: str) -> None:
+        """Create a default category column when a default plot needs it."""
+        if category_column in self.obs.columns:
+            return
+
+        if category_column == "disease_category":
+            self.annotate_obs_categories(
+                source_column="disease",
+                target_column=category_column,
+                categorizer=self.config.categorize_disease,
+            )
+            return
+
+        if category_column == "tissue_category":
+            self.annotate_obs_categories(
+                source_column="tissue",
+                target_column=category_column,
+                categorizer=self.config.categorize_tissue,
+            )
+
+    def _categorizer_for_label_column(
+        self,
+        label_column: str,
+    ) -> Callable[[object], str] | None:
+        """Return the configured categorizer for a metadata label column."""
+        if label_column == "disease":
+            return self.config.categorize_disease
+
+        if label_column == "tissue":
+            return self.config.categorize_tissue
+
+        return (
+            str
+            if label_column in {"disease_category", "tissue_category"}
+            else None
+        )
+
+    def _filter_by_category(
+        self,
+        column: str,
+        keep: Iterable[str],
+    ) -> Self:
+        """Ensure the category column exists before filtering its values."""
+        self._ensure_default_category_column(column)
+        self.filter_by_category(column=column, keep=keep)
+        return self
 
 
 def _read_cxg_census_metadata(

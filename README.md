@@ -1,134 +1,80 @@
 <div align="center">
-  <h1>Single-cell analysis of NASP in atlas data</h1>
+  <h1>NASP Atlas</h1>
+  <p>Single-cell analysis of nucleic-acid-sensing pathways.</p>
 </div>
 
-Curation and analyses of **N**ucleic **A**cid **S**ensing **P**athways (**NASP**) in publicly-available single-cell atlases.
-
-<br>
+Reusable tools for processing atlas-scale single-cell data, scoring
+nucleic-acid-sensing pathway modules, testing donor-aware associations, and
+visualizing results. Curated marker and sensor definitions come from
+[`nasp_compendium`](https://github.com/sciencesteveho/nasp_compendium).
 
 ## Installation
-```sh
-# prepare a fresh conda environment
+
+This package supports Python 3.11 and 3.12.
+
+```bash
 conda create -n nasp_atlas python=3.11 -y
 conda activate nasp_atlas
-python -m pip install -U pip setuptools wheel
+python -m pip install --upgrade pip setuptools wheel
 
-# download and install from source
 git clone https://github.com/sciencesteveho/nasp_atlas.git
 cd nasp_atlas
-pip install -e .
-```
-<br>
-
-## Development
-
-Install the dev extras:
-
-```sh
-pip install -e ".[dev]"
+python -m pip install -e .
 ```
 
-CI runs the pre-commit suite. Local hooks are opt-in:
+For development, install the extra dependencies:
 
-```sh
+```bash
+python -m pip install -e ".[dev]"
+```
+
+Enable automatic checks before commits and pushes:
+
+```bash
 pre-commit install --hook-type pre-commit --hook-type pre-push
 ```
 
-<br>
 
-## Data requirements
+## Quick start
 
-Lorem ipsum for now.
-
-<br>
-
-## Modules
-
-### Single-cell
-
-Generalizable, reproducible single-cell utilities and visualizations.
-
-`SCProcessor` handles common Scanpy processing steps like normalization, HVG, PCA, neighbor graphs, and clustering. `SCVisualizer` centralizes stylistic choices for embedding viz, multi-gene panels, and dotplots.
-
-```python
-from nasp_atlas.single_cell import SCUtils
-from nasp_atlas.single_cell import SCVisualizer
-
-sc_utils = SCUtils(output_dir="results")
-adata = SCUtils.load_h5ad("atlas_subset.h5ad")
-
-sc_utils.viz.plot_multi_gene_umap_panel(
-    adata,
-    genes=["AIM2", "CGAS", "ZBP1"],
-    filename="dna_sensing_genes",
-    gene_symbol_column="feature_name",
-    expression_layer=None,
-)
-```
-
-For NASP module marker panels, resolve symbols through the given anndata's gene-symbol column:
+Load an atlas subset, resolve nucleic-acid sensors from the compendium, and
+plot their expression via UMAP:
 
 ```python
 from nasp_compendium import GeneModules
+from nasp_atlas.single_cell import SCUtils
 
-viz = SCVisualizer(output_dir="results/tabula_sapiens_scoring_dev")
-genes = GeneModules.genes(
-    "NASP_DNA_SENSING",
+single_cell = SCUtils(output_dir="results")
+adata = single_cell.load_h5ad("atlas_subset.h5ad")
+
+gene_modules = GeneModules()
+nucleic_acid_sensors = gene_modules.sensors(
+    "nucleic_acid_sensors",
     adata=adata,
     gene_symbol_column="feature_name",
     output="symbols",
 )
 
-viz.plot_multi_gene_umap_panel(
+single_cell.viz.plot_multi_gene_umap_panel(
     adata,
-    genes=genes,
-    filename="NASP_DNA_SENSING_gene_expression_umaps",
+    genes=nucleic_acid_sensors,
+    filename="nucleic_acid_sensors",
     gene_symbol_column="feature_name",
     expression_layer=None,
     ncols=6,
 )
 ```
 
-Score gene modules:
+## Modules
 
-```python
-from nasp_atlas.single_cell import module_score_name
-from nasp_atlas.single_cell import score_aucell_modules
-from nasp_atlas.single_cell import score_scanpy_modules
+| Module | Purpose | Documentation |
+| --- | --- | --- |
+| `nasp_atlas.single_cell` | Processing, module scoring, associations, and reusable utilities | [SCProcessor](docs/scprocessor.md) |
+| `nasp_atlas.single_cell.visualization` | Embeddings, heatmaps, dot plots, association plots, and NASP summaries | [SCVisualizer](docs/scvisualizer.md) |
+| `nasp_atlas.cellxgene` | CELLxGENE Census metadata querying, categorization, filtering, and plots | [CELLxGENE](nasp_atlas/cellxgene/README.md) |
+| `nasp_atlas.analysis` | Tabula Sapiens workflows, donor-aware inference, and atlas summaries | [Outputs and interpretation](docs/analysis_outputs.md) |
 
-modules = score_scanpy_modules(
-    adata,
-    ["NASP_DNA_SENSING", "NASP_RNA_SENSING"],
-    gene_symbol_column="feature_name",
-)
-score_keys = [module_score_name(module, scorer="scanpy") for module in modules]
+## Further documentation
 
-adata_auc, auc_df, auc_modules = score_aucell_modules(
-    adata,
-    ["NASP_DNA_SENSING", "NASP_RNA_SENSING"],
-    gene_symbol_column="feature_name",
-)
-```
-
-</br>
-
-### CELLxGENE metadata
-
-The CELLxGENE module reads Census metadata, collapses raw disease and tissue
-labels into broader categories, filters metadata tables, and generates metadata visualizations.
-
-```python
-from nasp_atlas.cellxgene import CXGMetadata
-
-query = CXGMetadata.from_census()
-query.annotate_default_categories()
-
-query.plot_disease_makeup("disease_makeup.png")
-query.plot_tissue_makeup("tissue_makeup.png")
-query.plot_age_ranges("age_ranges.png")
-
-query.to_csv("cellxgene_metadata.tsv")
-```
-
-See [`nasp_atlas/cellxgene/README.md`](nasp_atlas/cellxgene/README.md) for
-specific examples.
+- [Analysis outputs and biological interpretation](docs/analysis_outputs.md)
+- [PBS and command-line workflows](run_scripts/README.md)

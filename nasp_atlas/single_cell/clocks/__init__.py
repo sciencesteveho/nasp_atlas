@@ -7,6 +7,7 @@ from nasp_atlas.single_cell.clocks.model import model_feature_coverage
 from nasp_atlas.single_cell.clocks.model import predict_metacells
 from nasp_atlas.single_cell.clocks.preprocess import build_human_entrez_map
 from nasp_atlas.single_cell.clocks.preprocess import build_mouse_ortholog_map
+from nasp_atlas.single_cell.clocks.preprocess import filter_low_count_genes
 from nasp_atlas.single_cell.clocks.preprocess import (
     map_counts_to_model_features,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "align_to_model_features",
     "build_human_entrez_map",
     "build_mouse_ortholog_map",
+    "filter_low_count_genes",
     "load_clock",
     "map_counts_to_model_features",
     "model_feature_coverage",

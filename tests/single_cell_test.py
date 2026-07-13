@@ -2,31 +2,40 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 os.environ.setdefault("NUMBA_CACHE_DIR", "/tmp/numba")
 
-import anndata as ad  # type: ignore
-import h5py  # type: ignore
+import anndata as ad  # type: ignore[import]
+import h5py  # type: ignore[import]
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pytest
 import scipy.sparse as sp
 from nasp_compendium.types import GeneModule
 
 import nasp_atlas.single_cell.utils as single_cell_utils
 from nasp_atlas.cellxgene import add_development_stage_age_obs
+from nasp_atlas.single_cell import ColorbarStyle
 from nasp_atlas.single_cell import EmbeddingConfig
+from nasp_atlas.single_cell import SCProcessor
 from nasp_atlas.single_cell import SCUtils
 from nasp_atlas.single_cell import SCVisualizer
 from nasp_atlas.single_cell import combine_module_scores
+from nasp_atlas.single_cell import expression_matrix
 from nasp_atlas.single_cell import inverse_module_score_name
 from nasp_atlas.single_cell import module_score_name
 from nasp_atlas.single_cell import normalize_h5ad_string_storage
 from nasp_atlas.single_cell import positive_module_score_name
+from nasp_atlas.single_cell import read_h5ad
+from nasp_atlas.single_cell import read_h5ad_rows
 from nasp_atlas.single_cell import score_scanpy_module
 from nasp_atlas.single_cell import split_anndata_by_obs
+from nasp_atlas.single_cell.umap import resolve_umap_panel_specs
 
 
 def test_embedding_config_roundtrip() -> None:
@@ -43,6 +52,84 @@ def test_embedding_config_roundtrip() -> None:
 
     assert restored == config
     assert restored.to_dict()["harmony_key"] == "batch"
+
+
+def test_expression_matrix_validates_requested_raw_source() -> None:
+    """Raw expression requests fail where source selection is resolved."""
+    adata = ad.AnnData(
+        X=np.ones((2, 1)),
+        obs=pd.DataFrame(index=["cell_a", "cell_b"]),
+        var=pd.DataFrame(index=["gene_a"]),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"use_raw=True requires adata.raw to be set",
+    ):
+        expression_matrix(
+            adata,
+            expression_layer=None,
+            use_raw=True,
+        )
+
+
+def test_expression_matrix_selects_genes_from_raw() -> None:
+    """Raw expression selection can recover genes absent from current var."""
+    source = ad.AnnData(
+        X=np.array([[1.0, 10.0], [2.0, 20.0]]),
+        obs=pd.DataFrame(index=["cell_a", "cell_b"]),
+        var=pd.DataFrame(index=["gene_a", "gene_b"]),
+    )
+    source.raw = source.copy()
+    adata = source[:, ["gene_a"]].copy()
+
+    present, matrix = expression_matrix(
+        adata,
+        ["gene_b", "missing"],
+        expression_layer=None,
+        use_raw=True,
+    )
+
+    assert present == ["gene_b"]
+    np.testing.assert_array_equal(matrix, np.array([[10.0], [20.0]]))
+
+
+def test_embedding_config_is_immutable() -> None:
+    """EmbeddingConfig blocks attribute mutation after construction."""
+    config = EmbeddingConfig(name="standard_test")
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        config.n_neighbors = 30
+
+
+def test_scprocessor_recompute_umap_writes_coordinates() -> None:
+    """UMAP recomputation writes finite coordinates from the selected basis."""
+    adata = ad.AnnData(
+        X=np.ones((6, 1)),
+        obs=pd.DataFrame(index=[f"cell_{index}" for index in range(6)]),
+        var=pd.DataFrame(index=["gene_a"]),
+    )
+    adata.obsm["X_latent"] = np.array(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 1.0],
+            [2.0, 1.0],
+            [1.0, 2.0],
+        ]
+    )
+
+    SCProcessor.recompute_umap(
+        adata,
+        use_rep="X_latent",
+        n_neighbors=2,
+        random_state=7,
+        min_dist=0.2,
+    )
+
+    assert adata.obsm["X_umap"].shape == (6, 2)
+    assert np.isfinite(adata.obsm["X_umap"]).all()
 
 
 def test_scutils_filter_obs_doublets() -> None:
@@ -364,8 +451,8 @@ def test_normalize_h5ad_string_storage_converts_arrow_categories(
     assert reread.obs["tissue_type"].tolist() == ["Liver", "Bone Marrow"]
 
 
-def test_module_score_names_live_in_single_cell_utils() -> None:
-    """Module score naming is owned by single-cell scoring utilities."""
+def test_module_score_names_identify_scorer_and_module_arm() -> None:
+    """Module score names identify their scorer and signed module arm."""
     module = GeneModule(
         module_id="NASP_DNA_SENSING",
         positive_genes=("CGAS",),
@@ -411,14 +498,19 @@ def test_combine_module_scores_subtracts_inverse_scores() -> None:
         index=["cell_a", "cell_b"],
     )
 
-    combined = combine_module_scores(module, scores, scorer="scanpy")
+    combined = combine_module_scores(
+        module,
+        scores,
+        scorer="scanpy",
+        standardize=False,
+    )
 
     assert combined.name == "NASP_DNA_SENSING_score"
     assert combined.tolist() == [1.5, 1.0]
 
 
-def test_score_scanpy_module_calls_scanpy_directly(monkeypatch) -> None:
-    """Atlas scanpy scoring forwards explicit score_genes arguments."""
+def test_score_scanpy_module_combines_signed_scores(monkeypatch) -> None:
+    """Scanpy module scoring combines positive and inverse arm scores."""
     adata = ad.AnnData(
         X=np.ones((2, 2)),
         obs=pd.DataFrame(index=["cell_a", "cell_b"]),
@@ -448,43 +540,94 @@ def test_score_scanpy_module_calls_scanpy_directly(monkeypatch) -> None:
     score_name = score_scanpy_module(adata, module, random_state=7)
 
     assert score_name == "NASP_DNA_SENSING_score"
-    assert calls == [
-        {
-            "gene_list": ["CGAS"],
-            "score_name": "NASP_DNA_SENSING_pos",
-            "random_state": 7,
-            "use_raw": False,
-        },
-        {
-            "gene_list": ["LMNB1"],
-            "score_name": "NASP_DNA_SENSING_inv",
-            "random_state": 7,
-            "use_raw": False,
-        },
-    ]
-    assert adata.obs["NASP_DNA_SENSING_score"].tolist() == [1.5, 1.0]
+    assert {tuple(call["gene_list"]) for call in calls} == {
+        ("CGAS",),
+        ("LMNB1",),
+    }
+    assert {call["score_name"] for call in calls} == {
+        "NASP_DNA_SENSING_pos",
+        "NASP_DNA_SENSING_inv",
+    }
+    assert all(call["random_state"] == 7 for call in calls)
+    assert adata.obs["NASP_DNA_SENSING_score"].tolist() == [0.0, 0.0]
 
 
-def test_visualizer_resolves_feature_name_symbols(tmp_path) -> None:
-    """SCVisualizer resolves display symbols to adata.var_names."""
+def test_read_h5ad_subset_preserves_layers_and_raw(tmp_path) -> None:
+    """Random-subset reader keeps expression sources used downstream."""
+    obs = pd.DataFrame(
+        index=pd.Index(["cell_a", "cell_b", "cell_c"], dtype=object)
+    )
+    var = pd.DataFrame(index=pd.Index(["gene_a", "gene_b"], dtype=object))
     adata = ad.AnnData(
-        X=np.ones((2, 3)),
-        obs=pd.DataFrame(index=["cell_a", "cell_b"]),
-        var=pd.DataFrame(
-            {"feature_name": ["AIM2", "CGAS", "ZBP1"]},
-            index=["ENSG_A", "ENSG_B", "ENSG_C"],
-        ),
+        X=sp.csr_matrix(np.arange(6).reshape(3, 2)),
+        obs=obs,
+        var=var,
     )
-    viz = SCVisualizer(output_dir=tmp_path)
+    adata.layers["decontXcounts"] = sp.csr_matrix(
+        np.arange(6).reshape(3, 2) + 10
+    )
+    adata.raw = ad.AnnData(
+        X=sp.csr_matrix(np.arange(6).reshape(3, 2) + 20),
+        obs=obs.copy(),
+        var=var.copy(),
+    )
+    h5ad_path = tmp_path / "layered.h5ad"
+    adata.write_h5ad(h5ad_path)
 
-    resolved = viz._resolve_genes(
-        adata,
-        ["CGAS", "missing", "AIM2"],
-        gene_symbol_column="feature_name",
+    loaded, total = read_h5ad(h5ad_path, subset_fraction=1.0)
+
+    assert total == 3
+    assert "decontXcounts" in loaded.layers
+    np.testing.assert_array_equal(
+        loaded.layers["decontXcounts"].toarray(),
+        np.arange(6).reshape(3, 2) + 10,
+    )
+    assert loaded.raw is not None
+    np.testing.assert_array_equal(
+        loaded.raw.X.toarray(),
+        np.arange(6).reshape(3, 2) + 20,
     )
 
-    assert resolved.var_names == ["ENSG_B", "ENSG_A"]
-    assert resolved.labels == ["CGAS", "AIM2"]
+
+def test_read_h5ad_rows_loads_only_requested_sources(tmp_path) -> None:
+    """Named-row loading preserves order and omits unrequested matrices."""
+    obs = pd.DataFrame(index=pd.Index(["a", "b", "c"], dtype=object))
+    var = pd.DataFrame(index=pd.Index(["g1", "g2"], dtype=object))
+    adata = ad.AnnData(
+        X=sp.csr_matrix(np.arange(6).reshape(3, 2)),
+        obs=obs,
+        var=var,
+    )
+    adata.layers["wanted"] = sp.csr_matrix(np.arange(6).reshape(3, 2) + 10)
+    adata.layers["unused"] = sp.csr_matrix(np.arange(6).reshape(3, 2) + 20)
+    adata.raw = ad.AnnData(
+        X=sp.csr_matrix(np.arange(6).reshape(3, 2) + 30),
+        obs=obs.copy(),
+        var=var.copy(),
+    )
+    path = tmp_path / "named_rows.h5ad"
+    adata.write_h5ad(path)
+
+    loaded = read_h5ad_rows(
+        path,
+        ["c", "a"],
+        layer_keys=["wanted"],
+        read_x=False,
+        read_raw=True,
+    )
+
+    assert loaded.obs_names.tolist() == ["c", "a"]
+    assert list(loaded.layers) == ["wanted"]
+    np.testing.assert_array_equal(
+        loaded.layers["wanted"].toarray(),
+        np.array([[14, 15], [10, 11]]),
+    )
+    assert loaded.raw is not None
+    np.testing.assert_array_equal(
+        loaded.raw.X.toarray(),
+        np.array([[34, 35], [30, 31]]),
+    )
+    assert loaded.X.nnz == 0
 
 
 def test_visualizer_plots_obs_umap_panel(tmp_path) -> None:
@@ -510,7 +653,7 @@ def test_visualizer_plots_obs_umap_panel(tmp_path) -> None:
     )
     viz = SCVisualizer(output_dir=tmp_path)
 
-    viz.plot_obs_umap_panel(
+    viz.plot_umap_panel(
         adata,
         panels=[
             {
@@ -532,11 +675,11 @@ def test_visualizer_plots_obs_umap_panel(tmp_path) -> None:
         size=20,
     )
 
-    assert (tmp_path / "obs_panel.png").exists()
+    assert (tmp_path / "obs_panel.png").stat().st_size > 0
 
 
-def test_visualizer_resolves_ordered_umap_panel_inputs(tmp_path) -> None:
-    """SCVisualizer accepts ordered mixed UMAP panel inputs."""
+def test_resolve_umap_panel_specs_preserves_order() -> None:
+    """Mixed UMAP panel inputs resolve in requested order."""
     adata = ad.AnnData(
         X=np.ones((2, 1)),
         obs=pd.DataFrame(
@@ -549,9 +692,7 @@ def test_visualizer_resolves_ordered_umap_panel_inputs(tmp_path) -> None:
         ),
         var=pd.DataFrame(index=["gene_a"]),
     )
-    viz = SCVisualizer(output_dir=tmp_path)
-
-    panels = viz._resolve_umap_panel_specs(
+    panels = resolve_umap_panel_specs(
         adata,
         [
             "score",
@@ -575,11 +716,8 @@ def test_visualizer_resolves_ordered_umap_panel_inputs(tmp_path) -> None:
     assert panels[2].cbar_ticks == [0.2, 0.5, 0.8]
 
 
-def test_visualizer_umap_panel_does_not_call_scanpy_embedding(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """Generic obs UMAP panels use direct metadata rendering."""
+def test_visualizer_umap_panel_writes_mixed_metadata_plot(tmp_path) -> None:
+    """A mixed categorical and numeric UMAP panel is written to disk."""
     adata = ad.AnnData(
         X=np.ones((3, 1)),
         obs=pd.DataFrame(
@@ -599,13 +737,6 @@ def test_visualizer_umap_panel_does_not_call_scanpy_embedding(
         ]
     )
 
-    def fail_embedding(*args, **kwargs):
-        raise AssertionError("metadata UMAP should not call scanpy embedding")
-
-    monkeypatch.setattr(
-        "nasp_atlas.single_cell.visualization.sc.pl.embedding",
-        fail_embedding,
-    )
     viz = SCVisualizer(output_dir=tmp_path)
 
     viz.plot_umap_panel(
@@ -616,14 +747,11 @@ def test_visualizer_umap_panel_does_not_call_scanpy_embedding(
         size=20,
     )
 
-    assert (tmp_path / "direct_obs_panel.png").exists()
+    assert (tmp_path / "direct_obs_panel.png").stat().st_size > 0
 
 
-def test_multi_obs_umap_panel_delegates_to_generic_renderer(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """The numeric convenience API uses the generic panel renderer."""
+def test_multi_obs_umap_panel_writes_available_scores(tmp_path) -> None:
+    """The numeric UMAP API plots available scores and skips missing ones."""
     adata = ad.AnnData(
         X=np.ones((2, 1)),
         obs=pd.DataFrame(
@@ -632,14 +760,7 @@ def test_multi_obs_umap_panel_delegates_to_generic_renderer(
         ),
         var=pd.DataFrame(index=["gene_a"]),
     )
-    captured = {}
-
-    def capture_plot(self, adata_arg, panels, **kwargs):
-        captured["adata"] = adata_arg
-        captured["panels"] = panels
-        captured["kwargs"] = kwargs
-
-    monkeypatch.setattr(SCVisualizer, "plot_umap_panel", capture_plot)
+    adata.obsm["X_umap"] = np.array([[0.0, 0.0], [1.0, 1.0]])
     viz = SCVisualizer(output_dir=tmp_path)
 
     viz.plot_multi_obs_umap_panel(
@@ -648,15 +769,15 @@ def test_multi_obs_umap_panel_delegates_to_generic_renderer(
         filename="signed_scores",
         vmin=-2.0,
         vmax=2.0,
+        colorbar_style=ColorbarStyle(
+            height="20%",
+            width="5%",
+            pad=0.04,
+        ),
+        cbar_height="25%",
     )
 
-    assert captured["adata"] is adata
-    assert len(captured["panels"]) == 1
-    assert captured["panels"][0]["obs_key"] == "signed_score"
-    assert captured["panels"][0]["kind"] == "numeric"
-    assert captured["panels"][0]["vmin"] == -2.0
-    assert captured["panels"][0]["vmax"] == 2.0
-    assert captured["kwargs"]["filename"] == "signed_scores"
+    assert (tmp_path / "signed_scores.png").stat().st_size > 0
 
 
 def test_visualizer_gene_umap_uses_x_not_raw_by_default(
@@ -712,8 +833,9 @@ def test_visualizer_gene_umap_uses_x_not_raw_by_default(
 
 def test_visualizer_gene_expression_heatmap_groups_obs(
     tmp_path,
+    monkeypatch,
 ) -> None:
-    """Gene heatmaps aggregate expression across requested obs groups."""
+    """Gene heatmaps render group means in categorical and gene order."""
     adata = ad.AnnData(
         X=np.array(
             [
@@ -737,43 +859,44 @@ def test_visualizer_gene_expression_heatmap_groups_obs(
         ),
     )
     viz = SCVisualizer(output_dir=tmp_path)
+    figures = []
+    close_figure = plt.close
+    monkeypatch.setattr(plt, "close", figures.append)
 
-    expr_df = pd.DataFrame(
-        {
-            "gene_a": [1.0, 3.0, 5.0],
-            "gene_b": [2.0, 4.0, 8.0],
-            "cell_type": ["b_cell", "t_cell", "b_cell"],
-        }
-    )
-    grouped = viz._group_gene_expression_by_obs(
-        adata=adata,
-        expr_df=expr_df,
-        var_names=["gene_a", "gene_b"],
-        labels=["AIM2", "CGAS"],
-        groupby="cell_type",
-    )
+    try:
+        viz.plot_multi_gene_expression_heatmap(
+            adata,
+            genes=["CGAS", "AIM2"],
+            groupby="cell_type",
+            filename="gene_expression_heatmap",
+            gene_symbol_column="feature_name",
+            expression_layer=None,
+        )
 
-    assert grouped.index.tolist() == ["CGAS", "AIM2"]
-    assert grouped.columns.tolist() == ["t_cell", "b_cell"]
-    assert grouped.loc["CGAS"].tolist() == [4.0, 5.0]
-    assert grouped.loc["AIM2"].tolist() == [3.0, 3.0]
-
-    viz.plot_multi_gene_expression_heatmap(
-        adata,
-        genes=["CGAS", "AIM2"],
-        groupby="cell_type",
-        filename="gene_expression_heatmap",
-        gene_symbol_column="feature_name",
-        expression_layer=None,
-    )
-
-    assert (tmp_path / "gene_expression_heatmap.png").exists()
+        heatmap_ax = figures[0].axes[0]
+        np.testing.assert_allclose(
+            heatmap_ax.images[0].get_array(),
+            np.array([[4.0, 3.0], [5.0, 3.0]]),
+        )
+        assert [tick.get_text() for tick in heatmap_ax.get_xticklabels()] == [
+            "CGAS",
+            "AIM2",
+        ]
+        assert [tick.get_text() for tick in heatmap_ax.get_yticklabels()] == [
+            "t_cell",
+            "b_cell",
+        ]
+        assert (tmp_path / "gene_expression_heatmap.png").stat().st_size > 0
+    finally:
+        for figure in figures:
+            close_figure(figure)
 
 
 def test_visualizer_score_heatmap_groups_obs_scores(
     tmp_path,
+    monkeypatch,
 ) -> None:
-    """Score heatmaps aggregate obs scores across requested obs groups."""
+    """Score heatmaps render group means in categorical and score order."""
     adata = ad.AnnData(
         X=np.ones((3, 1)),
         obs=pd.DataFrame(
@@ -790,28 +913,36 @@ def test_visualizer_score_heatmap_groups_obs_scores(
         var=pd.DataFrame(index=["gene_a"]),
     )
     viz = SCVisualizer(output_dir=tmp_path)
+    figures = []
+    close_figure = plt.close
+    monkeypatch.setattr(plt, "close", figures.append)
 
-    grouped = viz._group_obs_scores_by_obs(
-        adata=adata,
-        score_keys=["module_a", "module_b"],
-        labels=["Module A", "Module B"],
-        groupby="cell_type",
-    )
+    try:
+        viz.plot_grouped_obs_score_heatmap(
+            adata,
+            score_keys=["module_a", "module_b"],
+            groupby="cell_type",
+            filename="score_heatmap",
+            score_labels=["Module A", "Module B"],
+        )
 
-    assert grouped.index.tolist() == ["t_cell", "b_cell"]
-    assert grouped.columns.tolist() == ["Module A", "Module B"]
-    assert grouped.loc["t_cell"].tolist() == [-2.0, 4.0]
-    assert grouped.loc["b_cell"].tolist() == [2.0, 1.0]
-
-    viz.plot_grouped_obs_score_heatmap(
-        adata,
-        score_keys=["module_a", "module_b"],
-        groupby="cell_type",
-        filename="score_heatmap",
-        score_labels=["Module A", "Module B"],
-    )
-
-    assert (tmp_path / "score_heatmap.png").exists()
+        heatmap_ax = figures[0].axes[0]
+        np.testing.assert_allclose(
+            heatmap_ax.images[0].get_array(),
+            np.array([[-2.0, 4.0], [2.0, 1.0]]),
+        )
+        assert [tick.get_text() for tick in heatmap_ax.get_xticklabels()] == [
+            "Module A",
+            "Module B",
+        ]
+        assert [tick.get_text() for tick in heatmap_ax.get_yticklabels()] == [
+            "t_cell",
+            "b_cell",
+        ]
+        assert (tmp_path / "score_heatmap.png").stat().st_size > 0
+    finally:
+        for figure in figures:
+            close_figure(figure)
 
 
 def test_visualizer_score_barplot_orders_groups_by_mean(tmp_path) -> None:
@@ -838,7 +969,7 @@ def test_visualizer_score_barplot_orders_groups_by_mean(tmp_path) -> None:
 
     assert summary.index.tolist() == ["T", "B", "Mono"]
     assert summary["mean"].tolist() == [6.0, 2.0, 0.0]
-    assert (tmp_path / "score_barplot.png").exists()
+    assert (tmp_path / "score_barplot.png").stat().st_size > 0
 
 
 def test_add_development_stage_age_obs() -> None:

@@ -10,8 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-import anndata as ad  # type: ignore
-import scanpy as sc  # type: ignore
+import anndata as ad  # type: ignore[import]
+import scanpy as sc  # type: ignore[import]
 
 from nasp_atlas.single_cell.config import EmbeddingConfig
 from nasp_atlas.single_cell.scprocessor import SCProcessor
@@ -28,25 +28,27 @@ class SCUtils:
     subdirectory named after the config (`output_dir / config.name`), and the
     config JSON is persisted alongside the results for full traceability.
 
-    Example usage:
-      >>> from nasp_atlas.single_cell import EmbeddingConfig
-      >>> from nasp_atlas.single_cell import SCUtils
-      >>> config = EmbeddingConfig(
-      ...     name="standard_harmony_fa",
-      ...     harmony_key="condition",
-      ...     force_directed="fa",
-      ... )
-      >>> adata = SCUtils.load_h5ad("data/dataset.h5ad")
-      >>> sc_utils = SCUtils(output_dir="results", config=config)
-      >>> sc_utils.processor.generate_embeddings(adata, config=config)
-      >>> sc_utils.viz.plot_embedding(adata, color="condition", filename="umap")
-
     Attributes:
       output_dir: Directory where all outputs are written
       config: EmbeddingConfig driving the run (if provided)
       random_seed: Seed used throughout
       processor: SCProcessor instance
       viz: SCVisualizer instance
+
+    Example Usage:
+      >>> from nasp_atlas.single_cell import EmbeddingConfig
+      >>> from nasp_atlas.single_cell import SCUtils
+      >>> config = EmbeddingConfig(name="standard")
+      >>> toolkit = SCUtils(
+      ...     output_dir="path/to/output",
+      ...     config=config,
+      ... )
+      >>> adata = toolkit.load_h5ad("path/to/input.h5ad")
+      >>> embedded = toolkit.processor.generate_embeddings(
+      ...     adata,
+      ...     config=config,
+      ...     save_h5ad=False,
+      ... )
     """
 
     def __init__(

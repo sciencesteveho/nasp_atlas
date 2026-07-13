@@ -3,34 +3,22 @@
 from __future__ import annotations
 
 import logging
-from importlib import import_module
 from pathlib import Path
-from types import ModuleType
 from typing import Any, Protocol, runtime_checkable
 
-import anndata as ad  # type: ignore
+import anndata as ad  # type: ignore[import]
+import decoupler as dc  # type: ignore[import]
+import harmonypy  # type: ignore[import]
 import numpy as np
 import pandas as pd
-import scanpy as sc  # type: ignore
-import scipy.sparse as sp  # type: ignore
-from anndata.typing import XDataType  # type: ignore
+import scanpy as sc  # type: ignore[import]
+import scipy.sparse as sp  # type: ignore[import]
+from anndata.typing import XDataType  # type: ignore[import]
 
 from nasp_atlas.single_cell.config import EmbeddingConfig
 
 
 logger = logging.getLogger(__name__)
-
-
-def _optional_module(name: str) -> ModuleType | None:
-    """Import an optional module if it is available."""
-    try:
-        return import_module(name)
-    except ImportError:
-        return None
-
-
-dc = _optional_module("decoupler")
-harmonypy = _optional_module("harmonypy")
 
 
 @runtime_checkable
@@ -61,20 +49,20 @@ class SCProcessor:
       "pearson_residuals": Pearson-residual HVG selection + normalization -> PCA
         (uses sc.experimental.pp.recipe_pearson_residuals)
 
-    Example usage (standalone):
-      >>> from nasp_atlas.single_cell import EmbeddingConfig
-      >>> from nasp_atlas.single_cell import SCProcessor
-      >>> config = EmbeddingConfig(
-      ...     name="standard_harmony",
-      ...     harmony_key="condition",
-      ... )
-      >>> proc = SCProcessor(output_dir="results/standard_harmony")
-      >>> proc.generate_embeddings(adata, config=config)
-      >>> proc.cluster(adata, resolution=0.5)
-
     Attributes:
       output_dir: Directory where outputs are written
       random_seed: Seed used throughout
+
+    Example Usage:
+      >>> import anndata as ad
+      >>> from nasp_atlas.single_cell import EmbeddingConfig, SCProcessor
+      >>> adata = ad.read_h5ad("path/to/input.h5ad")
+      >>> processor = SCProcessor(output_dir="path/to/output")
+      >>> embedded = processor.generate_embeddings(
+      ...     adata,
+      ...     config=EmbeddingConfig(name="standard"),
+      ...     save_h5ad=False,
+      ... )
     """
 
     def __init__(
@@ -257,18 +245,12 @@ class SCProcessor:
             )
             return "X_pca"
 
-        if harmonypy is None:
-            raise ImportError(
-                "harmonypy is required when config.harmony_key is set. "
-                "Install harmonypy to run Harmony integration."
-            )
-
         logger.info(
             "[generate_embeddings] Harmony integration on %s",
             config.harmony_key,
         )
         ho = harmonypy.run_harmony(
-            adata.obsm["X_pca"],
+            np.asarray(adata.obsm["X_pca"], dtype=float),
             adata.obs,
             config.harmony_key,
             random_state=self.random_seed,
@@ -516,12 +498,6 @@ class SCProcessor:
           cluster_labels: {cluster_id: assigned_label}
           score: Per-cell score anndata from decoupleR
         """
-        if dc is None:
-            raise ImportError(
-                "decoupler is required for auto_annotate_from_scores. "
-                "Install decoupler to use this method."
-            )
-
         score = dc.pp.get_obsm(adata, key=score_key)
         score.obs[leiden_key] = adata.obs[leiden_key].values
         score_df = score.to_df()
@@ -558,23 +534,23 @@ class SCProcessor:
         return cluster_means, cluster_labels, score
 
     @staticmethod
-    def _recompute_umap(
+    def recompute_umap(
         adata: ad.AnnData,
         *,
         use_rep: str | None = None,
         n_neighbors: int = 15,
-        random_state: int = 0,
+        random_state: int = 42,
         min_dist: float = 0.5,
     ) -> None:
         """Recompute nearest-neighbor graph and UMAP coordinates.
 
         Args:
-        adata: The AnnData to recompute for.
-        use_rep: Key in `adata.obsm` to use for neighbor search. If None, falls
-        back to `X_pca` (scanpy default).
-        n_neighbors: Number of neighbors for graph construction.
-        random_state: Seed for UMAP reproducibility.
-        min_dist: How tight umap points cluster.
+          adata: The AnnData to recompute for.
+          use_rep: Key in `adata.obsm` to use for neighbor search. If None,
+            falls back to `X_pca` (scanpy default).
+          n_neighbors: Number of neighbors for graph construction.
+          random_state: Seed for UMAP reproducibility.
+          min_dist: How tightly UMAP points cluster.
         """
         if use_rep is not None and use_rep not in adata.obsm:
             raise KeyError(

@@ -9,20 +9,22 @@ import pandas as pd
 import seaborn as sns
 from matplotlib.axes import Axes
 from matplotlib.patches import PathPatch
+from matplotlib.patches import Rectangle
 from matplotlib.path import Path as MplPath
 
-from nasp_atlas.cellxgene.categorize import _categorize_disease
-from nasp_atlas.cellxgene.categorize import _categorize_tissue
-from nasp_atlas.cellxgene.filter import _humanize_label
-from nasp_atlas.cellxgene.visualization.composition import _count_dataset_labels
-from nasp_atlas.cellxgene.visualization.composition import _format_plot_title
+from nasp_atlas.cellxgene.categorize import categorize_disease
+from nasp_atlas.cellxgene.categorize import categorize_tissue
+from nasp_atlas.cellxgene.filter import humanize_label
+from nasp_atlas.cellxgene.visualization.composition import count_dataset_labels
+from nasp_atlas.cellxgene.visualization.composition import format_plot_title
 from nasp_atlas.cellxgene.visualization.composition import (
-    _order_labels_by_category,
+    order_labels_by_category,
 )
-from nasp_atlas.cellxgene.visualization.composition import _select_plot_obs
+from nasp_atlas.cellxgene.visualization.composition import select_plot_obs
 
 
 def _label_colors(
+    *,
     base_rgb: tuple[float, float, float],
     n_siblings: int,
     sibling_index: int,
@@ -71,12 +73,16 @@ def _build_sankey_layout(
         'category_colors': dict mapping category name to base (r,g,b)
     """
     total_cells = counts["n_cells"].sum()
-    categories = counts["category"].unique().tolist()
+    categories = counts["category"].astype(str).unique().tolist()
     n_categories = len(categories)
 
     palette_colors = sns.color_palette(cmap, n_colors=n_categories)
     category_colors: dict[str, tuple[float, float, float]] = {
-        category: tuple(palette_colors[index])  # type: ignore
+        category: (
+            float(palette_colors[index][0]),
+            float(palette_colors[index][1]),
+            float(palette_colors[index][2]),
+        )
         for index, category in enumerate(categories)
     }
 
@@ -120,16 +126,17 @@ def _build_sankey_layout(
     }
 
     for row in counts.itertuples():
+        category = str(row.category)
         node_height = row.n_cells * scale
         node_y_top = right_cursor
         right_cursor -= node_height + node_gap
 
-        sibling_index = category_sibling_counters[row.category]  # type: ignore
-        category_sibling_counters[row.category] += 1  # type: ignore
+        sibling_index = category_sibling_counters[category]
+        category_sibling_counters[category] += 1
 
         node_color = _label_colors(
-            base_rgb=category_colors[row.category],  # type: ignore
-            n_siblings=category_sibling_totals[row.category],  # type: ignore
+            base_rgb=category_colors[category],
+            n_siblings=category_sibling_totals[category],
             sibling_index=sibling_index,
         )
 
@@ -144,8 +151,8 @@ def _build_sankey_layout(
             }
         )
 
-        src_y_top = category_right_cursors[row.category]  # type: ignore
-        category_right_cursors[row.category] -= node_height  # type: ignore
+        src_y_top = category_right_cursors[category]
+        category_right_cursors[category] -= node_height
 
         ribbons.append(
             {
@@ -166,6 +173,7 @@ def _build_sankey_layout(
 
 
 def _draw_bezier_ribbon(
+    *,
     ax: Axes,
     x_src: float,
     x_dst: float,
@@ -258,16 +266,27 @@ def _plot_dataset_sankey(
 
     Returns:
       Path to the written figure file.
+
+    Example Usage:
+      >>> metadata_sankey(
+      ...     obs,
+      ...     label_column="tissue",
+      ...     outpath="tissue_sankey.png",
+      ... )
     """
-    counts = _count_dataset_labels(obs, dataset_id, label_column)
-    plot_obs = _select_plot_obs(obs, dataset_id)
+    counts = count_dataset_labels(
+        obs,
+        dataset_id=dataset_id,
+        label_column=label_column,
+    )
+    plot_obs = select_plot_obs(obs, dataset_id=dataset_id)
     total_cells = int(counts["n_cells"].sum())
     if "dataset_id" in plot_obs:
         n_datasets = int(plot_obs["dataset_id"].nunique())
     else:
         n_datasets = 1
 
-    ordered, _ = _order_labels_by_category(
+    ordered, _ = order_labels_by_category(
         counts=counts,
         categorizer=categorizer,
         ascending=False,
@@ -289,7 +308,7 @@ def _plot_dataset_sankey(
 
     for segment in layout["left_segments"]:
         ax.add_patch(
-            plt.Rectangle(  # type: ignore
+            Rectangle(
                 (x_left_left, segment["y_top"] - segment["height"]),
                 node_width,
                 segment["height"],
@@ -303,7 +322,7 @@ def _plot_dataset_sankey(
 
     for node in layout["right_nodes"]:
         ax.add_patch(
-            plt.Rectangle(  # type: ignore
+            Rectangle(
                 (x_right_left, node["y_top"] - node["height"]),
                 node_width,
                 node["height"],
@@ -335,7 +354,7 @@ def _plot_dataset_sankey(
         ax.text(
             x_left_left - label_pad,
             y_mid,
-            _humanize_label(segment["category"], display_names),
+            humanize_label(segment["category"], display_names),
             ha="right",
             va="center",
             fontsize=fontsize,
@@ -357,7 +376,13 @@ def _plot_dataset_sankey(
             transform=ax.transAxes,
         )
 
-    ax.set_title(_format_plot_title(dataset_id, total_cells, n_datasets))
+    ax.set_title(
+        format_plot_title(
+            dataset_id=dataset_id,
+            total_cells=total_cells,
+            n_datasets=n_datasets,
+        )
+    )
 
     output_path = Path(outpath)
     fig.savefig(output_path, bbox_inches="tight")
@@ -369,13 +394,13 @@ def _plot_dataset_sankey(
 def _default_categorizer(label_column: str) -> Callable[[object], str] | None:
     """Return a default categorizer for raw CELLxGENE metadata columns."""
     categorizers = {
-        "tissue": _categorize_tissue,
-        "disease": _categorize_disease,
+        "tissue": categorize_tissue,
+        "disease": categorize_disease,
     }
     return categorizers.get(label_column)
 
 
-def _metadata_sankey(
+def metadata_sankey(
     obs: pd.DataFrame,
     *,
     dataset_id: str | None = None,

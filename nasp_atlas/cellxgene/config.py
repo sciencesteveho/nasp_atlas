@@ -11,7 +11,7 @@ from nasp_atlas.cellxgene.categorize import CategorySchema
 from nasp_atlas.cellxgene.categorize import load_category_schema
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class CXGMetadataConfig:
     """Configuration for CELLxGENE metadata queries."""
 
@@ -45,7 +45,10 @@ class CXGMetadataConfig:
         **kwargs: object,
     ) -> Self:
         """Build config using a custom category-schema YAML file or URL."""
-        return cls(category_schema=load_category_schema(source), **kwargs)  # type: ignore
+        return cls(
+            category_schema=load_category_schema(source),
+            **kwargs,  # type: ignore[arg-type]  # dynamic dataclass overrides
+        )
 
     def categorize_disease(self, raw: object) -> str:
         """Map a raw disease label to a configured broad category."""

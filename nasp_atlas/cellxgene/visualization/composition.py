@@ -1,6 +1,6 @@
 """Composition visualization via barplot for CELLxGENE metadata."""
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -12,11 +12,11 @@ from matplotlib.font_manager import FontProperties
 from matplotlib.patches import Rectangle
 from matplotlib.transforms import blended_transform_factory
 
-from nasp_atlas.cellxgene.categorize import _categorize_disease
-from nasp_atlas.cellxgene.categorize import _categorize_tissue
-from nasp_atlas.cellxgene.filter import _humanize_label
-from nasp_atlas.cellxgene.filter import _order_categories
-from nasp_atlas.visualization import _darken_color
+from nasp_atlas.cellxgene.categorize import categorize_disease
+from nasp_atlas.cellxgene.categorize import categorize_tissue
+from nasp_atlas.cellxgene.filter import humanize_label
+from nasp_atlas.cellxgene.filter import order_categories
+from nasp_atlas.visualization import darken_color
 
 
 def _build_makeup_table(
@@ -36,12 +36,12 @@ def _build_makeup_table(
       DF with dataset_id, category, n_cells, fraction, and any merged dataset
         metadata.
     """
-    _validate_columns(obs, ("dataset_id", category_column))
+    validate_columns(obs, ("dataset_id", category_column))
     if obs.empty:
         raise ValueError("Cannot build makeup table from empty obs.")
 
     plot_obs = obs.loc[:, ["dataset_id", category_column]].copy()
-    plot_obs[category_column] = _clean_label_series(plot_obs[category_column])
+    plot_obs[category_column] = clean_label_series(plot_obs[category_column])
 
     counts = (
         plot_obs.groupby(["dataset_id", category_column], observed=True)
@@ -68,32 +68,33 @@ def _build_makeup_table(
     return counts
 
 
-def _validate_columns(obs: pd.DataFrame, columns: Sequence[str]) -> None:
+def validate_columns(obs: pd.DataFrame, columns: Sequence[str]) -> None:
     """Raise a clear error when required obs columns are missing."""
     if missing := [column for column in columns if column not in obs.columns]:
         raise ValueError(f"Missing required obs columns: {', '.join(missing)}.")
 
 
-def _clean_label_series(values: pd.Series) -> pd.Series:
+def clean_label_series(values: pd.Series) -> pd.Series:
     """Return labels with missing and blank values converted to unknown."""
     cleaned = values.fillna("unknown").astype(str).str.strip()
     return cleaned.replace("", "unknown")
 
 
-def _font_size_points(size: object) -> float:
+def _font_size_points(size: float | str | None) -> float:
     """Return a matplotlib font size in points."""
-    return float(FontProperties(size=size).get_size_in_points())  # type: ignore
+    return float(FontProperties(size=size).get_size_in_points())
 
 
-def _select_plot_obs(
+def select_plot_obs(
     obs: pd.DataFrame,
+    *,
     dataset_id: str | None,
 ) -> pd.DataFrame:
     """Return all current obs or the subset matching one dataset."""
     if dataset_id is None:
         plot_obs = obs
     else:
-        _validate_columns(obs, ("dataset_id",))
+        validate_columns(obs, ("dataset_id",))
         plot_obs = obs.loc[obs["dataset_id"] == dataset_id]
 
     if plot_obs.empty:
@@ -104,7 +105,8 @@ def _select_plot_obs(
     return plot_obs
 
 
-def _format_plot_title(
+def format_plot_title(
+    *,
     dataset_id: str | None,
     total_cells: int,
     n_datasets: int,
@@ -124,9 +126,10 @@ def _shorten_identifier(value: object, short_id_chars: int) -> str:
 
 
 def _chunk_dataset_ids(
-    dataset_ids: Sequence[object],
+    *,
+    dataset_ids: Sequence[Hashable],
     chunk_size: int,
-) -> list[list[object]]:
+) -> list[list[Hashable]]:
     """Split dataset IDs into ordered chunks."""
     if chunk_size < 1:
         raise ValueError("chunk_size must be at least 1.")
@@ -138,6 +141,7 @@ def _chunk_dataset_ids(
 
 
 def _format_chunk_output_path(
+    *,
     outpath: str | Path,
     chunk_index: int,
     n_chunks: int,
@@ -152,6 +156,7 @@ def _format_chunk_output_path(
 
 
 def _prepare_stacked_bar_data(
+    *,
     makeup: pd.DataFrame,
     category_order: Sequence[str],
     sort_by_total_cells: bool,
@@ -198,6 +203,7 @@ def _prepare_stacked_bar_data(
 
 
 def _plot_stacked_bar_chunk(
+    *,
     chunk_fraction: pd.DataFrame,
     chunk_total_cells: pd.Series,
     categories: list[str],
@@ -224,7 +230,7 @@ def _plot_stacked_bar_chunk(
             height=0.675,
             left=cursor,
             color=color_map[category],
-            label=_humanize_label(category, display_names),
+            label=humanize_label(category, display_names),
             edgecolor="white",
             linewidth=0.3,
         )
@@ -246,7 +252,7 @@ def _plot_stacked_bar_chunk(
     ):
         ax.text(
             1.01,
-            position,  # type: ignore
+            float(position),
             f"{int(total):,}",
             va="center",
             ha="left",
@@ -268,8 +274,9 @@ def _plot_stacked_bar_chunk(
     plt.close(fig)
 
 
-def _plot_stacked_bar(
+def plot_stacked_bar(
     makeup: pd.DataFrame,
+    *,
     outpath: str | Path,
     category_order: Sequence[str],
     datasets_per_plot: int = 35,
@@ -299,6 +306,13 @@ def _plot_stacked_bar(
         top of each figure).
       display_names: Optional human-readable labels for category values.
       num_legend_cols: Number of columns to use for the legend
+
+    Example Usage:
+      >>> plot_stacked_bar(
+      ...     makeup,
+      ...     outpath="dataset_makeup.png",
+      ...     category_order=["blood", "lung", "heart"],
+      ... )
     """
     pivot_fraction, total_cells, categories = _prepare_stacked_bar_data(
         makeup=makeup,
@@ -318,14 +332,15 @@ def _plot_stacked_bar(
     )
 
     for chunk_index, chunk_dataset_ids in enumerate(dataset_chunks):
+        chunk_index_values = pd.Index(chunk_dataset_ids)
         chunk_output_path = _format_chunk_output_path(
             outpath=outpath,
             chunk_index=chunk_index,
             n_chunks=len(dataset_chunks),
         )
         _plot_stacked_bar_chunk(
-            chunk_fraction=pivot_fraction.loc[chunk_dataset_ids],
-            chunk_total_cells=total_cells.loc[chunk_dataset_ids],  # type: ignore
+            chunk_fraction=pivot_fraction.loc[chunk_index_values],
+            chunk_total_cells=total_cells.loc[chunk_index_values],
             categories=categories,
             color_map=color_map,
             outpath=chunk_output_path,
@@ -337,8 +352,9 @@ def _plot_stacked_bar(
         )
 
 
-def _count_dataset_labels(
+def count_dataset_labels(
     obs: pd.DataFrame,
+    *,
     dataset_id: str | None,
     label_column: str,
 ) -> pd.DataFrame:
@@ -354,10 +370,10 @@ def _count_dataset_labels(
       DF with columns 'label', 'n_cells', 'fraction', sorted ascending
         by n_cells.
     """
-    _validate_columns(obs, (label_column,))
-    plot_obs = _select_plot_obs(obs, dataset_id)
+    validate_columns(obs, (label_column,))
+    plot_obs = select_plot_obs(obs, dataset_id=dataset_id)
 
-    labels = _clean_label_series(plot_obs[label_column])
+    labels = clean_label_series(plot_obs[label_column])
     counts = (
         labels.value_counts().rename_axis("label").reset_index(name="n_cells")
     )
@@ -369,7 +385,8 @@ def _count_dataset_labels(
     return counts.sort_values("n_cells", ascending=True).reset_index(drop=True)
 
 
-def _annotate_bars(
+def annotate_bars(
+    *,
     ax: Axes,
     y_positions: np.ndarray,
     n_cells: np.ndarray,
@@ -391,7 +408,8 @@ def _annotate_bars(
     annotation_fontsize = _font_size_points(plt.rcParams["font.size"])
 
     ax.figure.canvas.draw()
-    renderer = ax.figure.canvas.get_renderer()  # type: ignore
+    # Concrete Matplotlib backends implement this method on the base canvas.
+    renderer = ax.figure.canvas.get_renderer()  # type: ignore[attr-defined]
 
     inside_padding_px = annotation_fontsize * 0.25 * ax.figure.dpi / 72
     outside_padding_data = x_max * 0.01
@@ -444,6 +462,7 @@ def _annotate_bars(
 
 
 def _composition_barplot(
+    *,
     obs: pd.DataFrame,
     dataset_id: str | None,
     label_column: str,
@@ -467,8 +486,12 @@ def _composition_barplot(
       bar_spacing: Vertical spacing between adjacent bars.
       bar_height: Height of each horizontal bar in y-axis units.
     """
-    counts = _count_dataset_labels(obs, dataset_id, label_column)
-    plot_obs = _select_plot_obs(obs, dataset_id)
+    counts = count_dataset_labels(
+        obs,
+        dataset_id=dataset_id,
+        label_column=label_column,
+    )
+    plot_obs = select_plot_obs(obs, dataset_id=dataset_id)
     total_cells = int(counts["n_cells"].sum())
     if "dataset_id" in plot_obs:
         n_datasets = int(plot_obs["dataset_id"].nunique())
@@ -487,7 +510,7 @@ def _composition_barplot(
     fig, ax = plt.subplots(figsize=(fig_width_in, fig_height))
 
     colors = sns.color_palette(cmap, n_colors=n_labels)
-    edge_colors = [_darken_color(color, factor=0.80) for color in colors]
+    edge_colors = [darken_color(color, factor=0.80) for color in colors]
 
     ax.barh(
         y_positions,
@@ -498,7 +521,7 @@ def _composition_barplot(
         edgecolor=edge_colors,
     )
 
-    _annotate_bars(
+    annotate_bars(
         ax=ax,
         y_positions=y_positions,
         n_cells=n_cells,
@@ -509,7 +532,13 @@ def _composition_barplot(
     ax.set_yticks(y_positions)
     ax.set_yticklabels(labels)
     ax.set_xlabel("Cells")
-    ax.set_title(_format_plot_title(dataset_id, total_cells, n_datasets))
+    ax.set_title(
+        format_plot_title(
+            dataset_id=dataset_id,
+            total_cells=total_cells,
+            n_datasets=n_datasets,
+        )
+    )
 
     y_padding = bar_spacing / 2
     ax.set_ylim(
@@ -524,7 +553,7 @@ def _composition_barplot(
     plt.close(fig)
 
 
-def _order_labels_by_category(
+def order_labels_by_category(
     counts: pd.DataFrame,
     categorizer: Callable[[object], str],
     ascending: bool = True,
@@ -576,6 +605,7 @@ def _compute_group_boundaries(
 
 
 def _draw_alternating_bands(
+    *,
     ax: Axes,
     y_positions: np.ndarray,
     group_boundaries: list[tuple[int, int, str]],
@@ -590,6 +620,7 @@ def _draw_alternating_bands(
 
 
 def _draw_category_sidebar(
+    *,
     ax: Axes,
     y_positions: np.ndarray,
     group_boundaries: list[tuple[int, int, str]],
@@ -613,14 +644,15 @@ def _draw_category_sidebar(
     """
     annotation_fontsize = _font_size_points(plt.rcParams["font.size"])
     ax.figure.canvas.draw()
-    renderer = ax.figure.canvas.get_renderer()  # type: ignore
+    # Concrete Matplotlib backends implement this method on the base canvas.
+    renderer = ax.figure.canvas.get_renderer()  # type: ignore[attr-defined]
 
     max_label_width_px = 0.0
     for _, _, category in group_boundaries:
         probe = ax.text(
             0,
             0,
-            _humanize_label(category, display_names),
+            humanize_label(category, display_names),
             fontsize=annotation_fontsize,
         )
         max_label_width_px = max(
@@ -657,7 +689,7 @@ def _draw_category_sidebar(
         ax.text(
             band_x + band_width / 2,
             mid_y,
-            _humanize_label(category, display_names),
+            humanize_label(category, display_names),
             va="center",
             ha="center",
             fontsize=annotation_fontsize,
@@ -669,10 +701,10 @@ def _draw_category_sidebar(
 
 
 def _grouped_composition_barplot(
+    *,
     obs: pd.DataFrame,
     dataset_id: str | None,
     label_column: str,
-    *,
     categorizer: Callable[[object], str],
     outpath: str | Path,
     bar_height_in: float = 0.18,
@@ -697,15 +729,19 @@ def _grouped_composition_barplot(
       bar_height: Height of each horizontal bar in y-axis units.
       display_names: Optional human-readable labels for category values.
     """
-    counts = _count_dataset_labels(obs, dataset_id, label_column)
-    plot_obs = _select_plot_obs(obs, dataset_id)
+    counts = count_dataset_labels(
+        obs,
+        dataset_id=dataset_id,
+        label_column=label_column,
+    )
+    plot_obs = select_plot_obs(obs, dataset_id=dataset_id)
     total_cells = int(counts["n_cells"].sum())
     if "dataset_id" in plot_obs:
         n_datasets = int(plot_obs["dataset_id"].nunique())
     else:
         n_datasets = 1
 
-    ordered, ordered_categories = _order_labels_by_category(counts, categorizer)
+    ordered, ordered_categories = order_labels_by_category(counts, categorizer)
     group_boundaries = _compute_group_boundaries(ordered, ordered_categories)
 
     category_colors = dict(
@@ -728,10 +764,15 @@ def _grouped_composition_barplot(
 
     fig, ax = plt.subplots(figsize=(fig_width_in, fig_height))
 
-    _draw_alternating_bands(ax, y_positions, group_boundaries, y_padding)
+    _draw_alternating_bands(
+        ax=ax,
+        y_positions=y_positions,
+        group_boundaries=group_boundaries,
+        y_padding=y_padding,
+    )
 
     bar_colors = [category_colors[category] for category in ordered["category"]]
-    edge_colors = [_darken_color(color, factor=0.80) for color in bar_colors]
+    edge_colors = [darken_color(color, factor=0.80) for color in bar_colors]
     ax.barh(
         y_positions,
         n_cells,
@@ -741,7 +782,7 @@ def _grouped_composition_barplot(
         edgecolor=edge_colors,
     )
 
-    _annotate_bars(
+    annotate_bars(
         ax=ax,
         y_positions=y_positions,
         n_cells=n_cells,
@@ -752,7 +793,13 @@ def _grouped_composition_barplot(
     ax.set_yticks(y_positions)
     ax.set_yticklabels(labels)
     ax.set_xlabel("Cells")
-    ax.set_title(_format_plot_title(dataset_id, total_cells, n_datasets))
+    ax.set_title(
+        format_plot_title(
+            dataset_id=dataset_id,
+            total_cells=total_cells,
+            n_datasets=n_datasets,
+        )
+    )
     ax.set_ylim(
         y_positions.min() - y_padding,
         y_positions.max() + y_padding,
@@ -776,13 +823,13 @@ def _grouped_composition_barplot(
 def _default_categorizer(label_column: str) -> Callable[[object], str] | None:
     """Return a default categorizer for raw CELLxGENE metadata columns."""
     categorizers = {
-        "tissue": _categorize_tissue,
-        "disease": _categorize_disease,
+        "tissue": categorize_tissue,
+        "disease": categorize_disease,
     }
     return categorizers.get(label_column)
 
 
-def _plot_category_makeup(
+def plot_category_makeup(
     obs: pd.DataFrame,
     datasets: pd.DataFrame,
     category_column: str,
@@ -792,10 +839,19 @@ def _plot_category_makeup(
     datasets_per_plot: int = 35,
     display_names: Mapping[str, str] | None = None,
 ) -> None:
-    """Plot dataset makeup along one categorical axis."""
-    _validate_columns(obs, (category_column,))
-    category_order = _order_categories(
-        _clean_label_series(obs[category_column]).unique(),
+    """Plot dataset makeup along one categorical axis.
+
+    Example Usage:
+      >>> plot_category_makeup(
+      ...     obs,
+      ...     datasets,
+      ...     category_column="tissue",
+      ...     outpath="tissue_makeup.png",
+      ... )
+    """
+    validate_columns(obs, (category_column,))
+    category_order = order_categories(
+        clean_label_series(obs[category_column]).unique(),
         front=front,
         back=back,
     )
@@ -804,7 +860,7 @@ def _plot_category_makeup(
         category_column=category_column,
         dataset_meta=datasets,
     )
-    _plot_stacked_bar(
+    plot_stacked_bar(
         makeup=makeup,
         outpath=outpath,
         category_order=category_order,
@@ -813,7 +869,7 @@ def _plot_category_makeup(
     )
 
 
-def _metadata_barplot(
+def metadata_barplot(
     obs: pd.DataFrame,
     *,
     dataset_id: str | None = None,
@@ -840,6 +896,14 @@ def _metadata_barplot(
         alternating background bands and colored category labels.
       categorizer: Optional function mapping raw labels to broad categories.
       display_names: Optional human-readable labels for category values.
+
+    Example Usage:
+      >>> metadata_barplot(
+      ...     obs,
+      ...     label_column="disease",
+      ...     outpath="disease_barplot.png",
+      ...     grouped=True,
+      ... )
     """
     if grouped:
         active_categorizer = categorizer or _default_categorizer(label_column)
