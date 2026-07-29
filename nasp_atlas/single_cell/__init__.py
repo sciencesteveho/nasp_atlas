@@ -68,6 +68,7 @@ from nasp_atlas.single_cell.utils import normalize_h5ad_string_storage
 from nasp_atlas.single_cell.utils import snake_case
 from nasp_atlas.single_cell.utils import split_anndata_by_obs
 from nasp_atlas.single_cell.visualization import ColorbarStyle
+from nasp_atlas.single_cell.visualization import GroupedGeneExpression
 from nasp_atlas.single_cell.visualization import SCVisualizer
 
 
@@ -79,6 +80,7 @@ __all__ = [
     "EvidenceRole",
     "FeatureSpec",
     "FeatureType",
+    "GroupedGeneExpression",
     "MechanisticEdgeSpec",
     "ObsSchema",
     "RoleAssignment",

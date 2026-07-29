@@ -11,6 +11,7 @@ from nasp_atlas.single_cell.visualization.associations import (
     _AssociationPlotMixin,
 )
 from nasp_atlas.single_cell.visualization.dotplots import _DotplotMixin
+from nasp_atlas.single_cell.visualization.heatmaps import GroupedGeneExpression
 from nasp_atlas.single_cell.visualization.heatmaps import _HeatmapMixin
 from nasp_atlas.single_cell.visualization.nasp import _NaspPlotMixin
 from nasp_atlas.single_cell.visualization.style import ColorbarStyle
@@ -20,6 +21,7 @@ from nasp_atlas.single_cell.visualization.umap import _UmapPlotMixin
 
 __all__ = [
     "ColorbarStyle",
+    "GroupedGeneExpression",
     "SCVisualizer",
 ]
 

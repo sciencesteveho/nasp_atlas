@@ -8,6 +8,9 @@
 
 # Run NASP scoring and donor-aware analysis for one tissue h5ad.
 #
+# Run scoring on complete atlas
+# qsub -v H5AD_NAME=1c88f927-bcbb-4bb1-9881-281842945a2d.h5ad,RUN_NAME=all_tissues score_modules.sh
+#
 # Submit an already split tissue h5ad using its existing embedding:
 #   qsub -v H5AD_NAME=liver_tabula_sapiens.h5ad,RUN_NAME=liver score_modules.sh
 #

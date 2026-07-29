@@ -12,8 +12,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scanpy as sc  # type: ignore[import]
+import scipy.sparse as sp  # type: ignore[import]
 from matplotlib.axes import Axes
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.colors import Colormap
+from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
@@ -22,6 +25,10 @@ from nasp_atlas.single_cell.umap import UmapPanelSpec
 from nasp_atlas.single_cell.umap import embedding_xy
 from nasp_atlas.single_cell.umap import is_categorical_obs
 from nasp_atlas.single_cell.umap import resolve_umap_panel_specs
+from nasp_atlas.single_cell.utils import expression_matrix
+from nasp_atlas.single_cell.visualization._expression import (
+    _expression_column_means,
+)
 from nasp_atlas.single_cell.visualization.gene_resolution import (
     _VisualizationGeneMixin,
 )
@@ -218,6 +225,7 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
         cbar_width: str | float | None = None,
         cbar_pad: float | None = None,
         size: float = 8.0,
+        max_rows_per_batch: int | None = 4,
     ) -> None:
         """Save a multi-panel UMAP figure.
 
@@ -239,7 +247,10 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
           cbar_height: Optional override for colorbar height.
           cbar_width: Optional override for colorbar width.
           cbar_pad: Optional override for panel-to-colorbar padding.
-          size: Point size forwarded to Scanpy.
+          size: Scatter point size.
+          max_rows_per_batch: Maximum live scatter rows rendered at once.
+            Raster batches are recomposed into the original output filename.
+            Use None to render every row in one batch.
 
         Example Usage:
           >>> viz.plot_multi_gene_umap_panel(
@@ -251,6 +262,13 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
         """
         self._set_matplotlib_publication_parameters()
         out = self.output_dir / filename
+        if ncols <= 0:
+            raise ValueError(f"ncols must be positive; got {ncols}.")
+        if max_rows_per_batch is not None and max_rows_per_batch <= 0:
+            raise ValueError(
+                "max_rows_per_batch must be positive or None; "
+                f"got {max_rows_per_batch}."
+            )
         colorbar_style = (
             colorbar_style
             or ColorbarStyle(height="27.5%", width="4%", pad=0.02)
@@ -261,7 +279,7 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
         )
         cmap = self.zero_gray_cmap(
             cmap if cmap is not None else self.expression_cmap
-        )
+        ).with_extremes(bad="lightgray")
         if expression_layer is not None and use_raw:
             raise ValueError(
                 "use_raw=True cannot be combined with expression_layer"
@@ -278,18 +296,101 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             )
             return
 
-        expr_kwargs: dict[str, Any] = {"layer": expression_layer}
-        if expression_layer is None:
-            expr_kwargs["use_raw"] = use_raw
-        expr_df = sc.get.obs_df(adata, keys=resolved.var_names, **expr_kwargs)
-        gene_means = expr_df.mean(axis=0)
-        order = gene_means.sort_values(ascending=False).index.tolist()
+        source_var_names, source_matrix = expression_matrix(
+            adata,
+            resolved.var_names,
+            expression_layer=expression_layer,
+            use_raw=use_raw,
+        )
+        if source_matrix is None or source_var_names != resolved.var_names:
+            missing = [
+                var_name
+                for var_name in resolved.var_names
+                if var_name not in source_var_names
+            ]
+            raise KeyError(
+                "resolved genes are absent from the requested expression "
+                f"source: {missing}"
+            )
+
+        gene_means = pd.Series(
+            _expression_column_means(source_matrix),
+            index=source_var_names,
+        )
+        ordered_var_names = gene_means.sort_values(
+            ascending=False,
+        ).index.tolist()
         label_lookup = dict(
             zip(resolved.var_names, resolved.labels, strict=True)
         )
-        var_names = order
-        labels = [label_lookup[var_name] for var_name in var_names]
+        labels = [label_lookup[var_name] for var_name in ordered_var_names]
+        source_positions = {
+            var_name: position
+            for position, var_name in enumerate(source_var_names)
+        }
+        xy = embedding_xy(adata, basis=basis)
+        batch_size = (
+            len(ordered_var_names)
+            if max_rows_per_batch is None
+            else ncols * max_rows_per_batch
+        )
+        n_batches = math.ceil(len(ordered_var_names) / batch_size)
+        rendered_batches: list[np.ndarray] = []
+        for batch_index, start in enumerate(
+            range(0, len(ordered_var_names), batch_size),
+            start=1,
+        ):
+            stop = min(start + batch_size, len(ordered_var_names))
+            if n_batches > 1:
+                logger.info(
+                    "[plot] rendering %s batch %d/%d",
+                    filename,
+                    batch_index,
+                    n_batches,
+                )
+            rendered_batches.append(
+                self._render_gene_umap_batch(
+                    xy=xy,
+                    source_matrix=source_matrix,
+                    source_positions=source_positions,
+                    var_names=ordered_var_names[start:stop],
+                    labels=labels[start:stop],
+                    ncols=ncols,
+                    panel_w=panel_w,
+                    panel_h=panel_h,
+                    row_hspace=row_hspace,
+                    cmap=cmap,
+                    colorbar_style=colorbar_style,
+                    size=size,
+                )
+            )
 
+        batch_gap = round(row_hspace * panel_h * self.dpi)
+        composite = self._stack_rgba_batches(
+            rendered_batches,
+            gap_pixels=batch_gap,
+            pad_pixels=round(0.1 * self.dpi),
+        )
+        plt.imsave(f"{out}.png", composite, dpi=self.dpi)
+        logger.info("[plot] multi-gene UMAP panel -> %s", out)
+
+    def _render_gene_umap_batch(
+        self,
+        *,
+        xy: np.ndarray,
+        source_matrix: Any,
+        source_positions: dict[str, int],
+        var_names: list[str],
+        labels: list[str],
+        ncols: int,
+        panel_w: float,
+        panel_h: float,
+        row_hspace: float,
+        cmap: Colormap,
+        colorbar_style: ColorbarStyle,
+        size: float,
+    ) -> np.ndarray:
+        """Render one bounded gene-expression UMAP batch as RGBA pixels."""
         nrows = math.ceil(len(var_names) / ncols)
         fig, axes = plt.subplots(
             nrows,
@@ -297,50 +398,117 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             figsize=(panel_w * ncols, panel_h * nrows),
             squeeze=False,
         )
+        try:
+            for ax, var_name, label in zip(
+                axes.flat,
+                var_names,
+                labels,
+                strict=False,
+            ):
+                values = self._dense_expression_column(
+                    source_matrix,
+                    source_positions[var_name],
+                )
+                order = np.argsort(-values, kind="stable")[::-1]
+                collection = ax.scatter(
+                    xy[order, 0],
+                    xy[order, 1],
+                    c=values[order],
+                    s=size,
+                    cmap=cmap,
+                    vmin=0,
+                    linewidths=0,
+                    edgecolors="none",
+                    plotnonfinite=True,
+                )
+                ax.set_xlabel("")
+                ax.set_ylabel("")
+                ax.set_xticks([])
+                ax.set_yticks([])
+                ax.set_title(label, fontstyle="italic", pad=0.0)
+                ax.set_aspect("equal", adjustable="box")
+                ax.set_box_aspect(1)
+                for spine in ax.spines.values():
+                    spine.set_visible(False)
 
-        for ax, var_name, label in zip(
-            axes.flat, var_names, labels, strict=False
-        ):
-            plot_kwargs: dict[str, Any] = {"layer": expression_layer}
-            if expression_layer is None:
-                plot_kwargs["use_raw"] = use_raw
+                self._add_embedding_colorbar(
+                    fig=fig,
+                    ax=ax,
+                    mappable=collection,
+                    colorbar_style=colorbar_style,
+                )
 
-            sc.pl.embedding(
-                adata,
-                basis=basis,
-                color=var_name,
-                ax=ax,
-                show=False,
-                frameon=False,
-                size=size,
-                color_map=cmap,
-                vmin=0,
-                colorbar_loc=None,
-                **plot_kwargs,
-            )
-            ax.set_xlabel("")
-            ax.set_ylabel("")
-            ax.set_title(label, fontstyle="italic", pad=0.0)
-            ax.set_aspect("equal", adjustable="box")
-            ax.set_box_aspect(1)
+            for ax in axes.flat[len(var_names) :]:
+                ax.axis("off")
 
-            for spine in ax.spines.values():
-                spine.set_visible(False)
+            fig.subplots_adjust(hspace=row_hspace, wspace=0.35)
+            return self._figure_rgba(fig)
+        finally:
+            plt.close(fig)
 
-            self._add_embedding_colorbar(
-                fig=fig,
-                ax=ax,
-                mappable=ax.collections[0],
-                colorbar_style=colorbar_style,
-            )
+    def _figure_rgba(self, fig: Figure) -> np.ndarray:
+        """Return the tight rendered extent of `fig` as uint8 RGBA pixels."""
+        fig.set_dpi(self.dpi)
+        canvas = FigureCanvasAgg(fig)
+        canvas.draw()
+        rgba = np.asarray(canvas.buffer_rgba())
+        renderer = canvas.get_renderer()
+        tight_bbox = fig.get_tightbbox(renderer)
+        if tight_bbox is None:
+            return rgba.copy()
 
-        for ax in axes.flat[len(var_names) :]:
-            ax.axis("off")
+        pixel_bbox = tight_bbox.transformed(fig.dpi_scale_trans)
+        height, width = rgba.shape[:2]
+        x_start = max(0, math.floor(pixel_bbox.x0))
+        x_stop = min(width, math.ceil(pixel_bbox.x1))
+        y_start = max(0, height - math.ceil(pixel_bbox.y1))
+        y_stop = min(height, height - math.floor(pixel_bbox.y0))
+        if x_start >= x_stop or y_start >= y_stop:
+            return rgba.copy()
+        return rgba[y_start:y_stop, x_start:x_stop].copy()
 
-        fig.subplots_adjust(hspace=row_hspace, wspace=0.35)
-        self._save_figure_and_log(
-            fig, out, "[plot] multi-gene UMAP panel -> %s"
+    @staticmethod
+    def _stack_rgba_batches(
+        batches: Sequence[np.ndarray],
+        *,
+        gap_pixels: int,
+        pad_pixels: int,
+    ) -> np.ndarray:
+        """Stack rendered batches vertically on one opaque white canvas."""
+        if not batches:
+            raise ValueError("at least one rendered UMAP batch is required")
+
+        width = max(batch.shape[1] for batch in batches)
+        content_height = sum(batch.shape[0] for batch in batches)
+        gaps_height = max(0, len(batches) - 1) * max(0, gap_pixels)
+        composite = np.full(
+            (
+                content_height + gaps_height + 2 * pad_pixels,
+                width + 2 * pad_pixels,
+                4,
+            ),
+            255,
+            dtype=np.uint8,
         )
+        y_offset = pad_pixels
+        for batch in batches:
+            height, batch_width = batch.shape[:2]
+            x_offset = pad_pixels + (width - batch_width) // 2
+            composite[
+                y_offset : y_offset + height,
+                x_offset : x_offset + batch_width,
+            ] = batch
+            y_offset += height + max(0, gap_pixels)
+
+        return composite
+
+    @staticmethod
+    def _dense_expression_column(matrix: Any, index: int) -> np.ndarray:
+        """Return one dense expression column from a bounded source matrix."""
+        column = matrix[:, index]
+        if sp.issparse(column):
+            return column.toarray().reshape(-1)
+        return np.asarray(column).reshape(-1)
 
     def plot_multi_obs_umap_panel(
         self,

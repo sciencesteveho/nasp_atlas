@@ -5,7 +5,7 @@ from __future__ import annotations
 import gc
 import hashlib
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -22,6 +22,7 @@ from nasp_atlas.single_cell.score_diagnostics import compare_module_scorers
 from nasp_atlas.single_cell.score_diagnostics import (
     cross_scorer_module_correlations,
 )
+from nasp_atlas.single_cell.visualization import GroupedGeneExpression
 from nasp_atlas.single_cell.visualization import SCVisualizer
 
 
@@ -321,6 +322,9 @@ def plot_gene_expression_heatmaps_by_obs(
     groupby_keys: Sequence[str],
     gene_symbol_column: str,
     expression_layer: str | None,
+    grouped_expression_by_obs: (
+        Mapping[str, GroupedGeneExpression] | None
+    ) = None,
 ) -> None:
     """Plot one gene-expression heatmap for each requested obs key.
 
@@ -350,6 +354,11 @@ def plot_gene_expression_heatmaps_by_obs(
             ),
             gene_symbol_column=gene_symbol_column,
             expression_layer=expression_layer,
+            grouped_expression=(
+                grouped_expression_by_obs.get(groupby_key)
+                if grouped_expression_by_obs is not None
+                else None
+            ),
         )
 
 

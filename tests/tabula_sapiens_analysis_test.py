@@ -526,7 +526,7 @@ def test_tabula_sapiens_module_heatmaps_follow_marker_umap_modules(
 ) -> None:
     """Module marker heatmaps use the same selected modules as marker UMAPs."""
     adata = ad.AnnData(
-        X=np.ones((2, 1)),
+        X=np.ones((2, 2)),
         obs=pd.DataFrame(
             {
                 "tissue_in_publication": ["lung", "blood"],
@@ -534,10 +534,15 @@ def test_tabula_sapiens_module_heatmaps_follow_marker_umap_modules(
             },
             index=["cell_a", "cell_b"],
         ),
-        var=pd.DataFrame({"feature_name": ["CGAS"]}, index=["gene_a"]),
+        var=pd.DataFrame(
+            {"feature_name": ["CGAS", "IFIH1"]},
+            index=["gene_a", "gene_b"],
+        ),
     )
     heatmap_calls: list[dict[str, object]] = []
+    summary_calls: list[dict[str, object]] = []
     umap_calls: list[dict[str, object]] = []
+    module_gene_calls: list[str] = []
 
     monkeypatch.setattr(
         tabula_sapiens_workflows,
@@ -552,12 +557,31 @@ def test_tabula_sapiens_module_heatmaps_follow_marker_umap_modules(
     monkeypatch.setattr(
         tabula_sapiens_workflows.GeneModules,
         "sensors",
-        lambda *args, **kwargs: [],
+        lambda *args, **kwargs: ["CGAS"],
     )
+
+    def capture_module_genes(module_id, *args, **kwargs):
+        module_gene_calls.append(module_id)
+        return ["IFIH1"]
+
     monkeypatch.setattr(
         tabula_sapiens_workflows.GeneModules,
         "genes",
-        lambda *args, **kwargs: ["CGAS"],
+        capture_module_genes,
+    )
+
+    summarize_expression = (
+        tabula_sapiens_workflows.SCVisualizer.summarize_gene_expression_by_obs
+    )
+
+    def capture_summary(self, adata_arg, genes, **kwargs):
+        summary_calls.append({"genes": tuple(genes), **kwargs})
+        return summarize_expression(self, adata_arg, genes, **kwargs)
+
+    monkeypatch.setattr(
+        tabula_sapiens_workflows.SCVisualizer,
+        "summarize_gene_expression_by_obs",
+        capture_summary,
     )
 
     def capture_module_umaps(*args, **kwargs) -> None:
@@ -592,15 +616,27 @@ def test_tabula_sapiens_module_heatmaps_follow_marker_umap_modules(
     ]
     assert Counter(
         tuple(call["genes"]) for call in module_umap_calls
-    ) == Counter([("CGAS",)])
+    ) == Counter([("IFIH1",)])
     assert Counter(
         (tuple(call["genes"]), call["groupby"]) for call in heatmap_calls
     ) == Counter(
         [
             (("CGAS",), "tissue_in_publication"),
             (("CGAS",), "cell_type"),
+            (("IFIH1",), "tissue_in_publication"),
+            (("IFIH1",), "cell_type"),
         ]
     )
+    assert module_gene_calls == ["NASP_DNA_SENSING"]
+    assert Counter(
+        (call["genes"], call["groupby"]) for call in summary_calls
+    ) == Counter(
+        [
+            (("CGAS", "IFIH1"), "tissue_in_publication"),
+            (("CGAS", "IFIH1"), "cell_type"),
+        ]
+    )
+    assert all(call["grouped_expression"] is not None for call in heatmap_calls)
 
 
 def test_tissue_analysis_scores_once_then_analyzes_each_scorer(

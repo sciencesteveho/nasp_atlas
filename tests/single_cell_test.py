@@ -12,9 +12,11 @@ import numpy as np
 import pandas as pd
 import pytest
 import scipy.sparse as sp
+from matplotlib.axes import Axes
 from nasp_compendium.types import GeneModule
 
 import nasp_atlas.single_cell.utils as single_cell_utils
+import nasp_atlas.single_cell.visualization.umap as umap_visualization
 from nasp_atlas.cellxgene import add_development_stage_age_obs
 from nasp_atlas.single_cell import ColorbarStyle
 from nasp_atlas.single_cell import EmbeddingConfig
@@ -777,7 +779,7 @@ def test_visualizer_gene_umap_uses_x_not_raw_by_default(
 ) -> None:
     """Gene UMAP panels do not fall back to raw counts by default."""
     adata = ad.AnnData(
-        X=np.array([[1.0], [2.0]]),
+        X=sp.csr_matrix([[1.0], [2.0]]),
         obs=pd.DataFrame(index=["cell_a", "cell_b"]),
         var=pd.DataFrame(index=["gene_a"]),
     )
@@ -787,26 +789,14 @@ def test_visualizer_gene_umap_uses_x_not_raw_by_default(
         var=adata.var.copy(),
     )
     adata.obsm["X_umap"] = np.array([[0.0, 0.0], [1.0, 1.0]])
-    obs_df_kwargs = {}
-    embedding_kwargs = {}
+    plotted_values = []
+    scatter = Axes.scatter
 
-    def fake_obs_df(adata_arg, keys, **kwargs):
-        obs_df_kwargs.update(kwargs)
-        return pd.DataFrame({"gene_a": [1.0, 2.0]}, index=adata_arg.obs_names)
+    def capture_scatter(self, *args, **kwargs):
+        plotted_values.append(np.asarray(kwargs["c"]).copy())
+        return scatter(self, *args, **kwargs)
 
-    def fake_embedding(*args, **kwargs):
-        embedding_kwargs.update(kwargs)
-        ax = kwargs["ax"]
-        ax.scatter([0.0, 1.0], [0.0, 1.0], c=[1.0, 2.0])
-
-    monkeypatch.setattr(
-        "nasp_atlas.single_cell.visualization.sc.get.obs_df",
-        fake_obs_df,
-    )
-    monkeypatch.setattr(
-        "nasp_atlas.single_cell.visualization.sc.pl.embedding",
-        fake_embedding,
-    )
+    monkeypatch.setattr(Axes, "scatter", capture_scatter)
     viz = SCVisualizer(output_dir=tmp_path)
 
     viz.plot_multi_gene_umap_panel(
@@ -816,10 +806,57 @@ def test_visualizer_gene_umap_uses_x_not_raw_by_default(
         expression_layer=None,
     )
 
-    assert obs_df_kwargs["use_raw"] is False
-    assert obs_df_kwargs["layer"] is None
-    assert embedding_kwargs["use_raw"] is False
-    assert embedding_kwargs["layer"] is None
+    assert len(plotted_values) == 1
+    np.testing.assert_allclose(plotted_values[0], [1.0, 2.0])
+    assert (tmp_path / "gene_panel.png").stat().st_size > 0
+
+
+def test_visualizer_gene_umap_extracts_once_and_renders_bounded_batches(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Gene UMAP batches bound live panels and retain one output contract."""
+    genes = [f"gene_{index}" for index in range(5)]
+    adata = ad.AnnData(
+        X=sp.csr_matrix(np.arange(15, dtype=float).reshape(3, 5)),
+        obs=pd.DataFrame(index=["cell_a", "cell_b", "cell_c"]),
+        var=pd.DataFrame(index=genes),
+    )
+    adata.obsm["X_umap"] = np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]])
+    expression_matrix_calls = 0
+    scatter_figures = []
+    get_expression_matrix = umap_visualization.expression_matrix
+    scatter = Axes.scatter
+
+    def capture_expression_matrix(*args, **kwargs):
+        nonlocal expression_matrix_calls
+        expression_matrix_calls += 1
+        return get_expression_matrix(*args, **kwargs)
+
+    def capture_scatter(self, *args, **kwargs):
+        scatter_figures.append(self.figure)
+        return scatter(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        umap_visualization,
+        "expression_matrix",
+        capture_expression_matrix,
+    )
+    monkeypatch.setattr(Axes, "scatter", capture_scatter)
+    viz = SCVisualizer(output_dir=tmp_path)
+
+    viz.plot_multi_gene_umap_panel(
+        adata,
+        genes=genes,
+        filename="batched_gene_panel",
+        ncols=2,
+        max_rows_per_batch=1,
+    )
+
+    panels_per_figure = Counter(scatter_figures)
+    assert expression_matrix_calls == 1
+    assert sorted(panels_per_figure.values()) == [1, 2, 2]
+    assert list(tmp_path.iterdir()) == [tmp_path / "batched_gene_panel.png"]
 
 
 def test_visualizer_gene_expression_heatmap_groups_obs(
@@ -828,7 +865,7 @@ def test_visualizer_gene_expression_heatmap_groups_obs(
 ) -> None:
     """Gene heatmaps render group means in categorical and gene order."""
     adata = ad.AnnData(
-        X=np.array(
+        X=sp.csr_matrix(
             [
                 [1.0, 2.0],
                 [3.0, 4.0],

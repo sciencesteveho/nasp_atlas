@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
@@ -49,6 +49,7 @@ from nasp_atlas.single_cell.module_scoring import score_aucell_modules
 from nasp_atlas.single_cell.module_scoring import score_scanpy_modules
 from nasp_atlas.single_cell.scprocessor import SCProcessor
 from nasp_atlas.single_cell.umap import UmapPanelSpec
+from nasp_atlas.single_cell.visualization import GroupedGeneExpression
 from nasp_atlas.single_cell.visualization import SCVisualizer
 
 
@@ -1054,7 +1055,51 @@ def tabula_sapiens_scoring_analysis(
         score_heatmap_obs_key or heatmap_groupby or cell_type_key
     )
 
+    if module_ids is None:
+        selected_module_ids = GeneModules().module_ids()
+    else:
+        selected_module_ids = list(module_ids)
+
     sensors = GeneModules.sensors(sensor_group)
+    module_genes_by_id = (
+        _module_genes_by_id(
+            adata=adata,
+            module_ids=selected_module_ids,
+            gene_symbol_column=gene_symbol_column,
+        )
+        if plot_modules
+        else {}
+    )
+    heatmap_genes = list(
+        dict.fromkeys(
+            [
+                *sensors,
+                *(
+                    gene
+                    for genes in module_genes_by_id.values()
+                    for gene in genes
+                ),
+            ]
+        )
+    )
+    grouped_expression_by_obs = {}
+    if heatmap_genes:
+        for groupby_key in heatmap_groupby_keys:
+            logger.info(
+                "Precomputing heatmap means for %d genes by %s",
+                len(heatmap_genes),
+                groupby_key,
+            )
+            grouped_expression_by_obs[groupby_key] = (
+                viz.summarize_gene_expression_by_obs(
+                    adata,
+                    heatmap_genes,
+                    groupby=groupby_key,
+                    gene_symbol_column=gene_symbol_column,
+                    expression_layer=expression_layer,
+                )
+            )
+
     viz.plot_multi_gene_umap_panel(
         adata=adata,
         genes=sensors,
@@ -1072,17 +1117,13 @@ def tabula_sapiens_scoring_analysis(
         groupby_keys=heatmap_groupby_keys,
         gene_symbol_column=gene_symbol_column,
         expression_layer=expression_layer,
+        grouped_expression_by_obs=grouped_expression_by_obs,
     )
-
-    if module_ids is None:
-        selected_module_ids = GeneModules().module_ids()
-    else:
-        selected_module_ids = list(module_ids)
 
     if plot_modules:
         _plot_module_gene_umaps(
             adata=adata,
-            module_ids=selected_module_ids,
+            module_genes_by_id=module_genes_by_id,
             viz=viz,
             gene_symbol_column=gene_symbol_column,
             expression_layer=expression_layer,
@@ -1091,11 +1132,12 @@ def tabula_sapiens_scoring_analysis(
         )
         _plot_module_gene_heatmaps_by_obs(
             adata=adata,
-            module_ids=selected_module_ids,
+            module_genes_by_id=module_genes_by_id,
             viz=viz,
             groupby_keys=heatmap_groupby_keys,
             gene_symbol_column=gene_symbol_column,
             expression_layer=expression_layer,
+            grouped_expression_by_obs=grouped_expression_by_obs,
         )
 
     scoring.module_scoring_outputs(
@@ -1201,9 +1243,27 @@ def _score_table_has_scorers(
     return set(scorers).issubset(completed)
 
 
-def _plot_module_gene_umaps(
+def _module_genes_by_id(
+    *,
     adata: ad.AnnData,
     module_ids: Sequence[str],
+    gene_symbol_column: str,
+) -> dict[str, list[str]]:
+    """Resolve each module's available marker symbols exactly once."""
+    return {
+        module_id: GeneModules.genes(
+            module_id,
+            adata=adata,  # type: ignore[arg-type]  # upstream protocol mismatch
+            gene_symbol_column=gene_symbol_column,
+            output="symbols",
+        )
+        for module_id in module_ids
+    }
+
+
+def _plot_module_gene_umaps(
+    adata: ad.AnnData,
+    module_genes_by_id: Mapping[str, Sequence[str]],
     *,
     viz: SCVisualizer,
     gene_symbol_column: str = "feature_name",
@@ -1212,13 +1272,7 @@ def _plot_module_gene_umaps(
     point_size: float,
 ) -> None:
     """Plot one multi-gene UMAP panel per Tabula Sapiens NASP module."""
-    for module_id in module_ids:
-        module_genes = GeneModules.genes(
-            module_id,
-            adata=adata,  # type: ignore[arg-type]  # upstream protocol mismatch
-            gene_symbol_column=gene_symbol_column,
-            output="symbols",
-        )
+    for module_id, module_genes in module_genes_by_id.items():
         if not module_genes:
             logger.info("%s: no matched genes; skipping UMAPs", module_id)
             continue
@@ -1230,7 +1284,7 @@ def _plot_module_gene_umaps(
         )
         viz.plot_multi_gene_umap_panel(
             adata=adata,
-            genes=module_genes,
+            genes=list(module_genes),
             filename=f"{module_id}_gene_expression_umaps",
             gene_symbol_column=gene_symbol_column,
             expression_layer=expression_layer,
@@ -1242,20 +1296,15 @@ def _plot_module_gene_umaps(
 def _plot_module_gene_heatmaps_by_obs(
     *,
     adata: ad.AnnData,
-    module_ids: Sequence[str],
+    module_genes_by_id: Mapping[str, Sequence[str]],
     viz: SCVisualizer,
     groupby_keys: Sequence[str],
     gene_symbol_column: str,
     expression_layer: str | None,
+    grouped_expression_by_obs: Mapping[str, GroupedGeneExpression],
 ) -> None:
     """Plot module marker-gene heatmaps for each requested obs key."""
-    for module_id in module_ids:
-        module_genes = GeneModules.genes(
-            module_id,
-            adata=adata,  # type: ignore[arg-type]  # upstream protocol mismatch
-            gene_symbol_column=gene_symbol_column,
-            output="symbols",
-        )
+    for module_id, module_genes in module_genes_by_id.items():
         if not module_genes:
             logger.info("%s: no matched genes; skipping heatmaps", module_id)
             continue
@@ -1273,4 +1322,5 @@ def _plot_module_gene_heatmaps_by_obs(
             groupby_keys=groupby_keys,
             gene_symbol_column=gene_symbol_column,
             expression_layer=expression_layer,
+            grouped_expression_by_obs=grouped_expression_by_obs,
         )

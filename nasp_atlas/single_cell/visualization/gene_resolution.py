@@ -12,6 +12,8 @@ import pandas as pd
 class _ResolvedGenes:
     """Resolved plotting genes and display labels."""
 
+    requested_var_names: dict[str, str]
+    requested_labels: dict[str, str]
     var_names: list[str]
     labels: list[str]
 
@@ -59,19 +61,28 @@ class _VisualizationGeneMixin:
                 lookup.setdefault(symbol, (str(var_name), symbol))
 
         resolved_var_names = []
+        requested_var_names = {}
+        requested_labels = {}
         labels = []
         seen = set()
         for gene in genes:
             if gene not in lookup:
                 continue
             var_name, label = lookup[gene]
+            requested_var_names.setdefault(gene, var_name)
+            requested_labels.setdefault(gene, label)
             if var_name in seen:
                 continue
             seen.add(var_name)
             resolved_var_names.append(var_name)
             labels.append(label)
 
-        return _ResolvedGenes(var_names=resolved_var_names, labels=labels)
+        return _ResolvedGenes(
+            requested_var_names=requested_var_names,
+            requested_labels=requested_labels,
+            var_names=resolved_var_names,
+            labels=labels,
+        )
 
     @staticmethod
     def _resolve_dotplot_genes(

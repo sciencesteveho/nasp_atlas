@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import scanpy as sc  # type: ignore[import]
+import scipy.sparse as sp  # type: ignore[import]
 from matplotlib.colors import Colormap
 
+from nasp_atlas.single_cell.utils import expression_matrix
+from nasp_atlas.single_cell.visualization._expression import (
+    _expression_column_means,
+)
 from nasp_atlas.single_cell.visualization.gene_resolution import (
     _VisualizationGeneMixin,
 )
@@ -22,8 +27,150 @@ from nasp_atlas.single_cell.visualization.style import _VisualizationStyleMixin
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class GroupedGeneExpression:
+    """Reusable full-cell gene-expression means grouped by one obs column.
+
+    Attributes:
+      groupby: Observation column defining the groups.
+      means: Mean expression with var names on rows and groups on columns.
+      overall_means: Full-cell mean expression indexed by var name.
+      requested_var_names: Requested gene token to resolved var-name mapping.
+      requested_labels: Requested gene token to display-label mapping.
+      expression_layer: AnnData layer used to prepare the summary.
+      use_raw: Whether the summary was prepared from adata.raw.
+    """
+
+    groupby: str
+    means: pd.DataFrame
+    overall_means: pd.Series
+    requested_var_names: Mapping[str, str]
+    requested_labels: Mapping[str, str]
+    expression_layer: str | None
+    use_raw: bool
+
+
 class _HeatmapMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
     """Grouped gene-expression and observation-score heatmaps."""
+
+    def summarize_gene_expression_by_obs(
+        self,
+        adata: Any,
+        genes: Sequence[str],
+        *,
+        groupby: str,
+        expression_layer: str | None = None,
+        use_raw: bool = False,
+        gene_symbol_column: str | None = None,
+        obs_order: Sequence[str] | None = None,
+    ) -> GroupedGeneExpression:
+        """Return reusable sparse-aware grouped means for requested genes.
+
+        The result retains full-cell weighted means while bounding dense
+        materialization to `n_groups x n_genes`.
+
+        Args:
+          adata: AnnData object containing expression values.
+          genes: Gene names to aggregate.
+          groupby: Observation column defining output groups.
+          expression_layer: Layer to use for expression values.
+          use_raw: Whether to use adata.raw when expression_layer is None.
+          gene_symbol_column: Optional var column used to resolve symbols.
+          obs_order: Optional ordered subset of group labels.
+
+        Returns:
+          Grouped expression values and gene-resolution metadata.
+        """
+        if expression_layer is not None and use_raw:
+            raise ValueError(
+                "use_raw=True cannot be combined with expression_layer"
+            )
+        if groupby not in adata.obs.columns:
+            raise KeyError(f"obs column not found for heatmap: {groupby}")
+
+        gene_list = list(genes)
+        resolved = self._resolve_genes(
+            adata,
+            gene_list,
+            gene_symbol_column=gene_symbol_column,
+        )
+        requested_var_names = dict(resolved.requested_var_names)
+        requested_labels = dict(resolved.requested_labels)
+        if not resolved.var_names:
+            return GroupedGeneExpression(
+                groupby=groupby,
+                means=pd.DataFrame(),
+                overall_means=pd.Series(dtype=float),
+                requested_var_names=requested_var_names,
+                requested_labels=requested_labels,
+                expression_layer=expression_layer,
+                use_raw=use_raw,
+            )
+
+        source_var_names, source_matrix = expression_matrix(
+            adata,
+            resolved.var_names,
+            expression_layer=expression_layer,
+            use_raw=use_raw,
+        )
+        if source_matrix is None or source_var_names != resolved.var_names:
+            missing = [
+                var_name
+                for var_name in resolved.var_names
+                if var_name not in source_var_names
+            ]
+            raise KeyError(
+                "resolved genes are absent from the requested expression "
+                f"source: {missing}"
+            )
+
+        group_values = adata.obs[groupby].astype(str)
+        categories = self._ordered_obs_groups(
+            adata=adata,
+            groupby=groupby,
+            group_values=group_values,
+            obs_order=obs_order,
+        )
+        if not categories:
+            return GroupedGeneExpression(
+                groupby=groupby,
+                means=pd.DataFrame(index=source_var_names),
+                overall_means=pd.Series(
+                    _expression_column_means(source_matrix),
+                    index=source_var_names,
+                ),
+                requested_var_names=requested_var_names,
+                requested_labels=requested_labels,
+                expression_layer=expression_layer,
+                use_raw=use_raw,
+            )
+
+        group_codes = pd.Categorical(
+            group_values,
+            categories=categories,
+        ).codes
+        grouped_values, overall_means = self._group_expression_means(
+            source_matrix,
+            group_codes=group_codes,
+            n_groups=len(categories),
+        )
+        means = pd.DataFrame(
+            grouped_values.T,
+            index=source_var_names,
+            columns=categories,
+        )
+        return GroupedGeneExpression(
+            groupby=groupby,
+            means=means,
+            overall_means=pd.Series(
+                overall_means,
+                index=source_var_names,
+            ),
+            requested_var_names=requested_var_names,
+            requested_labels=requested_labels,
+            expression_layer=expression_layer,
+            use_raw=use_raw,
+        )
 
     def plot_multi_gene_expression_heatmap(
         self,
@@ -47,6 +194,7 @@ class _HeatmapMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
         cbar_title: str | None = None,
         vmin: float | None = 0,
         vmax: float | None = None,
+        grouped_expression: GroupedGeneExpression | None = None,
     ) -> None:
         """Save mean gene expression as a grouped square-cell heatmap.
 
@@ -72,6 +220,9 @@ class _HeatmapMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
           vmin: Lower color limit. Defaults to 0 so zero maps to gray when
             using `umap_expression_cmap`.
           vmax: Upper color limit.
+          grouped_expression: Optional reusable grouped means prepared by
+            `summarize_gene_expression_by_obs`. When supplied, its recorded
+            expression source is used instead of reading adata again.
 
         Example Usage:
           >>> viz.plot_multi_gene_expression_heatmap(
@@ -95,49 +246,67 @@ class _HeatmapMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             cmap if cmap is not None else self.expression_cmap,
             zero_position=self._zero_cmap_position(vmin=vmin, vmax=vmax),
         )
-        if expression_layer is not None and use_raw:
-            raise ValueError(
-                "use_raw=True cannot be combined with expression_layer"
+        if grouped_expression is None:
+            grouped_expression = self.summarize_gene_expression_by_obs(
+                adata,
+                genes,
+                groupby=groupby,
+                expression_layer=expression_layer,
+                use_raw=use_raw,
+                gene_symbol_column=gene_symbol_column,
+                obs_order=obs_order,
             )
-        if groupby not in adata.obs.columns:
-            raise KeyError(f"obs column not found for heatmap: {groupby}")
+        elif grouped_expression.groupby != groupby:
+            raise ValueError(
+                "grouped_expression was prepared for "
+                f"{grouped_expression.groupby!r}, not {groupby!r}"
+            )
+        elif (
+            grouped_expression.expression_layer != expression_layer
+            or grouped_expression.use_raw != use_raw
+        ):
+            raise ValueError(
+                "grouped_expression was prepared from a different "
+                "expression source"
+            )
 
-        resolved = self._resolve_genes(
-            adata,
-            genes,
-            gene_symbol_column=gene_symbol_column,
-        )
-        if not resolved.var_names:
+        var_names = []
+        display_label_by_var_name = {}
+        seen = set()
+        for gene in genes:
+            var_name = grouped_expression.requested_var_names.get(gene)
+            if var_name is None or var_name in seen:
+                continue
+            seen.add(var_name)
+            var_names.append(var_name)
+            display_label_by_var_name[var_name] = (
+                grouped_expression.requested_labels[gene]
+            )
+        if not var_names:
             logger.warning(
                 "[plot] No valid genes found for %s. Skipping.", filename
             )
             return
 
-        expr_kwargs: dict[str, Any] = {"layer": expression_layer}
-        if expression_layer is None:
-            expr_kwargs["use_raw"] = use_raw
-        expr_df = sc.get.obs_df(
-            adata,
-            keys=[*resolved.var_names, groupby],
-            **expr_kwargs,
+        ordered_var_names = (
+            grouped_expression.overall_means.loc[var_names]
+            .sort_values(ascending=False)
+            .index.tolist()
         )
-        grouped_expression = self._group_gene_expression_by_obs(
-            adata=adata,
-            expr_df=expr_df,
-            var_names=resolved.var_names,
-            labels=resolved.labels,
-            groupby=groupby,
-            obs_order=obs_order,
-        )
-        if grouped_expression.empty:
+        heatmap_expression = grouped_expression.means.loc[ordered_var_names]
+        display_labels = [
+            display_label_by_var_name[var_name]
+            for var_name in ordered_var_names
+        ]
+        if heatmap_expression.empty or heatmap_expression.shape[1] == 0:
             logger.warning(
                 "[plot] No valid groups found for heatmap %s. Skipping.",
                 filename,
             )
             return
 
-        n_genes, n_groups = grouped_expression.shape
-        heatmap_values = grouped_expression.T.to_numpy(dtype=float)
+        n_genes, n_groups = heatmap_expression.shape
+        heatmap_values = heatmap_expression.T.to_numpy(dtype=float)
         panel_w = max(min_width, n_genes * cell_size)
         panel_h = max(min_height, n_groups * cell_size)
         fig, ax = plt.subplots(figsize=(panel_w, panel_h))
@@ -152,8 +321,8 @@ class _HeatmapMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
         ax.set_box_aspect(n_groups / n_genes)
         self._style_gene_expression_heatmap_axis(
             ax=ax,
-            genes=grouped_expression.index.tolist(),
-            groups=grouped_expression.columns.tolist(),
+            genes=display_labels,
+            groups=heatmap_expression.columns.tolist(),
         )
         self._add_embedding_colorbar(
             fig=fig,
@@ -310,19 +479,14 @@ class _HeatmapMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
         self._save_figure_and_log(fig, out, "[plot] score heatmap -> %s")
 
     @staticmethod
-    def _group_gene_expression_by_obs(
+    def _ordered_obs_groups(
         *,
         adata: Any,
-        expr_df: pd.DataFrame,
-        var_names: list[str],
-        labels: list[str],
         groupby: str,
+        group_values: pd.Series,
         obs_order: Sequence[str] | None = None,
-    ) -> pd.DataFrame:
-        """Return mean expression with genes on rows and obs groups."""
-        expr_df = expr_df.copy()
-        expr_df[groupby] = expr_df[groupby].astype(str)
-
+    ) -> list[str]:
+        """Return requested observed groups in deterministic display order."""
         if obs_order is not None:
             categories = [str(category) for category in obs_order]
         elif hasattr(adata.obs[groupby], "cat"):
@@ -331,27 +495,133 @@ class _HeatmapMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             ]
         else:
             categories = sorted(
-                str(category)
-                for category in pd.Series(expr_df[groupby]).dropna().unique()
+                str(category) for category in group_values.dropna().unique()
             )
 
-        mean_exp = expr_df.groupby(groupby, observed=True)[var_names].mean()
-        categories = [
-            category for category in categories if category in mean_exp.index
-        ]
-        if not categories:
-            return pd.DataFrame(index=labels)
-
-        gene_means = expr_df[var_names].mean(axis=0)
-        ordered_var_names = gene_means.sort_values(ascending=False).index
-        label_lookup = dict(zip(var_names, labels, strict=True))
-        ordered_labels = [
-            label_lookup[var_name] for var_name in ordered_var_names
+        observed = set(group_values)
+        return [
+            category
+            for category in dict.fromkeys(categories)
+            if category in observed
         ]
 
-        grouped = mean_exp.loc[categories, ordered_var_names].T
-        grouped.index = ordered_labels
-        return grouped
+    @classmethod
+    def _group_expression_means(
+        cls,
+        matrix: Any,
+        *,
+        group_codes: np.ndarray,
+        n_groups: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return grouped and overall means without full dense conversion."""
+        if sp.issparse(matrix):
+            return cls._sparse_group_expression_means(
+                matrix,
+                group_codes=group_codes,
+                n_groups=n_groups,
+            )
+        return cls._dense_group_expression_means(
+            np.asarray(matrix),
+            group_codes=group_codes,
+            n_groups=n_groups,
+        )
+
+    @staticmethod
+    def _sparse_group_expression_means(
+        matrix: Any,
+        *,
+        group_codes: np.ndarray,
+        n_groups: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return sparse-source grouped and overall expression means."""
+        n_obs, n_vars = matrix.shape
+        valid_rows = np.flatnonzero(group_codes >= 0)
+        indicator = sp.csr_matrix(
+            (
+                np.ones(len(valid_rows), dtype=float),
+                (group_codes[valid_rows], valid_rows),
+            ),
+            shape=(n_groups, n_obs),
+        )
+
+        sparse_matrix = matrix
+        coo = sparse_matrix.tocoo(copy=False)
+        nan_mask = np.isnan(coo.data)
+        if bool(nan_mask.any()):
+            sparse_matrix = sparse_matrix.copy()
+            sparse_matrix.data[np.isnan(sparse_matrix.data)] = 0
+            nan_matrix = sp.csr_matrix(
+                (
+                    np.ones(int(nan_mask.sum()), dtype=float),
+                    (coo.row[nan_mask], coo.col[nan_mask]),
+                ),
+                shape=matrix.shape,
+            )
+            grouped_nan_product: Any = indicator @ nan_matrix
+            grouped_nan_counts = grouped_nan_product.toarray()
+            overall_nan_counts = np.asarray(nan_matrix.sum(axis=0)).reshape(-1)
+        else:
+            grouped_nan_counts = np.zeros((n_groups, n_vars), dtype=float)
+            overall_nan_counts = np.zeros(n_vars, dtype=float)
+
+        grouped_product: Any = indicator @ sparse_matrix
+        grouped_sums = grouped_product.toarray()
+        grouped_counts = np.bincount(
+            group_codes[valid_rows],
+            minlength=n_groups,
+        ).astype(float)[:, np.newaxis]
+        grouped_counts = grouped_counts - grouped_nan_counts
+        grouped_means = np.divide(
+            grouped_sums,
+            grouped_counts,
+            out=np.full((n_groups, n_vars), np.nan, dtype=float),
+            where=grouped_counts > 0,
+        )
+
+        overall_sums = np.asarray(sparse_matrix.sum(axis=0)).reshape(-1)
+        overall_counts = n_obs - overall_nan_counts
+        overall_means = np.divide(
+            overall_sums,
+            overall_counts,
+            out=np.full(n_vars, np.nan, dtype=float),
+            where=overall_counts > 0,
+        )
+        return grouped_means, overall_means
+
+    @staticmethod
+    def _dense_group_expression_means(
+        matrix: np.ndarray,
+        *,
+        group_codes: np.ndarray,
+        n_groups: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return dense-source grouped and overall expression means."""
+        n_vars = matrix.shape[1]
+        grouped_means = np.full((n_groups, n_vars), np.nan, dtype=float)
+        for group_index in range(n_groups):
+            block = matrix[group_codes == group_index]
+            if block.shape[0] == 0:
+                continue
+            nan_mask = np.isnan(block)
+            sums = np.nansum(block, axis=0)
+            counts = block.shape[0] - nan_mask.sum(axis=0)
+            grouped_means[group_index] = np.divide(
+                sums,
+                counts,
+                out=np.full(n_vars, np.nan, dtype=float),
+                where=counts > 0,
+            )
+
+        overall_nan_mask = np.isnan(matrix)
+        overall_sums = np.nansum(matrix, axis=0)
+        overall_counts = matrix.shape[0] - overall_nan_mask.sum(axis=0)
+        overall_means = np.divide(
+            overall_sums,
+            overall_counts,
+            out=np.full(n_vars, np.nan, dtype=float),
+            where=overall_counts > 0,
+        )
+        return grouped_means, overall_means
 
     @staticmethod
     def _group_obs_scores_by_obs(
