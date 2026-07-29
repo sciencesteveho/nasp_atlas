@@ -93,6 +93,7 @@ def regress_features_on_continuous(
     predictor_key: Continuous obs column used as the predictor (for example
       the age key or an eQTL-count column).
     stratify_key: Optional column to run the regression within each stratum.
+      Missing values form an explicit "NA" stratum.
     fdr_method: FDR method label recorded in output; only Benjamini-Hochberg is
       implemented.
 
@@ -105,18 +106,19 @@ def regress_features_on_continuous(
         raise KeyError(f"predictor column not found: {predictor_key}")
     records: list[dict[str, object]] = []
     feature_keys = ["feature_type", "feature_id", "feature_label"]
-    strata = (
-        unit_frame[stratify_key].fillna("NA").astype(str).unique().tolist()
+    strata_values = (
+        unit_frame[stratify_key].astype("string").fillna("NA")
         if stratify_key is not None
-        else [None]
+        else None
+    )
+    strata = (
+        [None] if strata_values is None else strata_values.unique().tolist()
     )
     for stratum in strata:
         scoped = (
             unit_frame
-            if stratum is None
-            else unit_frame[
-                unit_frame[stratify_key].fillna("NA").astype(str) == stratum
-            ]
+            if strata_values is None
+            else unit_frame[strata_values == stratum]
         )
         records.extend(
             _continuous_regression_record(

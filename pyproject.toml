@@ -18,7 +18,7 @@ classifiers = [
 
 dependencies = [
   "adjustText==1.4.0",
-  "anndata==0.12.6",
+  "anndata==0.12.17",
   "cellxgene_census==1.17.0",
   "decoupler==2.2.0",
   "harmonypy==2.0.0",
@@ -26,7 +26,7 @@ dependencies = [
   "matplotlib==3.10.9",
   "nasp_compendium @ git+https://github.com/sciencesteveho/nasp_compendium.git",
   "numpy==2.4.6",
-  "pandas==3.0.3",
+  "pandas==2.3.3",
   "plotly==6.7.0",
   "pyscenic==0.12.1",
   "PyYAML==6.0.3",

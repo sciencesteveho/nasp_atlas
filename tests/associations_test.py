@@ -451,6 +451,31 @@ def test_regression_skips_constant_response() -> None:
     assert result.iloc[0]["skip_reason"] == "constant_response"
 
 
+def test_regression_preserves_missing_categorical_stratum() -> None:
+    """Missing categorical strata remain an explicit NA comparison group."""
+    frame = pd.DataFrame(
+        {
+            "feature_type": ["module_score"] * 6,
+            "feature_id": ["NASP_TEST_score"] * 6,
+            "feature_label": ["NASP_TEST"] * 6,
+            "feature_value": [1.0, 2.0, 3.0, 1.5, 2.5, 3.5],
+            "age_years": [30.0, 40.0, 50.0] * 2,
+            "sex": pd.Categorical(["female"] * 3 + [None] * 3),
+            "statistical_unit": ["donor"] * 6,
+            "aggregation": ["mean"] * 6,
+        }
+    )
+
+    result = regress_features_on_continuous(
+        frame,
+        predictor_key="age_years",
+        stratify_key="sex",
+    )
+
+    assert set(result["stratum"]) == {"female", "NA"}
+    assert (result["n_units"] == 3.0).all()
+
+
 def test_feature_group_tests_compare_two_supported_groups() -> None:
     """Two supported groups produce Welch and Mann-Whitney tests."""
     unit_frame = pd.DataFrame(
