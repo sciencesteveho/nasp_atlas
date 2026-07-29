@@ -1332,7 +1332,7 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
             len(facets),
             panel_width=max(
                 3.5,
-                0.70 * widest_layer * within_layer_spacing,
+                0.84 * widest_layer * within_layer_spacing,
             ),
             panel_height=max(
                 3.0,

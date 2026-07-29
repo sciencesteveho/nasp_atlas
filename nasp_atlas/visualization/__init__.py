@@ -23,7 +23,7 @@ def set_matplotlib_publication_parameters() -> None:
             "legend.fontsize": 5,
             "figure.titlesize": 5,
             "figure.dpi": 450,
-            "font.sans-serif": ["Arial", "Nimbus Sans"],
+            "font.sans-serif": ["Arial", "Nimbus Sans", "DejaVu Sans"],
             "axes.linewidth": 0.25,
             "xtick.major.width": 0.25,
             "ytick.major.width": 0.25,
