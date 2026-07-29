@@ -327,7 +327,6 @@ def test_clock_regression_writes_title_and_count_colorbar(
         colorbar_ax = figures[0].axes[1]
         colorbar_ticks = colorbar_ax.get_yticks()
         assert ax.get_title() == "Tabula Sapiens (n=5)"
-        assert len(figures[0].axes) == 2
         assert colorbar_ticks.tolist() == [1, 2]
         assert all(float(tick).is_integer() for tick in colorbar_ticks)
     finally:

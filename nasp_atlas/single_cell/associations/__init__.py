@@ -28,7 +28,14 @@ from nasp_atlas.single_cell.associations.core import ObsSchema
 from nasp_atlas.single_cell.associations.core import StatisticalUnit
 from nasp_atlas.single_cell.associations.core import benjamini_hochberg
 from nasp_atlas.single_cell.associations.core import metadata_columns
+from nasp_atlas.single_cell.associations.eqtl import (
+    associate_features_with_eqtl_counts,
+)
+from nasp_atlas.single_cell.associations.eqtl import (
+    build_eqtl_association_frames,
+)
 from nasp_atlas.single_cell.associations.eqtl import merge_eqtl_counts
+from nasp_atlas.single_cell.associations.eqtl import prepare_eqtl_table
 from nasp_atlas.single_cell.associations.eqtl import validate_eqtl_table
 from nasp_atlas.single_cell.associations.features import (
     build_cell_feature_frame,
@@ -47,11 +54,14 @@ __all__ = [
     "ObsSchema",
     "StatisticalUnit",
     "aggregate_feature_frame",
+    "associate_features_with_eqtl_counts",
     "benjamini_hochberg",
     "build_cell_feature_frame",
+    "build_eqtl_association_frames",
     "merge_eqtl_counts",
     "metadata_columns",
     "partial_correlation_controlling_tissue",
+    "prepare_eqtl_table",
     "regress_features_on_continuous",
     "resolve_feature_specs",
     "summarize_continuous_association_stability",

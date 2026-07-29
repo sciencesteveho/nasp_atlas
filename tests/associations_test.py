@@ -13,12 +13,17 @@ import scipy.sparse as sp
 from nasp_atlas.analysis.tabula_sapiens import association_analysis
 from nasp_atlas.single_cell.associations import ObsSchema
 from nasp_atlas.single_cell.associations import aggregate_feature_frame
+from nasp_atlas.single_cell.associations import (
+    associate_features_with_eqtl_counts,
+)
 from nasp_atlas.single_cell.associations import benjamini_hochberg
 from nasp_atlas.single_cell.associations import build_cell_feature_frame
+from nasp_atlas.single_cell.associations import build_eqtl_association_frames
 from nasp_atlas.single_cell.associations import merge_eqtl_counts
 from nasp_atlas.single_cell.associations import (
     partial_correlation_controlling_tissue,
 )
+from nasp_atlas.single_cell.associations import prepare_eqtl_table
 from nasp_atlas.single_cell.associations import regress_features_on_continuous
 from nasp_atlas.single_cell.associations import resolve_feature_specs
 from nasp_atlas.single_cell.associations import summarize_feature_groups
@@ -577,6 +582,99 @@ def test_validate_eqtl_table_returns_available_value_columns() -> None:
     assert value_columns == ["total_eqtls", "tissue_specific_eqtls"]
 
 
+def test_prepare_eqtl_table_accepts_long_sensor_schema() -> None:
+    """Long sensor counts retain gene-tissue keys and source provenance."""
+    source = pd.DataFrame(
+        {
+            "gene": ["CGAS", "CGAS", "IFIH1", "IFIH1"],
+            "tissue": ["Liver", "Lung", "Liver", "Lung"],
+            "tissue_abbrev": ["LIVER", "LUNG", "LIVER", "LUNG"],
+            "n_significant_eqtls": [2, 5, 3, 8],
+            "gene_total_eqtls": [7, 7, 11, 11],
+        }
+    )
+
+    prepared = prepare_eqtl_table(source, merge_mode="gene_tissue")
+
+    assert prepared.loc[0, "gene_symbol"] == "CGAS"
+    assert prepared.loc[0, "tissue_specific_eqtls"] == 2
+    assert prepared.loc[0, "eqtl_tissue_abbrev"] == "LIVER"
+    assert (
+        prepared["eqtl_source_schema"] == "nasp_sensor_eqtl_counts_long"
+    ).all()
+
+
+def test_prepare_eqtl_table_accepts_wide_gene_totals() -> None:
+    """Wide sensor counts validate tissue sums and expose gene totals."""
+    source = pd.DataFrame(
+        {
+            "gene": ["CGAS", "IFIH1"],
+            "gene_total_eqtls": [7, 11],
+            "LIVER": [2, 3],
+            "LUNG": [5, 8],
+        }
+    )
+
+    prepared = prepare_eqtl_table(source, merge_mode="gene")
+
+    assert prepared[["gene_symbol", "total_eqtls"]].to_dict(
+        orient="records"
+    ) == [
+        {"gene_symbol": "CGAS", "total_eqtls": 7},
+        {"gene_symbol": "IFIH1", "total_eqtls": 11},
+    ]
+
+
+def test_prepare_eqtl_table_rejects_wide_tissue_join() -> None:
+    """Wide tissue abbreviations require the long table's tissue labels."""
+    source = pd.DataFrame(
+        {
+            "gene": ["CGAS"],
+            "gene_total_eqtls": [7],
+            "LIVER": [2],
+            "LUNG": [5],
+        }
+    )
+
+    with pytest.raises(KeyError, match="use the long table"):
+        prepare_eqtl_table(source, merge_mode="gene_tissue")
+
+
+def test_prepare_eqtl_table_sums_sensor_counts_by_tissue() -> None:
+    """Tissue mode sums significant pairs across the source sensor genes."""
+    source = pd.DataFrame(
+        {
+            "gene": ["CGAS", "CGAS", "IFIH1", "IFIH1"],
+            "tissue": ["Liver", "Lung", "Liver", "Lung"],
+            "n_significant_eqtls": [2, 5, 3, 8],
+            "gene_total_eqtls": [7, 7, 11, 11],
+        }
+    )
+
+    prepared = prepare_eqtl_table(source, merge_mode="tissue").set_index(
+        "tissue"
+    )
+
+    assert prepared.loc["Liver", "tissue_specific_eqtls"] == 5
+    assert prepared.loc["Lung", "tissue_specific_eqtls"] == 13
+    assert (prepared["eqtl_n_genes"] == 2).all()
+
+
+def test_prepare_eqtl_table_rejects_inconsistent_gene_totals() -> None:
+    """Long sensor counts fail when tissue counts do not equal gene totals."""
+    source = pd.DataFrame(
+        {
+            "gene": ["CGAS", "CGAS"],
+            "tissue": ["Liver", "Lung"],
+            "n_significant_eqtls": [2, 5],
+            "gene_total_eqtls": [8, 8],
+        }
+    )
+
+    with pytest.raises(ValueError, match="do not sum to gene totals"):
+        prepare_eqtl_table(source, merge_mode="gene_tissue")
+
+
 def test_merge_eqtl_counts_joins_gene_burden() -> None:
     """Gene-mode merging annotates matches and preserves unmatched genes."""
     unit_frame = pd.DataFrame(
@@ -599,6 +697,208 @@ def test_merge_eqtl_counts_joins_gene_burden() -> None:
     assert merged.loc["CGAS", "total_eqtls"] == 12
     assert np.isnan(merged.loc["IFIH1", "total_eqtls"])
     assert (merged["eqtl_merge_mode"] == "gene").all()
+
+
+def test_merge_eqtl_counts_joins_gene_and_normalized_tissue() -> None:
+    """Gene-tissue mode matches spelling-equivalent atlas tissue labels."""
+    unit_frame = pd.DataFrame(
+        {
+            "feature_type": ["gene_expression", "module_score"],
+            "feature_id": ["ENSG_CGAS", "NASP_DNA_SENSING_score"],
+            "feature_label": ["CGAS", "NASP_DNA_SENSING"],
+            "tissue_in_publication": ["liver", "liver"],
+            "feature_value": [1.5, 2.5],
+        }
+    )
+    eqtl_table = pd.DataFrame(
+        {
+            "gene": ["CGAS"],
+            "tissue": ["Liver"],
+            "n_significant_eqtls": [2],
+            "gene_total_eqtls": [2],
+        }
+    )
+
+    merged = merge_eqtl_counts(
+        unit_frame,
+        eqtl_table,
+        merge_mode="gene_tissue",
+        schema=ObsSchema(),
+    )
+
+    gene_row = merged.loc[merged["feature_label"] == "CGAS"].iloc[0]
+    module_row = merged.loc[merged["feature_label"] == "NASP_DNA_SENSING"].iloc[
+        0
+    ]
+    assert gene_row["tissue_specific_eqtls"] == 2
+    assert gene_row["eqtl_source_tissue"] == "Liver"
+    assert bool(gene_row["eqtl_matched"])
+    assert not bool(module_row["eqtl_matched"])
+
+
+def test_eqtl_association_frames_average_donors_before_plotting() -> None:
+    """Plot frames use genes, rather than repeated donors, as support."""
+    unit_frame = pd.DataFrame(
+        {
+            "feature_type": ["gene_expression"] * 8,
+            "feature_id": ["ENSG_CGAS"] * 4 + ["ENSG_IFIH1"] * 4,
+            "feature_label": ["CGAS"] * 4 + ["IFIH1"] * 4,
+            "donor_id": ["D1", "D2"] * 4,
+            "tissue_in_publication": ["Liver", "Liver", "Lung", "Lung"] * 2,
+            "feature_value": [1.0, 3.0, 2.0, 4.0, 5.0, 7.0, 6.0, 8.0],
+            "statistical_unit": ["donor_tissue"] * 8,
+            "aggregation": ["mean"] * 8,
+        }
+    )
+    eqtl_table = pd.DataFrame(
+        {
+            "gene": ["CGAS", "CGAS", "IFIH1", "IFIH1"],
+            "tissue": ["Liver", "Lung", "Liver", "Lung"],
+            "n_significant_eqtls": [10, 20, 30, 40],
+            "gene_total_eqtls": [30, 30, 70, 70],
+        }
+    )
+    merged = merge_eqtl_counts(
+        unit_frame,
+        eqtl_table,
+        merge_mode="gene_tissue",
+        schema=ObsSchema(),
+    )
+
+    frames = build_eqtl_association_frames(
+        merged,
+        merge_mode="gene_tissue",
+        schema=ObsSchema(),
+    )
+    plot_frame = frames[
+        "eqtl_tissue_count_within_tissue_across_genes"
+    ].sort_values(["tissue_in_publication", "source_feature_label"])
+
+    assert plot_frame["statistical_unit"].eq("gene").all()
+    assert plot_frame["n_source_units"].eq(2).all()
+    assert plot_frame["unit_id"].tolist() == ["CGAS", "IFIH1"] * 2
+    assert plot_frame["feature_value"].tolist() == [2.0, 6.0, 3.0, 7.0]
+
+
+def test_eqtl_tissue_association_uses_tissues_as_units() -> None:
+    """Tissue-level eQTL tests do not count repeated donors as support."""
+    unit_frame = pd.DataFrame(
+        {
+            "feature_type": ["module_score"] * 6,
+            "feature_id": ["NASP_DNA_SENSING_score"] * 6,
+            "feature_label": ["NASP_DNA_SENSING"] * 6,
+            "donor_id": ["D1", "D2"] * 3,
+            "tissue_in_publication": [
+                "Liver",
+                "Liver",
+                "Lung",
+                "Lung",
+                "Spleen",
+                "Spleen",
+            ],
+            "feature_value": [1.0, 1.2, 2.0, 2.2, 3.0, 3.2],
+            "statistical_unit": ["donor_tissue"] * 6,
+            "aggregation": ["mean"] * 6,
+        }
+    )
+    eqtl_table = pd.DataFrame(
+        {
+            "tissue": ["Liver", "Lung", "Spleen"],
+            "tissue_specific_eqtls": [10, 20, 30],
+        }
+    )
+    merged = merge_eqtl_counts(
+        unit_frame,
+        eqtl_table,
+        merge_mode="tissue",
+        schema=ObsSchema(),
+    )
+
+    result = associate_features_with_eqtl_counts(
+        merged,
+        merge_mode="tissue",
+        schema=ObsSchema(),
+    )
+
+    assert result.iloc[0]["statistical_unit"] == "tissue"
+    assert result.iloc[0]["n"] == 3
+    assert result.iloc[0]["pearson_r"] > 0.99
+
+
+def test_eqtl_tissue_association_rejects_cell_units() -> None:
+    """Tissue-level counts cannot be tested against repeated cell rows."""
+    merged = pd.DataFrame(
+        {
+            "feature_type": ["module_score"],
+            "feature_id": ["NASP_DNA_SENSING_score"],
+            "feature_label": ["NASP_DNA_SENSING"],
+            "feature_value": [1.0],
+            "tissue_in_publication": ["Liver"],
+            "tissue_specific_eqtls": [10.0],
+            "statistical_unit": ["cell"],
+            "aggregation": ["mean"],
+        }
+    )
+
+    with pytest.raises(ValueError, match="require donor_tissue or tissue"):
+        associate_features_with_eqtl_counts(
+            merged,
+            merge_mode="tissue",
+            schema=ObsSchema(),
+        )
+
+
+def test_eqtl_gene_total_association_uses_genes_as_units() -> None:
+    """Wide-table gene totals compare genes without repeated-donor support."""
+    unit_frame = pd.DataFrame(
+        {
+            "feature_type": ["gene_expression"] * 6,
+            "feature_id": [
+                "ENSG1",
+                "ENSG1",
+                "ENSG2",
+                "ENSG2",
+                "ENSG3",
+                "ENSG3",
+            ],
+            "feature_label": [
+                "CGAS",
+                "CGAS",
+                "IFIH1",
+                "IFIH1",
+                "DDX58",
+                "DDX58",
+            ],
+            "donor_id": ["D1", "D2"] * 3,
+            "feature_value": [1.0, 1.2, 2.0, 2.2, 3.0, 3.2],
+            "statistical_unit": ["donor"] * 6,
+            "aggregation": ["mean"] * 6,
+        }
+    )
+    eqtl_table = pd.DataFrame(
+        {
+            "gene": ["CGAS", "IFIH1", "DDX58"],
+            "gene_total_eqtls": [10, 20, 30],
+            "LIVER": [4, 8, 12],
+            "LUNG": [6, 12, 18],
+        }
+    )
+    merged = merge_eqtl_counts(
+        unit_frame,
+        eqtl_table,
+        merge_mode="gene",
+        schema=ObsSchema(),
+    )
+
+    result = associate_features_with_eqtl_counts(
+        merged,
+        merge_mode="gene",
+        schema=ObsSchema(),
+    )
+
+    assert result.iloc[0]["statistical_unit"] == "gene"
+    assert result.iloc[0]["n"] == 3
+    assert result.iloc[0]["pearson_r"] > 0.99
 
 
 def test_validate_eqtl_table_reports_missing_columns() -> None:
@@ -639,6 +939,11 @@ def test_orchestration_end_to_end(tmp_path: Path) -> None:
         regression["feature_id"] == "NASP_DNA_SENSING_score"
     ].iloc[0]
     assert ifn["pearson_r"] > 0.9
+    group_tests = pd.read_csv(tables / "association_group_test_results.csv")
+    assert "sex" in set(group_tests["group_key"])
+    plot_manifest = pd.read_csv(tables / "association_plot_manifest.csv")
+    assert "sex" not in set(plot_manifest["predictor"].dropna())
+    assert "tissue_in_publication" in set(plot_manifest["predictor"].dropna())
     skipped = pd.read_csv(tables / "association_skipped_features.csv")
     assert {
         "feature_type",
@@ -705,6 +1010,7 @@ def test_orchestration_end_to_end(tmp_path: Path) -> None:
         "nasp_sensor_output_mismatch.png",
         "nasp_age_effects_by_cell_type.png",
         "nasp_age_effect_consistency_across_cell_types.png",
+        "nasp_sensor_age_effect_consistency_across_cell_types.png",
         "nasp_mechanistic_edge_network.png",
     }
     written_plots = {path.name: path for path in nasp_plots.glob("*.png")}
@@ -740,6 +1046,57 @@ def test_orchestration_writes_eqtl_annotations(tmp_path: Path) -> None:
     )
     matched = annotations["feature_label"] == "NASP_DNA_SENSING"
     assert (annotations.loc[matched, "total_eqtls"] == 7).all()
+
+
+def test_orchestration_runs_gene_tissue_eqtl_associations(
+    tmp_path: Path,
+) -> None:
+    """Workflow tests tissue eQTL burden without donor inflation."""
+    adata = _synthetic_adata()
+    scores = _synthetic_scores(adata)
+    h5ad_path, score_path = _write_inputs(tmp_path, adata, scores)
+    eqtl_path = tmp_path / "eqtl_long.csv"
+    pd.DataFrame(
+        {
+            "gene": [
+                "CGAS",
+                "CGAS",
+                "IFIH1",
+                "IFIH1",
+                "DDX58",
+                "DDX58",
+            ],
+            "tissue": ["Liver", "Lung"] * 3,
+            "n_significant_eqtls": [1, 2, 3, 4, 5, 6],
+            "gene_total_eqtls": [3, 3, 7, 7, 11, 11],
+        }
+    ).to_csv(eqtl_path, index=False)
+    output_dir = tmp_path / "assoc"
+
+    association_analysis(
+        h5ad_path=h5ad_path,
+        score_csv_path=score_path,
+        output_dir=output_dir,
+        sensor_group="nucleic_acid_sensors",
+        eqtl_table_path=eqtl_path,
+        eqtl_merge_mode="gene_tissue",
+        max_plots=0,
+        plot_nasp_visualizations=False,
+    )
+
+    tables = output_dir / "association_tables"
+    regression = pd.read_csv(tables / "association_regression_results.csv")
+    eqtl_results = regression.loc[
+        regression["analysis_scope"]
+        == "eqtl_tissue_count_within_tissue_across_genes"
+    ]
+    assert set(eqtl_results["stratum"]) == {"liver", "lung"}
+    assert (eqtl_results["statistical_unit"] == "gene").all()
+    assert (eqtl_results["n"] == 3).all()
+    assert (eqtl_results["eqtl_predictor_transform"] == "none").all()
+    annotations = pd.read_csv(tables / "association_eqtl_annotations.csv")
+    matched_genes = annotations["feature_type"].eq("gene_expression")
+    assert annotations.loc[matched_genes, "eqtl_matched"].all()
 
 
 def test_orchestration_rejects_duplicated_obs_name(tmp_path: Path) -> None:

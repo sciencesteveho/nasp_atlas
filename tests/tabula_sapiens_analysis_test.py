@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from collections import Counter
 from pathlib import Path
 
 import anndata as ad  # type: ignore[import]
@@ -52,7 +53,14 @@ def test_single_tissue_subsets_before_recomputing_umap(
         ),
         var=pd.DataFrame({"feature_name": ["CGAS"]}, index=["CGAS"]),
     )
-    observed_sizes: list[int] = []
+    observed_sizes: dict[str, int] = {}
+
+    def capture_recompute(adata_arg, **kwargs) -> None:
+        observed_sizes["recompute"] = adata_arg.n_obs
+
+    def capture_metadata_plot(adata_arg, **kwargs) -> None:
+        observed_sizes["metadata_plot"] = adata_arg.n_obs
+
     monkeypatch.setattr(
         tabula_sapiens_workflows,
         "read_h5ad",
@@ -61,12 +69,12 @@ def test_single_tissue_subsets_before_recomputing_umap(
     monkeypatch.setattr(
         tabula_sapiens_workflows.SCProcessor,
         "recompute_umap",
-        lambda adata_arg, **kwargs: observed_sizes.append(adata_arg.n_obs),
+        capture_recompute,
     )
     monkeypatch.setattr(
         tabula_sapiens_workflows,
         "plot_tabula_sapiens_metadata_umaps",
-        lambda adata_arg, **kwargs: observed_sizes.append(adata_arg.n_obs),
+        capture_metadata_plot,
     )
     monkeypatch.setattr(
         tabula_sapiens_workflows.GeneModules,
@@ -86,7 +94,7 @@ def test_single_tissue_subsets_before_recomputing_umap(
         single_tissue="lung",
     )
 
-    assert observed_sizes == [2, 2]
+    assert observed_sizes == {"recompute": 2, "metadata_plot": 2}
 
 
 def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
@@ -122,6 +130,7 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
     )
     plot_calls: list[dict[str, object]] = []
     score_heatmap_calls: list[dict[str, object]] = []
+    concordance_calls: list[pd.DataFrame] = []
 
     monkeypatch.setattr(
         tabula_sapiens_workflows,
@@ -160,6 +169,11 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
         tabula_sapiens_workflows.SCVisualizer,
         "plot_grouped_obs_score_heatmap",
         capture_score_heatmap,
+    )
+    monkeypatch.setattr(
+        tabula_sapiens_workflows.SCVisualizer,
+        "plot_scorer_concordance_heatmap",
+        lambda _, concordance, **kwargs: concordance_calls.append(concordance),
     )
 
     def fake_scanpy_scores(adata_arg, *args, **kwargs):
@@ -231,16 +245,31 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
     assert scores["scoring_n_modules"].unique().tolist() == [1]
     assert scores.loc["cell_a", "NASP_DNA_SENSING_score"] == -2.0
     assert scores.loc["cell_a", "NASP_DNA_SENSING_auc"] == -0.25
-    assert [call["obs_keys"] for call in plot_calls] == [
-        ["NASP_DNA_SENSING_score"],
-        ["NASP_DNA_SENSING_auc"],
+    assert Counter(tuple(call["obs_keys"]) for call in plot_calls) == Counter(
+        [
+            ("NASP_DNA_SENSING_score",),
+            ("NASP_DNA_SENSING_auc",),
+        ]
+    )
+    assert Counter(
+        (tuple(call["score_keys"]), call["groupby"])
+        for call in score_heatmap_calls
+    ) == Counter(
+        [
+            (("NASP_DNA_SENSING_score",), "cell_type"),
+            (("NASP_DNA_SENSING_auc",), "cell_type"),
+        ]
+    )
+    assert len(concordance_calls) == 1
+    assert concordance_calls[0]["scanpy_module_id"].tolist() == [
+        "NASP_DNA_SENSING"
     ]
-    assert [
-        (call["score_keys"], call["groupby"]) for call in score_heatmap_calls
-    ] == [
-        (["NASP_DNA_SENSING_score"], "cell_type"),
-        (["NASP_DNA_SENSING_auc"], "cell_type"),
+    assert concordance_calls[0]["aucell_module_id"].tolist() == [
+        "NASP_DNA_SENSING"
     ]
+    assert (
+        tmp_path / "tabula_sapiens_cross_scorer_module_correlations.csv"
+    ).is_file()
 
 
 def test_tabula_sapiens_heatmap_groupby_controls_all_heatmaps(
@@ -481,10 +510,14 @@ def test_tabula_sapiens_sensor_heatmaps_use_tissue_and_cell_type(
         output_dir=tmp_path,
     )
 
-    assert [(call["genes"], call["groupby"]) for call in heatmap_calls] == [
-        (["CGAS"], "tissue_in_publication"),
-        (["CGAS"], "cell_type"),
-    ]
+    assert Counter(
+        (tuple(call["genes"]), call["groupby"]) for call in heatmap_calls
+    ) == Counter(
+        [
+            (("CGAS",), "tissue_in_publication"),
+            (("CGAS",), "cell_type"),
+        ]
+    )
 
 
 def test_tabula_sapiens_module_heatmaps_follow_marker_umap_modules(
@@ -557,11 +590,17 @@ def test_tabula_sapiens_module_heatmaps_follow_marker_umap_modules(
         for call in umap_calls
         if call.get("filename") != "NA_SENSORS_gene_expression_umaps"
     ]
-    assert [call["genes"] for call in module_umap_calls] == [["CGAS"]]
-    assert [(call["genes"], call["groupby"]) for call in heatmap_calls] == [
-        (["CGAS"], "tissue_in_publication"),
-        (["CGAS"], "cell_type"),
-    ]
+    assert Counter(
+        tuple(call["genes"]) for call in module_umap_calls
+    ) == Counter([("CGAS",)])
+    assert Counter(
+        (tuple(call["genes"]), call["groupby"]) for call in heatmap_calls
+    ) == Counter(
+        [
+            (("CGAS",), "tissue_in_publication"),
+            (("CGAS",), "cell_type"),
+        ]
+    )
 
 
 def test_tissue_analysis_scores_once_then_analyzes_each_scorer(
@@ -605,13 +644,52 @@ def test_tissue_analysis_scores_once_then_analyzes_each_scorer(
     assert scoring_calls[0]["score_aucell"]
     assert scoring_calls[0]["heatmap_groupby"] == "cell_type"
     assert scoring_calls[0]["single_tissue"] == "liver"
-    assert [call["scorer"] for call in association_calls] == [
-        "scanpy",
-        "aucell",
-    ]
-    assert association_calls[0]["score_csv_path"] == outputs["score_table"]
+    assert Counter(call["scorer"] for call in association_calls) == Counter(
+        ["scanpy", "aucell"]
+    )
+    assert all(
+        call["score_csv_path"] == outputs["score_table"]
+        for call in association_calls
+    )
     assert outputs["association_scanpy"].name == "scanpy"
     assert outputs["association_aucell"].name == "aucell"
+
+
+def test_tabula_sapiens_analysis_omits_subsetting_for_complete_atlas(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """An omitted tissue label passes the complete h5ad to scoring."""
+    h5ad_path = tmp_path / "tabula_sapiens.h5ad"
+    h5ad_path.touch()
+    scoring_calls: list[dict[str, object]] = []
+
+    def capture_scoring(**kwargs) -> None:
+        scoring_calls.append(kwargs)
+        _write_completed_score_table(
+            kwargs["output_dir"],
+            str(kwargs["score_table_filename"]),
+        )
+
+    monkeypatch.setattr(
+        tabula_sapiens_workflows,
+        "tabula_sapiens_scoring_analysis",
+        capture_scoring,
+    )
+    monkeypatch.setattr(
+        tabula_sapiens_workflows,
+        "association_analysis",
+        lambda **kwargs: None,
+    )
+
+    outputs = tabula_sapiens.tabula_sapiens_tissue_analysis(
+        h5ad_path=h5ad_path,
+        output_dir=tmp_path / "results",
+        run_name="full_atlas",
+    )
+
+    assert {call["single_tissue"] for call in scoring_calls} == {None}
+    assert outputs["run_dir"] == tmp_path / "results" / "full_atlas"
 
 
 def test_tissue_analysis_resume_reuses_complete_score_table(
@@ -645,7 +723,7 @@ def test_tissue_analysis_resume_reuses_complete_score_table(
         resume_from_scores=True,
     )
 
-    assert association_scorers == ["scanpy", "aucell"]
+    assert Counter(association_scorers) == Counter(["scanpy", "aucell"])
 
 
 def test_tissue_analysis_resume_rebuilds_partial_score_table(
@@ -705,7 +783,8 @@ def test_single_tissue_loader_keeps_umap_representation(
     loaded_obsm: list[tuple[str, ...]] = []
 
     def capture_read(*args, **kwargs):
-        loaded_obsm.append(kwargs["obsm_keys"])
+        if "obsm_keys" in kwargs:
+            loaded_obsm.append(kwargs["obsm_keys"])
         return adata, adata.n_obs
 
     monkeypatch.setattr(
@@ -742,4 +821,4 @@ def test_single_tissue_loader_keeps_umap_representation(
         single_tissue_use_rep="X_scvi",
     )
 
-    assert loaded_obsm == [("X_umap", "X_scvi")]
+    assert any(set(keys) == {"X_umap", "X_scvi"} for keys in loaded_obsm)

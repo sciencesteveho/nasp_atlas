@@ -7,13 +7,18 @@ from nasp_atlas.single_cell.associations import FeatureType
 from nasp_atlas.single_cell.associations import ObsSchema
 from nasp_atlas.single_cell.associations import StatisticalUnit
 from nasp_atlas.single_cell.associations import aggregate_feature_frame
+from nasp_atlas.single_cell.associations import (
+    associate_features_with_eqtl_counts,
+)
 from nasp_atlas.single_cell.associations import benjamini_hochberg
 from nasp_atlas.single_cell.associations import build_cell_feature_frame
+from nasp_atlas.single_cell.associations import build_eqtl_association_frames
 from nasp_atlas.single_cell.associations import merge_eqtl_counts
 from nasp_atlas.single_cell.associations import metadata_columns
 from nasp_atlas.single_cell.associations import (
     partial_correlation_controlling_tissue,
 )
+from nasp_atlas.single_cell.associations import prepare_eqtl_table
 from nasp_atlas.single_cell.associations import regress_features_on_continuous
 from nasp_atlas.single_cell.associations import resolve_feature_specs
 from nasp_atlas.single_cell.associations import (
@@ -51,6 +56,9 @@ from nasp_atlas.single_cell.module_scoring import score_aucell_modules
 from nasp_atlas.single_cell.module_scoring import score_scanpy_module
 from nasp_atlas.single_cell.module_scoring import score_scanpy_modules
 from nasp_atlas.single_cell.score_diagnostics import compare_module_scorers
+from nasp_atlas.single_cell.score_diagnostics import (
+    cross_scorer_module_correlations,
+)
 from nasp_atlas.single_cell.scprocessor import SCProcessor
 from nasp_atlas.single_cell.scutils import SCUtils
 from nasp_atlas.single_cell.umap import UmapPanelSpec
@@ -83,10 +91,13 @@ __all__ = [
     "aggregate_counts_by_coverage",
     "aggregate_feature_frame",
     "aggregate_metacells",
+    "associate_features_with_eqtl_counts",
     "benjamini_hochberg",
     "build_cell_feature_frame",
+    "build_eqtl_association_frames",
     "combine_module_scores",
     "compare_module_scorers",
+    "cross_scorer_module_correlations",
     "dedupe_stem",
     "expected_module_coupling_report",
     "expression_matrix",
@@ -99,6 +110,7 @@ __all__ = [
     "pairwise_module_correlations",
     "partial_correlation_controlling_tissue",
     "positive_module_score_name",
+    "prepare_eqtl_table",
     "random_cell_subset",
     "rank_nasp_hypotheses",
     "read_csr_rows",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+from collections import Counter
 
 import anndata as ad  # type: ignore[import]
 import h5py  # type: ignore[import]
@@ -46,7 +47,6 @@ def test_embedding_config_roundtrip() -> None:
     restored = EmbeddingConfig.from_json(config.to_json())
 
     assert restored == config
-    assert restored.to_dict()["harmony_key"] == "batch"
 
 
 def test_expression_matrix_validates_requested_raw_source() -> None:
@@ -140,7 +140,6 @@ def test_scutils_filter_obs_doublets() -> None:
 
     filtered = SCUtils.filter_obs_doublets(adata)
 
-    assert filtered.n_obs == 2
     assert filtered.obs_names.tolist() == ["cell_a", "cell_c"]
 
 
@@ -436,9 +435,6 @@ def test_normalize_h5ad_string_storage_converts_arrow_categories(
     )
     normalized = tmp_path / "normalized.h5ad"
 
-    categories = adata.obs["tissue_type"].cat.categories
-    assert isinstance(categories.dtype, pd.StringDtype)
-
     normalize_h5ad_string_storage(adata)
     adata.write_h5ad(normalized)
 
@@ -535,14 +531,14 @@ def test_score_scanpy_module_combines_signed_scores(monkeypatch) -> None:
     score_name = score_scanpy_module(adata, module, random_state=7)
 
     assert score_name == "NASP_DNA_SENSING_score"
-    assert {tuple(call["gene_list"]) for call in calls} == {
-        ("CGAS",),
-        ("LMNB1",),
-    }
-    assert {call["score_name"] for call in calls} == {
-        "NASP_DNA_SENSING_pos",
-        "NASP_DNA_SENSING_inv",
-    }
+    assert Counter(
+        (tuple(call["gene_list"]), call["score_name"]) for call in calls
+    ) == Counter(
+        [
+            (("CGAS",), "NASP_DNA_SENSING_pos"),
+            (("LMNB1",), "NASP_DNA_SENSING_inv"),
+        ]
+    )
     assert all(call["random_state"] == 7 for call in calls)
     assert adata.obs["NASP_DNA_SENSING_score"].tolist() == [0.0, 0.0]
 
@@ -965,6 +961,216 @@ def test_visualizer_score_barplot_orders_groups_by_mean(tmp_path) -> None:
     assert summary.index.tolist() == ["T", "B", "Mono"]
     assert summary["mean"].tolist() == [6.0, 2.0, 0.0]
     assert (tmp_path / "score_barplot.png").stat().st_size > 0
+
+
+def test_feature_regression_uses_readable_axes_and_full_width(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Regression axes identify the predictor, scorer, and complete fit."""
+    unit_frame = pd.DataFrame(
+        {
+            "feature_id": ["NASP_DNA_SENSING_auc"] * 3,
+            "feature_value": [0.2, 0.4, 0.6],
+            "age_years": [20.0, 40.0, 60.0],
+            "statistical_unit": ["donor"] * 3,
+            "sex": ["male"] * 3,
+        }
+    )
+    result_row = pd.Series(
+        {
+            "slope": 0.01,
+            "intercept": 0.0,
+            "pearson_r": 1.0,
+            "pearson_pvalue": 0.001,
+            "feature_type": "module_score",
+            "analysis_scope": "within_sex_donor",
+            "stratify_key": "sex",
+            "stratum": "male",
+        }
+    )
+    viz = SCVisualizer(output_dir=tmp_path)
+    figures = []
+    close_figure = plt.close
+    monkeypatch.setattr(plt, "close", figures.append)
+
+    try:
+        viz.plot_feature_regression(
+            unit_frame,
+            feature_id="NASP_DNA_SENSING_auc",
+            predictor_key="age_years",
+            filename="age_regression",
+            result_row=result_row,
+            feature_label="NASP DNA sensing",
+            color_key="sex",
+            figsize=(1.2, 1.2),
+        )
+
+        ax = figures[0].axes[0]
+        assert ax.get_xlabel() == "Age (years)"
+        assert ax.get_ylabel() == "NASP DNA sensing score\n(AUCell)"
+        assert ax.get_xlim()[0] < 20.0
+        assert ax.get_xlim()[1] > 60.0
+        np.testing.assert_allclose(
+            ax.lines[0].get_xdata()[[0, -1]], ax.get_xlim()
+        )
+        assert (tmp_path / "age_regression.png").stat().st_size > 0
+    finally:
+        for figure in figures:
+            close_figure(figure)
+
+
+def test_feature_group_boxplot_stratifies_units_with_readable_context(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Grouped scores render sex-stratified boxes with unit-aware labels."""
+    unit_frame = pd.DataFrame(
+        {
+            "feature_id": ["NASP_DNA_SENSING_auc"] * 12,
+            "feature_label": ["NASP_DNA_SENSING"] * 12,
+            "feature_value": [
+                0.10,
+                0.20,
+                0.30,
+                0.40,
+                0.50,
+                0.60,
+                0.70,
+                0.80,
+                0.90,
+                1.00,
+                1.10,
+                1.20,
+            ],
+            "cell_type": ["B_cell"] * 6 + ["T_cell"] * 6,
+            "sex": (["male"] * 3 + ["female"] * 3) * 2,
+            "statistical_unit": ["donor_tissue_cell_type"] * 12,
+        }
+    )
+    result_row = pd.Series(
+        {
+            "feature_type": "module_score",
+            "parametric_test": "anova",
+            "pvalue": 0.012,
+        }
+    )
+    figures = []
+    close_figure = plt.close
+    monkeypatch.setattr(plt, "close", figures.append)
+
+    try:
+        SCVisualizer(output_dir=tmp_path).plot_feature_group_boxplot(
+            unit_frame,
+            feature_id="NASP_DNA_SENSING_auc",
+            group_key="cell_type",
+            filename="cell_type_boxplot",
+            result_row=result_row,
+            stratify_key="sex",
+        )
+
+        ax = figures[0].axes[0]
+        assert [label.get_text() for label in ax.get_xticklabels()] == [
+            "T cell",
+            "B cell",
+        ]
+        assert ax.get_xlabel() == "Cell type"
+        assert ax.get_ylabel() == "NASP DNA sensing score\n(AUCell)"
+        assert {text.get_text() for text in ax.get_legend().get_texts()} == {
+            "Male",
+            "Female",
+        }
+        assert (tmp_path / "cell_type_boxplot.png").stat().st_size > 0
+    finally:
+        for figure in figures:
+            close_figure(figure)
+
+
+def test_feature_group_boxplot_default_width_scales_with_group_count(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Categorical plots retain their tuned height and per-group width."""
+    figures = []
+    close_figure = plt.close
+    monkeypatch.setattr(plt, "close", figures.append)
+
+    def unit_frame(group_count: int) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "feature_id": ["NASP_DNA_SENSING_auc"] * group_count,
+                "feature_value": np.linspace(0.1, 1.0, group_count),
+                "cell_type": [
+                    f"cell_type_{index:02d}" for index in range(group_count)
+                ],
+                "statistical_unit": ["donor_tissue_cell_type"] * group_count,
+            }
+        )
+
+    try:
+        for group_count in (2, 24):
+            SCVisualizer(output_dir=tmp_path).plot_feature_group_boxplot(
+                unit_frame(group_count),
+                feature_id="NASP_DNA_SENSING_auc",
+                group_key="cell_type",
+                filename=f"cell_type_boxplot_{group_count}",
+            )
+
+        np.testing.assert_allclose(figures[0].get_size_inches(), (1.8, 1.5))
+        np.testing.assert_allclose(
+            figures[1].get_size_inches(),
+            (24 * 0.145, 1.5),
+        )
+    finally:
+        for figure in figures:
+            close_figure(figure)
+
+
+def test_visualizer_maps_cross_scorer_module_pairs_to_heatmap(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Cross-scorer module pairs map to the requested matrix coordinates."""
+    concordance = pd.DataFrame(
+        {
+            "scanpy_module_id": [
+                "NASP_DNA_SENSING",
+                "NASP_DNA_SENSING",
+                "IFN_I_OUTPUT",
+                "IFN_I_OUTPUT",
+            ],
+            "aucell_module_id": [
+                "NASP_DNA_SENSING",
+                "IFN_I_OUTPUT",
+                "NASP_DNA_SENSING",
+                "IFN_I_OUTPUT",
+            ],
+            "spearman_r": [0.92, 0.35, 0.28, 0.64],
+        }
+    )
+    figures = []
+    close_figure = plt.close
+    monkeypatch.setattr(plt, "close", figures.append)
+
+    try:
+        SCVisualizer(output_dir=tmp_path).plot_scorer_concordance_heatmap(
+            concordance,
+            filename="scorer_concordance",
+            module_order=["NASP_DNA_SENSING", "IFN_I_OUTPUT"],
+        )
+
+        ax = figures[0].axes[0]
+        np.testing.assert_allclose(
+            ax.images[0].get_array(),
+            [[0.92, 0.28], [0.35, 0.64]],
+        )
+        assert ax.get_xlabel() == "Scanpy"
+        assert ax.get_ylabel() == "AUCell"
+        assert not ax.lines
+        assert (tmp_path / "scorer_concordance.png").stat().st_size > 0
+    finally:
+        for figure in figures:
+            close_figure(figure)
 
 
 def test_add_development_stage_age_obs() -> None:

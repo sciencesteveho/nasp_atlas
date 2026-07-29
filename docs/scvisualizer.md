@@ -64,7 +64,8 @@ viz.plot_multi_gene_umap_panel(
 | Method | Purpose |
 | --- | --- |
 | `plot_feature_regression(...)` | Plot an aggregated feature against a continuous predictor with an optional fitted result. |
-| `plot_feature_group_boxplot(...)` | Plot group central values, uncertainty, and individual analysis-unit points. |
+| `plot_feature_group_boxplot(...)` | Plot unit-level distributions as boxplots, optionally with adjacent categorical strata. |
+| `plot_feature_group_barplot(...)` | Plot grouped central values and uncertainty, optionally with adjacent categorical strata. |
 
 ### NASP summaries
 
@@ -76,7 +77,97 @@ viz.plot_multi_gene_umap_panel(
 | `plot_sensor_output_mismatch(...)` | Plot sensor-expression and output-module coupling. |
 | `plot_age_effect_dotplot(...)` | Plot context-specific age-effect estimates. |
 | `plot_age_effect_consistency(...)` | Plot cross-stratum age-effect stability. |
-| `plot_mechanistic_edge_network(...)` | Plot prespecified module-pair correlations as an undirected network. |
+| `plot_mechanistic_edge_barplot(...)` | Rank every curated mechanistic edge by Spearman correlation. |
+| `plot_mechanistic_edge_network(...)` | Plot prespecified directional hypotheses with a symmetric correlation overlay. |
+
+`plot_ranked_nasp_hypotheses(...)` labels each panel with its exact priority
+formula. The inputs are zero-to-one relative evidence axes:
+
+| Hypothesis | Priority formula |
+| --- | --- |
+| Active-like | `min(competence, output)` |
+| Responsive-like | `max(output - competence, 0) * output` |
+| Restricted/buffered | `max(restriction - output, 0) * mean(restriction, competence)` |
+| Feedback-dominant | `max(feedback - output, 0) * feedback` |
+| Post without NASP | `max(post - max(competence, output), 0) * post` |
+
+`plot_sensor_output_mismatch(...)` and `plot_age_effect_dotplot(...)` both
+accept `column_spacing` and `row_spacing` as independent axis multipliers.
+Values below 1.0 compact an axis and values above 1.0 spread it out. Use
+`max_dot_size` to set the largest marker area in points squared. Both methods
+also accept `cbar_height`, `cbar_width`, and `figsize`:
+
+```python
+viz.plot_sensor_output_mismatch(
+    sensor_output_coupling,
+    filename="sensor_output_mismatch",
+    column_spacing=0.65,
+    row_spacing=1.1,
+    max_dot_size=24.0,
+)
+```
+
+```python
+viz.plot_age_effect_dotplot(
+    regressions,
+    filename="age_effects",
+    column_spacing=0.8,
+    row_spacing=1.1,
+    max_dot_size=24.0,
+    cbar_height="55%",
+    cbar_width="5%",
+    figsize=(4.0, 5.0),
+)
+```
+
+`plot_mechanistic_edge_barplot(...)` places the median Spearman correlation on
+the x axis and every curated source-to-target edge on the y axis. The shared
+-1-to-1 scale and diverging colors distinguish negative from positive
+association. Edges without a finite estimate remain visible as "not
+estimable"; arrow-like labels denote curated direction, not causal evidence.
+
+```python
+viz.plot_mechanistic_edge_barplot(
+    mechanistic_edges,
+    filename="mechanistic_edge_correlations",
+    row_spacing=0.8,
+    bar_height=0.56,
+    tick_label_pad=1.0,
+    figsize=(3.2, 3.8),
+)
+```
+
+`plot_mechanistic_edge_network(...)` automatically wraps 5-point module names
+inside equal-sized rectangles arranged in top-down mechanistic bands. Occupied
+layers run from upstream ligand sources through sensing, proximal signaling,
+pathway output, and post-NASP feedback. Band labels occupy the left gutter.
+Straight arrows meet each rectangle along their direction of travel.
+
+`node_size=(width, height)` sets the exact rectangle dimensions in layout
+units. The horizontal layout expands when necessary to keep the busiest layer
+from overlapping; the requested size is never silently clamped. Increase the
+requested width or height when a 5-point label cannot fit.
+`node_corner_radius` uses the same units. `label_gutter` reserves a fraction of
+panel width for band labels. `layer_spacing` scales panel height and
+`within_layer_spacing` scales panel width. `figsize=(width, height)` overrides
+the adaptive total figure size in inches; shrinking it can require taller nodes
+so wrapped 5-point labels still fit. Set `max_layer_span=1` to retain only
+adjacent-layer edges. Filtering reports dropped edges and any modules that
+consequently disappear.
+
+```python
+viz.plot_mechanistic_edge_network(
+    mechanistic_edges,
+    filename="mechanistic_network",
+    max_layer_span=1,
+    node_size=(0.20, 0.46),
+    node_corner_radius=0.02,
+    label_gutter=0.23,
+    layer_spacing=1.25,
+    within_layer_spacing=1.0,
+    figsize=(4.0, 3.5),
+)
+```
 
 ### Style helpers
 
@@ -229,9 +320,11 @@ viz.plot_feature_regression(
 viz.plot_feature_group_boxplot(
     unit_frame,
     feature_id="NASP_DNA_SENSING_score",
-    group_key="sex",
-    filename="dna_sensing_by_sex",
+    group_key="cell_type",
+    filename="dna_sensing_by_cell_type",
     result_row=group_test_result,
+    stratify_key="sex",
+    stratify_colors={"male": "#d2e7ef", "female": "#f9bebc"},
 )
 ```
 
@@ -269,6 +362,13 @@ viz.plot_competence_output_state_map(
     filename="competence_output_states",
     label_columns=["tissue_in_publication", "cell_type"],
     min_donors=2,
+    adjust_labels=True,
+    label_force=(0.1, 0.2),
+    label_static_force=(0.1, 0.2),
+    label_explode_force=(0.1, 0.5),
+    label_expand=(1.05, 1.2),
+    label_max_move=(10, 10),
+    figsize=(4.0, 4.0),
 )
 ```
 

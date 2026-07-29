@@ -112,6 +112,7 @@ def expected_module_coupling_report(
 
     if not annotated:
         return pd.DataFrame(columns=output_columns)
+
     result = pd.concat(annotated, axis="index", ignore_index=True)
     result = result.sort_values(
         ["__edge_spec_order", "__coupling_row_order"],

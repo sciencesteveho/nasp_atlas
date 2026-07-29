@@ -34,13 +34,15 @@ def plot_nasp_association_visualizations(
     regression_results: pd.DataFrame,
     age_stability: pd.DataFrame,
     mechanistic_edges: pd.DataFrame,
+    tissue_key: str = "tissue_in_publication",
     cell_type_key: str = "cell_type",
 ) -> None:
-    """Plot immediately valid summaries for one tissue analysis.
+    """Plot immediately valid summaries for a tissue or complete atlas.
 
     Correlation figures are descriptive donor-cell-type summaries. Age-effect
     plots use regressions stratified by tissue and cell type, where donors are
-    the independent observations within each stratum.
+    the independent observations within each stratum. Complete-atlas state
+    maps are faceted by tissue and use tissue-qualified hypothesis labels.
 
     Args:
       output_dir: Directory receiving PNG figures.
@@ -51,6 +53,7 @@ def plot_nasp_association_visualizations(
       regression_results: Continuous association result table.
       age_stability: Cross-stratum age-effect stability table.
       mechanistic_edges: Expected mechanistic-edge coupling table.
+      tissue_key: Context column identifying tissue.
       cell_type_key: Context column identifying cell type.
 
     Example Usage:
@@ -66,6 +69,12 @@ def plot_nasp_association_visualizations(
       ... )
     """
     visualizer = SCVisualizer(output_dir=output_dir)
+    multi_tissue = any(
+        tissue_key in table
+        and table[tissue_key].dropna().astype(str).nunique() > 1
+        for table in (context_summary, hypothesis_priorities)
+    )
+    sensor_gene_labels = _sensor_gene_labels(sensor_output_coupling)
     if not module_coupling.empty:
         visualizer.plot_module_coupling_heatmap(
             module_coupling,
@@ -77,12 +86,15 @@ def plot_nasp_association_visualizations(
             context_summary,
             filename="nasp_competence_output_state_map",
             label_columns=[cell_type_key],
+            facet_column=tissue_key if multi_tissue else None,
         )
     if not hypothesis_priorities.empty:
         visualizer.plot_ranked_nasp_hypotheses(
             hypothesis_priorities,
             filename="nasp_ranked_hypotheses",
-            label_columns=[cell_type_key],
+            label_columns=(
+                [tissue_key, cell_type_key] if multi_tissue else [cell_type_key]
+            ),
         )
     if not sensor_output_coupling.empty:
         visualizer.plot_sensor_output_mismatch(
@@ -94,12 +106,28 @@ def plot_nasp_association_visualizations(
         visualizer.plot_age_effect_dotplot(
             regression_results,
             filename="nasp_age_effects_by_cell_type",
+            feature_type="module_score",
+        )
+        visualizer.plot_age_effect_dotplot(
+            regression_results,
+            filename="nasp_sensor_age_effects_by_cell_type",
+            feature_type="gene_expression",
+            feature_labels=sensor_gene_labels,
         )
     if not age_stability.empty:
         visualizer.plot_age_effect_consistency(
             age_stability,
             filename="nasp_age_effect_consistency_across_cell_types",
             analysis_scope="within_tissue_cell_type",
+            feature_type="module_score",
+        )
+        visualizer.plot_age_effect_consistency(
+            age_stability,
+            filename="nasp_sensor_age_effect_consistency_across_cell_types",
+            analysis_scope="within_tissue_cell_type",
+            feature_type="gene_expression",
+            feature_labels=sensor_gene_labels,
+            max_features=len(sensor_gene_labels),
         )
     if not mechanistic_edges.empty:
         visualizer.plot_mechanistic_edge_network(
@@ -155,6 +183,7 @@ def plot_global_nasp_visualizations(
       ... )
     """
     visualizer = SCVisualizer(output_dir=output_dir)
+    sensor_gene_labels = _sensor_gene_labels(sensor_output_coupling)
     if not module_coupling.empty:
         visualizer.plot_module_coupling_heatmap(
             module_coupling,
@@ -184,12 +213,28 @@ def plot_global_nasp_visualizations(
         visualizer.plot_age_effect_dotplot(
             regression_results,
             filename="global_nasp_age_effects",
+            feature_type="module_score",
+        )
+        visualizer.plot_age_effect_dotplot(
+            regression_results,
+            filename="global_nasp_sensor_age_effects",
+            feature_type="gene_expression",
+            feature_labels=sensor_gene_labels,
         )
     if not age_stability.empty:
         visualizer.plot_age_effect_consistency(
             age_stability,
             filename="global_nasp_age_effect_consistency",
             analysis_scope="within_tissue",
+            feature_type="module_score",
+        )
+        visualizer.plot_age_effect_consistency(
+            age_stability,
+            filename="global_nasp_sensor_age_effect_consistency",
+            analysis_scope="within_tissue",
+            feature_type="gene_expression",
+            feature_labels=sensor_gene_labels,
+            max_features=len(sensor_gene_labels),
         )
     if not mechanistic_edges.empty:
         visualizer.plot_mechanistic_edge_network(
@@ -197,6 +242,15 @@ def plot_global_nasp_visualizations(
             filename="global_nasp_mechanistic_edge_consensus",
             show_fdr=False,
         )
+
+
+def _sensor_gene_labels(sensor_output_coupling: pd.DataFrame) -> list[str]:
+    """Return the explicit sensor-gene set represented by coupling results."""
+    if "gene" not in sensor_output_coupling:
+        return []
+    return sorted(
+        sensor_output_coupling["gene"].dropna().astype(str).unique().tolist()
+    )
 
 
 def plot_tabula_sapiens_metadata_umaps(

@@ -1,10 +1,11 @@
-# Tissue scoring and PBS workflows
+# Tabula Sapiens scoring and PBS workflows
 
 [Back to the project README](../README.md)
 
-`score_modules.py` runs one tissue from module scoring through donor-aware
-association analysis. `score_modules.sh` adapts that worker for PBS without
-placing scientific logic in the scheduler script.
+`score_modules.py` runs a complete Tabula Sapiens h5ad or one tissue from
+module scoring through donor-aware association analysis. `score_modules.sh`
+adapts that worker for PBS without placing scientific logic in the scheduler
+script.
 
 ## Workflow
 
@@ -22,9 +23,9 @@ contracts and scientific caveats.
 
 ## Input contract
 
-Pass one `.h5ad` file. A pre-split tissue file can retain its existing
-embedding. A multi-tissue file needs `TISSUE_LABEL` or `--tissue-label` to
-select an exact observation label and recompute the tissue embedding.
+Pass one `.h5ad` file. Omit `TISSUE_LABEL` or `--tissue-label` to analyze the
+entire input and retain its existing embedding. Set the tissue label only to
+select an exact observation label and recompute a tissue-specific embedding.
 
 Default metadata names are:
 
@@ -45,6 +46,17 @@ skipped-feature and result tables.
 
 ## Run locally
 
+Analyze the complete atlas:
+
+```bash
+python run_scripts/score_modules.py \
+  --h5ad-path data/tabula_sapiens.h5ad \
+  --output-path results/nasp_atlas_analysis \
+  --run-name tabula_sapiens
+```
+
+Analyze a pre-split tissue file:
+
 ```bash
 python run_scripts/score_modules.py \
   --h5ad-path data/liver_tabula_sapiens.h5ad \
@@ -64,7 +76,7 @@ Common options:
 | --- | --- |
 | `--scorers scanpy aucell` | Scorers calculated and analyzed independently. |
 | `--resume` | Reuse a score table only when its metadata records every requested scorer. |
-| `--tissue-label Liver` | Subset an exact tissue label and recompute its embedding. |
+| `--tissue-label Liver` | Subset an exact tissue label and recompute its embedding; omit for the complete atlas. |
 | `--single-tissue-use-rep X_scvi` | AnnData representation used for the recomputed neighbors and UMAP. |
 | `--single-tissue-use-x` | Use `adata.X` instead of a named representation. |
 | `--statistical-unit donor` | Independent or observational unit used for the main association frame. |
@@ -72,11 +84,19 @@ Common options:
 | `--subset-fraction 0.1` | Deterministic exploratory cell subset. |
 | `--no-plot-modules` | Skip per-module marker plots. |
 | `--no-nasp-visualizations` | Skip the fixed NASP summary figure set. |
+| `--max-plots 200` | Cap general association plots per scorer. |
 
 ## Submit with PBS
 
 Review the `#PBS` resource and log directives in `score_modules.sh` for the
-target cluster, then submit a pre-split tissue file:
+target cluster. Submit the complete atlas without `TISSUE_LABEL`:
+
+```bash
+qsub -v H5AD_NAME=tabula_sapiens.h5ad,RUN_NAME=tabula_sapiens \
+  run_scripts/score_modules.sh
+```
+
+Or submit a pre-split tissue file:
 
 ```bash
 qsub -v H5AD_NAME=liver_tabula_sapiens.h5ad,RUN_NAME=liver \
@@ -108,7 +128,7 @@ Values are passed with `qsub -v` as comma-separated `NAME=value` pairs.
 | --- | --- | --- |
 | `H5AD_NAME` | required | Absolute h5ad path or filename relative to `DATA_DIR`. |
 | `RUN_NAME` | tissue label or input stem | Unique output-directory label. |
-| `TISSUE_LABEL` | unset | Exact tissue value to subset; omit for a pre-split h5ad. |
+| `TISSUE_LABEL` | unset | Exact tissue value to subset; omit to analyze the complete h5ad. |
 | `SCORERS` | `scanpy:aucell` | Colon-separated scorer list. |
 | `RESUME` | `0` | Reuse a complete compatible score table. |
 | `PLOT_MODULES` | `1` | Generate module marker plots. |
@@ -168,6 +188,9 @@ bash -n run_scripts/score_modules.sh
 python run_scripts/score_modules.py --help
 ```
 
-Start with one small or subsetted input. Confirm resolved paths, requested
+Start with a deterministic subset run. Confirm resolved paths, requested
 resources, scorer selection, random seed, output location, and resulting table
-schemas before submitting an array or a full atlas.
+schemas before submitting a full atlas. A complete-atlas run pools one row per
+donor for the primary association estimand and estimates tissue- and
+cell-type-specific age effects within donor strata; it does not treat cells as
+independent biological replicates.

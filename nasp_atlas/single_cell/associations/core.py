@@ -28,7 +28,13 @@ Aggregation = Literal[
     "percent_expressing",
 ]
 
-EqtlMergeMode = Literal["gene", "tissue", "module", "donor"]
+EqtlMergeMode = Literal[
+    "gene",
+    "gene_tissue",
+    "tissue",
+    "module",
+    "donor",
+]
 
 MIN_UNITS_FOR_TEST = 3
 DESCRIPTIVE_UNITS: tuple[StatisticalUnit, ...] = ("cell", "metacell")

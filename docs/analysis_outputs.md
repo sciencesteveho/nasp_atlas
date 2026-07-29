@@ -32,6 +32,8 @@ The tissue workflow keeps Scanpy and AUCell results separate:
 ├── scoring/
 │   ├── tabula_sapiens_module_scores.csv.gz
 │   ├── tabula_sapiens_scorer_concordance.csv
+│   ├── tabula_sapiens_cross_scorer_module_correlations.csv
+│   ├── tabula_sapiens_scorer_concordance.png
 │   └── *.png
 └── associations/
     ├── scanpy/
@@ -49,6 +51,12 @@ The tissue workflow keeps Scanpy and AUCell results separate:
 Plot generation and scorer concordance are conditional on the requested
 options and available inputs.
 
+`tabula_sapiens_scorer_concordance.csv` retains same-module scorer diagnostics.
+`tabula_sapiens_cross_scorer_module_correlations.csv` contains every available
+Scanpy-module/AUCell-module Spearman correlation used by the square concordance
+heatmap. Off-diagonal correlations can reflect shared genes or biological
+covariation and are not, by themselves, evidence of scorer disagreement.
+
 ## Association tables
 
 Every table lives under `association_tables/`. Core result tables are still
@@ -58,13 +66,37 @@ appear only when their stage and inputs apply.
 | File | Contents |
 | --- | --- |
 | `association_skipped_features.csv` | Requested features that could not be resolved, with feature type and skip reason. |
-| `association_regression_results.csv` | Continuous-predictor estimates, including age slopes, support, analysis scope, raw p-values, and adjusted p-values where estimable. |
+| `association_regression_results.csv` | Continuous-predictor estimates, including age and eQTL associations, support, analysis scope, raw p-values, and adjusted p-values where estimable. |
 | `association_age_stability.csv` | Directional consistency of within-tissue and within-tissue-cell-type age slopes across tested strata. |
 | `association_partial_correlation_age.csv` | Age associations adjusted for tissue when the required tissue variation exists. |
 | `association_group_test_results.csv` | Donor-aware categorical tests for available sex, tissue, and cell-type comparisons. |
 | `association_group_summary.csv` | Descriptive group summaries accompanying the categorical tests. |
-| `association_eqtl_annotations.csv` | Optional eQTL annotations when an eQTL table is supplied. |
+| `association_eqtl_annotations.csv` | Optional canonical eQTL counts joined to analyzed units, including match status, merge mode, source identifiers, count units, predictor transformation, and input path. |
 | `association_plot_manifest.csv` | Generated association plots and the analysis settings represented by each file. |
+
+Sex associations remain available in the group-test and summary tables. Group
+figures encode donor sex within each tissue or cell-type category as adjacent
+bars or boxplots rather than writing a separate sex-only figure.
+
+The eQTL stage accepts canonical tables and the NASP sensor-count long or wide
+schemas. Gene mode uses wide or long gene totals for a descriptive comparison
+across the curated sensor genes. Gene-tissue mode uses the long table for both
+per-gene comparisons across tissues and within-tissue comparisons across
+genes. Tissue mode sums significant pairs over source sensor genes, then
+compares each module score or sensor-gene expression value across tissues.
+Module-keyed input remains annotation-only because a single fixed count per
+module cannot support a within-module regression.
+
+Gene and tissue comparisons first average donor-level values at the count's
+actual unit; repeated donor rows therefore do not inflate support. Tissue joins
+normalize spelling and case only and retain both source and atlas labels rather
+than silently applying a biological tissue crosswalk. The supplied counts are
+significant gene-variant pairs, not unique causal variants, and depend on eQTL
+discovery power. These associations are exploratory descriptions of selected
+genes and overlapping tissues, not evidence of regulatory direction or
+mechanism. Counts are tested on their reported raw scale; Spearman results
+provide the rank-based companion to Pearson correlation and the raw-count OLS
+slope.
 
 ### NASP-focused tables
 
@@ -88,9 +120,11 @@ When NASP visualizations are enabled, `association_plots/nasp/` may contain:
 | `nasp_competence_output_state_map` | Relative competence and output evidence by context. |
 | `nasp_ranked_hypotheses` | Highest-priority context-hypothesis combinations. |
 | `nasp_sensor_output_mismatch` | Sensor-expression and output-module coupling. |
-| `nasp_age_effects_by_cell_type` | Context-specific age-effect estimates. |
-| `nasp_age_effect_consistency_across_cell_types` | Cross-context stability of age-effect direction. |
-| `nasp_mechanistic_edge_network` | Prespecified module-pair correlations shown as an undirected network. |
+| `nasp_age_effects_by_cell_type` | Context-specific age effects on NASP module scores. |
+| `nasp_sensor_age_effects_by_cell_type` | Context-specific age effects on nucleic-acid sensor-gene expression. |
+| `nasp_age_effect_consistency_across_cell_types` | Cross-context stability of age effects on module scores. |
+| `nasp_sensor_age_effect_consistency_across_cell_types` | Cross-context stability of age effects on nucleic-acid sensor-gene expression. |
+| `nasp_mechanistic_edge_network` | Prespecified directional hypotheses overlaid with symmetric module-pair correlations. |
 
 General regression, boxplot, and barplot files live in their corresponding
 directories. Their exact set depends on input metadata, estimability, and

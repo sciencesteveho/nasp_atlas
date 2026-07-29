@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import cast
 
 import anndata as ad  # type: ignore[import]
 import pandas as pd
@@ -14,12 +13,15 @@ from nasp_compendium import GeneModules  # type: ignore[import]
 from nasp_atlas.analysis.tabula_sapiens import scoring
 from nasp_atlas.single_cell.associations import EqtlMergeMode
 from nasp_atlas.single_cell.associations import ObsSchema
+from nasp_atlas.single_cell.associations import (
+    associate_features_with_eqtl_counts,
+)
 from nasp_atlas.single_cell.associations import merge_eqtl_counts
 from nasp_atlas.single_cell.associations import metadata_columns
+from nasp_atlas.single_cell.associations import prepare_eqtl_table
 from nasp_atlas.single_cell.associations import regress_features_on_continuous
 from nasp_atlas.single_cell.associations import summarize_feature_groups
 from nasp_atlas.single_cell.associations import test_feature_groups
-from nasp_atlas.single_cell.associations import validate_eqtl_table
 from nasp_atlas.single_cell.module_profiles import RoleAssignment
 from nasp_atlas.single_cell.module_profiles import module_gene_overlap
 from nasp_atlas.single_cell.module_profiles import pairwise_module_correlations
@@ -703,13 +705,16 @@ def _run_group_associations(
     statistical_unit: str,
     aggregation: str,
     tissue_key: str,
+    stratify_key: str | None,
+    stratify_colors: Mapping[str, str] | None,
+    plot_results: bool,
     manifest: list[dict[str, object]],
     group_test_tables: list[pd.DataFrame],
     group_summary_tables: list[pd.DataFrame],
     plot_count: int,
     max_plots: int | None,
 ) -> int:
-    """Run categorical group tests and emit boxplots and tissue barplots.
+    """Run categorical group tests and optionally emit grouped plots.
 
     Args:
       unit_frame: Aggregated unit-level feature frame.
@@ -720,6 +725,9 @@ def _run_group_associations(
       statistical_unit: Statistical unit label recorded in filenames.
       aggregation: Aggregation label recorded in filenames.
       tissue_key: Tissue column, used to select barplot outputs.
+      stratify_key: Optional categorical split drawn within every x-axis group.
+      stratify_colors: Optional fill colors for the plotted strata.
+      plot_results: Whether to emit figures for this tested grouping.
       manifest: Mutable plot-manifest accumulator.
       group_test_tables: Mutable list of group-test result frames.
       group_summary_tables: Mutable list of group-summary frames.
@@ -735,6 +743,8 @@ def _run_group_associations(
     group_summary_tables.append(summary)
     result = test_feature_groups(unit_frame, group_key=group_key)
     group_test_tables.append(result)
+    if not plot_results:
+        return plot_count
 
     is_tissue = group_key == tissue_key
     for feature_id in unit_frame["feature_id"].drop_duplicates():
@@ -751,12 +761,19 @@ def _run_group_associations(
             statistical_unit=statistical_unit,
             aggregation=aggregation,
         )
-        target.plot_feature_group_boxplot(
+        plot_method = (
+            target.plot_feature_group_barplot
+            if is_tissue
+            else target.plot_feature_group_boxplot
+        )
+        plot_method(
             subframe,
             feature_id=str(feature_id),
             group_key=group_key,
             filename=filename,
             result_row=row,
+            stratify_key=stratify_key,
+            stratify_colors=stratify_colors,
         )
         plot_count += 1
         manifest.append(
@@ -801,12 +818,12 @@ def _run_eqtl_associations(
     unit_frame: pd.DataFrame,
     *,
     eqtl_table_path: str | Path,
-    eqtl_merge_mode: str,
+    eqtl_merge_mode: EqtlMergeMode,
     schema: ObsSchema,
     regression_tables: list[pd.DataFrame],
     annotation_tables: list[pd.DataFrame],
 ) -> None:
-    """Merge eQTL counts and test burden only when it varies by unit.
+    """Prepare eQTL counts and estimate associations at their valid unit.
 
     Args:
       unit_frame: Aggregated unit-level feature frame.
@@ -816,29 +833,45 @@ def _run_eqtl_associations(
       regression_tables: Mutable list of regression result frames.
       annotation_tables: Mutable list receiving the merged annotation frame.
     """
-    eqtl_table = pd.read_csv(eqtl_table_path)
-    value_columns = validate_eqtl_table(
-        eqtl_table, merge_mode=cast("EqtlMergeMode", eqtl_merge_mode)
+    eqtl_table = prepare_eqtl_table(
+        pd.read_csv(eqtl_table_path),
+        merge_mode=eqtl_merge_mode,
     )
     merged = merge_eqtl_counts(
         unit_frame,
         eqtl_table,
-        merge_mode=cast("EqtlMergeMode", eqtl_merge_mode),
+        merge_mode=eqtl_merge_mode,
         schema=schema,
     )
+    merged["eqtl_table_path"] = str(Path(eqtl_table_path))
     annotation_tables.append(merged)
-    if eqtl_merge_mode in {"gene", "module"}:
+
+    matched = int(merged["eqtl_matched"].sum())
+    if matched == 0:
+        logger.warning(
+            "[tabula_sapiens] no atlas rows matched eQTL keys for mode %s; "
+            "see association_eqtl_annotations.csv",
+            eqtl_merge_mode,
+        )
+    else:
+        logger.info(
+            "[tabula_sapiens] matched eQTL counts to %d aggregated rows",
+            matched,
+        )
+
+    result = associate_features_with_eqtl_counts(
+        merged,
+        merge_mode=eqtl_merge_mode,
+        schema=schema,
+    )
+    if result.empty:
         logger.info(
             "[tabula_sapiens] eQTL %s burden is feature-level annotation; "
-            "skipping invalid within-feature regressions",
+            "no valid comparison family was defined",
             eqtl_merge_mode,
         )
         return
-    for predictor_key in value_columns:
-        result = regress_features_on_continuous(
-            merged, predictor_key=predictor_key
-        )
-        regression_tables.append(result)
+    regression_tables.append(result)
 
 
 def _run_cell_level_descriptive_plots(

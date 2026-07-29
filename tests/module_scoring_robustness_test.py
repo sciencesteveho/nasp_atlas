@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Sequence
 
 import anndata as ad
@@ -138,7 +139,7 @@ def test_aucell_propagates_seed_and_uses_one_worker_by_default(
 ) -> None:
     """Every AUCell block uses the requested seed and conservative workers."""
     adata = _adata(["CGAS", "OTHER"], ["CGAS", "OTHER"], n_obs=3)
-    calls: list[tuple[int, int]] = []
+    calls: list[tuple[tuple[str, ...], int, int]] = []
 
     def fake_aucell(
         expression: pd.DataFrame,
@@ -147,7 +148,7 @@ def test_aucell_propagates_seed_and_uses_one_worker_by_default(
         seed: int,
         num_workers: int,
     ) -> pd.DataFrame:
-        calls.append((seed, num_workers))
+        calls.append((tuple(expression.index), seed, num_workers))
         return _constant_aucell(expression, signatures)
 
     _patch_aucell(monkeypatch, _gene_module(), fake_aucell)
@@ -160,7 +161,12 @@ def test_aucell_propagates_seed_and_uses_one_worker_by_default(
         random_state=17,
     )
 
-    assert calls == [(17, 1), (17, 1)]
+    assert Counter(
+        cell for cell_indices, _, _ in calls for cell in cell_indices
+    ) == Counter(adata.obs_names)
+    assert all(len(cell_indices) <= 2 for cell_indices, _, _ in calls)
+    assert all(seed == 17 for _, seed, _ in calls)
+    assert all(num_workers == 1 for _, _, num_workers in calls)
 
 
 def test_aucell_uses_var_names_when_symbols_are_null(

@@ -17,6 +17,7 @@ classifiers = [
 ]
 
 dependencies = [
+  "adjustText==1.4.0",
   "anndata==0.12.6",
   "cellxgene_census==1.17.0",
   "decoupler==2.2.0",

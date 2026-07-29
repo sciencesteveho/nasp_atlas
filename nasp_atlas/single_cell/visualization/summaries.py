@@ -12,6 +12,7 @@ import pandas as pd
 import scanpy as sc  # type: ignore[import]
 from scipy import stats  # type: ignore[import]
 
+from nasp_atlas.single_cell.visualization.style import ColorbarStyle
 from nasp_atlas.single_cell.visualization.style import _VisualizationStyleMixin
 
 
@@ -20,6 +21,191 @@ logger = logging.getLogger(__name__)
 
 class _SummaryPlotMixin(_VisualizationStyleMixin):
     """Grouped score bars and annotation distributions."""
+
+    def plot_scorer_concordance_heatmap(
+        self,
+        concordance: pd.DataFrame,
+        *,
+        filename: str,
+        statistic: str = "spearman_r",
+        module_order: Sequence[str] | None = None,
+        cell_size: float = 0.0975,
+        min_width: float = 1.5,
+        min_height: float = 1.5,
+        colorbar_style: ColorbarStyle | None = None,
+        cbar_height: str | float | None = None,
+        cbar_width: str | float | None = None,
+        cbar_pad: float | None = None,
+        annotate: bool = False,
+    ) -> None:
+        """Plot all Scanpy-module/AUCell-module score correlations.
+
+        Scanpy modules are columns and AUCell modules are rows. The same module
+        order is used on both axes, placing matched modules on the diagonal.
+        Off-diagonal values show cross-module score correlation, which may
+        reflect shared genes or biological covariation rather than scorer
+        disagreement.
+
+        Args:
+          concordance: Output from `cross_scorer_module_correlations`, with one
+            row per Scanpy-module/AUCell-module pair.
+          filename: Output filename stem under `output_dir`.
+          statistic: Correlation statistic to display.
+          module_order: Optional shared module order for both axes.
+          cell_size: Width and height of each heatmap cell in inches.
+          min_width: Minimum heatmap panel width in inches.
+          min_height: Minimum heatmap panel height in inches.
+          colorbar_style: Explicit inset colorbar geometry.
+          cbar_height: Optional colorbar-height override.
+          cbar_width: Optional colorbar-width override.
+          cbar_pad: Optional heatmap-to-colorbar padding override.
+          annotate: Whether to print correlation values in heatmap cells.
+
+        Example Usage:
+          >>> viz.plot_scorer_concordance_heatmap(
+          ...     concordance,
+          ...     filename="scorer_concordance",
+          ... )
+        """
+        self._set_matplotlib_publication_parameters()
+
+        required = {"scanpy_module_id", "aucell_module_id", statistic}
+        if missing := sorted(required.difference(concordance.columns)):
+            raise KeyError(f"concordance missing required columns: {missing}")
+
+        table = concordance.loc[
+            :, ["scanpy_module_id", "aucell_module_id", statistic]
+        ].copy()
+        table["scanpy_module_id"] = table["scanpy_module_id"].astype(str)
+        table["aucell_module_id"] = table["aucell_module_id"].astype(str)
+        table[statistic] = pd.to_numeric(table[statistic], errors="coerce")
+        if table.empty or table[statistic].notna().sum() == 0:
+            logger.warning(
+                "[plot] No finite scorer concordance for %s. Skipping.",
+                filename,
+            )
+            return
+
+        pair_columns = ["scanpy_module_id", "aucell_module_id"]
+        if table.duplicated(pair_columns).any():
+            raise ValueError(
+                "concordance contains duplicate Scanpy/AUCell module pairs"
+            )
+
+        available_modules = set(table["scanpy_module_id"].astype(str)) | set(
+            table["aucell_module_id"].astype(str)
+        )
+        if module_order is None:
+            order = sorted(available_modules)
+        else:
+            order = [
+                str(module_id)
+                for module_id in dict.fromkeys(module_order)
+                if str(module_id) in available_modules
+            ]
+
+        if not order:
+            raise ValueError("module_order contains no available modules")
+
+        matrix = table.pivot(
+            index="aucell_module_id",
+            columns="scanpy_module_id",
+            values=statistic,
+        ).reindex(index=order, columns=order)
+        values = matrix.to_numpy(dtype=float)
+        masked = np.ma.masked_invalid(values)
+
+        cmap = plt.get_cmap("RdBu_r").copy()
+        cmap.set_bad("#eeeeee")
+        panel_width = max(min_width, len(order) * cell_size)
+        panel_height = max(min_height, len(order) * cell_size)
+        fig, ax = plt.subplots(figsize=(panel_width, panel_height))
+        image = ax.imshow(
+            masked,
+            cmap=cmap,
+            vmin=-1.0,
+            vmax=1.0,
+            aspect="equal",
+            interpolation="nearest",
+        )
+        ax.set_box_aspect(1.0)
+
+        labels = [self._scorer_concordance_label(value) for value in order]
+        self._style_score_heatmap_axis(
+            ax=ax,
+            score_labels=labels,
+            groups=labels,
+        )
+        ax.set_xlabel("Scanpy", labelpad=6.5)
+        ax.xaxis.set_label_position("top")
+        ax.set_ylabel("AUCell", rotation=270, labelpad=9.5)
+        ax.yaxis.set_label_position("right")
+
+        if annotate:
+            for row_index, column_index in np.ndindex(values.shape):
+                value = values[row_index, column_index]
+                if np.isfinite(value):
+                    text_color = "white" if abs(value) >= 0.55 else "black"
+                    ax.text(
+                        column_index,
+                        row_index,
+                        f"{value:.2f}",
+                        ha="center",
+                        va="center",
+                        color=text_color,
+                    )
+
+        resolved_colorbar_style = (
+            colorbar_style or ColorbarStyle(height=0.4, width=0.08, pad=0.12)
+        ).with_overrides(
+            height=cbar_height,
+            width=cbar_width,
+            pad=cbar_pad,
+        )
+
+        self._add_embedding_colorbar(
+            fig,
+            ax,
+            resolved_colorbar_style,
+            mappable=image,
+            title="Cell-level Spearman correlation",
+        )
+        self._save_figure_and_log(
+            fig,
+            self.output_dir / filename,
+            "[plot] scorer concordance heatmap -> %s",
+        )
+
+    @staticmethod
+    def _scorer_concordance_label(value: object) -> str:
+        """Return a compact readable module label."""
+        label = str(value)
+        known_labels = {
+            "CGAMP_TRANSPORT": "cGAMP transport",
+            "IFN_I_OUTPUT": "IFN-I output",
+            "NFKB_CYTOKINE_OUTPUT": "NF-κB cytokine output",
+        }
+        if label in known_labels:
+            return known_labels[label]
+        label = label.replace("_", " ").lower()
+        replacements = {
+            "nasp": "NASP",
+            "dna": "DNA",
+            "rna": "RNA",
+            "ifn": "IFN",
+            "nfkb": "NF-κB",
+            "isr": "ISR",
+            "sasp": "SASP",
+            "jak": "JAK",
+            "stat": "STAT",
+            "tbk1": "TBK1",
+            "irf": "IRF",
+            "tlr": "TLR",
+            "na": "NA",
+        }
+        return " ".join(
+            replacements.get(token, token) for token in label.split()
+        )
 
     def plot_grouped_obs_score_barplot(
         self,

@@ -1,4 +1,4 @@
-"""Run end-to-end NASP scoring and analysis for one tissue h5ad."""
+"""Run end-to-end NASP scoring and analysis for a Tabula Sapiens h5ad."""
 
 from __future__ import annotations
 
@@ -13,24 +13,24 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_arguments() -> argparse.Namespace:
-    """Parse tissue-analysis command-line arguments."""
+    """Parse Tabula Sapiens analysis command-line arguments."""
     parser = argparse.ArgumentParser(
         description=(
-            "Score NASP modules in one tissue h5ad, then run the complete "
-            "donor-aware analysis once per scorer."
+            "Score NASP modules in a complete or tissue-subset Tabula Sapiens "
+            "h5ad, then run donor-aware analysis once per scorer."
         ),
     )
     parser.add_argument(
         "--h5ad-path",
         type=Path,
         required=True,
-        help="Input per-tissue Tabula Sapiens h5ad.",
+        help="Input complete-atlas or tissue-specific Tabula Sapiens h5ad.",
     )
     parser.add_argument(
         "--output-path",
         type=Path,
         default=Path("results"),
-        help="Root directory for tissue-specific scoring and analyses.",
+        help="Root directory for isolated scoring and analysis runs.",
     )
     parser.add_argument(
         "--tissue-label",
@@ -38,8 +38,8 @@ def _parse_arguments() -> argparse.Namespace:
         dest="tissue_label",
         default=None,
         help=(
-            "Exact tissue obs label to subset and re-embed. Omit for an "
-            "already split h5ad whose existing embedding should be retained."
+            "Exact tissue obs label to subset and re-embed. Omit to analyze "
+            "all cells in the input h5ad and retain its existing embedding."
         ),
     )
     parser.add_argument(
@@ -132,14 +132,17 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--max-plots",
         type=int,
-        default=10,
+        default=200,
         help="Maximum association plots per scorer.",
     )
     parser.add_argument(
         "--nasp-visualizations",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Render mechanistic NASP summary figures.",
+        help=(
+            "Render dynamically sized NASP summaries, faceted by tissue for "
+            "complete-atlas inputs."
+        ),
     )
     parser.add_argument(
         "--score-table-filename",
@@ -149,7 +152,7 @@ def _parse_arguments() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Run one complete tissue analysis from scoring through associations."""
+    """Run a complete atlas or tissue analysis through associations."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",

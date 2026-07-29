@@ -241,8 +241,17 @@ def association_analysis(
             max_plots=max_plots,
         )
     if eqtl_table_path is not None:
+        eqtl_unit_frame = unit_frame
+        if eqtl_merge_mode in {"gene_tissue", "tissue"}:
+            eqtl_unit_frame = aggregate_feature_frame(
+                cell_frame,
+                statistical_unit="donor_tissue",
+                aggregation=cast(Aggregation, aggregation),
+                schema=schema,
+                detection_threshold=detection_threshold,
+            )
         associations._run_eqtl_associations(
-            unit_frame,
+            eqtl_unit_frame,
             eqtl_table_path=eqtl_table_path,
             eqtl_merge_mode=cast(EqtlMergeMode, eqtl_merge_mode),
             schema=schema,
@@ -267,6 +276,7 @@ def association_analysis(
         nasp_results=nasp_results,
         layout=layout,
         plot_nasp_visualizations=plot_nasp_visualizations,
+        tissue_key=tissue_key,
         cell_type_key=cell_type_key,
     )
     logger.info(
@@ -305,7 +315,13 @@ def _validate_association_options(
         raise ValueError(f"unsupported aggregation: {aggregation}")
     if scorer not in (None, "scanpy", "aucell"):
         raise ValueError(f"unsupported scorer: {scorer}")
-    if eqtl_merge_mode not in ("gene", "tissue", "module", "donor"):
+    if eqtl_merge_mode not in (
+        "gene",
+        "gene_tissue",
+        "tissue",
+        "module",
+        "donor",
+    ):
         raise ValueError(f"unsupported eqtl_merge_mode: {eqtl_merge_mode}")
 
 
@@ -659,6 +675,14 @@ def _run_group_associations(
         if key in unit_frame.columns and unit_frame[key].dropna().nunique() >= 2
     ]
     for group_key in group_keys:
+        plot_results = group_key != sex_key
+        stratify_key = (
+            sex_key
+            if plot_results
+            and sex_key in unit_frame.columns
+            and unit_frame[sex_key].dropna().nunique() > 0
+            else None
+        )
         workflow_state.plot_count = associations._run_group_associations(
             unit_frame,
             group_key=group_key,
@@ -668,6 +692,13 @@ def _run_group_associations(
             statistical_unit=statistical_unit,
             aggregation=aggregation,
             tissue_key=tissue_key,
+            stratify_key=stratify_key,
+            stratify_colors=(
+                {"male": "#d2e7ef", "female": "#f9bebc"}
+                if stratify_key is not None
+                else None
+            ),
+            plot_results=plot_results,
             manifest=workflow_state.manifest,
             group_test_tables=workflow_state.group_test_tables,
             group_summary_tables=workflow_state.group_summary_tables,
@@ -702,6 +733,7 @@ def _write_association_results(
     nasp_results: _NaspProfileResults,
     layout: dict[str, Path],
     plot_nasp_visualizations: bool,
+    tissue_key: str,
     cell_type_key: str,
 ) -> None:
     """Finalize inferential tables, NASP figures, and the plot manifest."""
@@ -743,6 +775,7 @@ def _write_association_results(
             regression_results=regression_results,
             age_stability=age_stability,
             mechanistic_edges=nasp_results.mechanistic_edges,
+            tissue_key=tissue_key,
             cell_type_key=cell_type_key,
         )
 
@@ -783,20 +816,21 @@ def tabula_sapiens_tissue_analysis(
     max_plots: int | None = 200,
     plot_nasp_visualizations: bool = True,
 ) -> dict[str, Path]:
-    """Score and analyze one tissue h5ad with each requested scorer.
+    """Score and analyze a complete or tissue-subset h5ad per scorer.
 
-    The workflow writes one isolated run directory per tissue input. Scoring is
-    completed first into a shared score table, then the full donor-aware
-    association workflow runs once per scorer so Scanpy and AUCell remain
-    separate sensitivity analyses. Setting `resume_from_scores=True` reuses a
-    score table only when its provenance records every requested scorer.
+    Omitting `tissue_label` analyzes every cell in the input h5ad and retains
+    its existing embedding. Supplying a label subsets that tissue and
+    recomputes its embedding. Scoring is completed first into a shared score
+    table, then the donor-aware association workflow runs once per scorer so
+    Scanpy and AUCell remain separate sensitivity analyses. Setting
+    `resume_from_scores=True` reuses a score table only when its provenance
+    records every requested scorer.
 
     Args:
-      h5ad_path: Per-tissue h5ad input path.
-      output_dir: Root directory containing tissue run directories.
+      h5ad_path: Complete-atlas or tissue-specific h5ad input path.
+      output_dir: Root directory containing isolated run directories.
       tissue_label: Exact tissue value used to subset and recompute UMAP. Leave
-        unset when the input is already tissue-specific and its embedding
-        should be retained.
+        unset to analyze the complete input h5ad and retain its embedding.
       run_name: Output directory name. Defaults to `tissue_label`, then the
         input filename stem.
       scorers: Scorers to run and analyze ("scanpy", "aucell", or both).
@@ -834,7 +868,7 @@ def tabula_sapiens_tissue_analysis(
     """
     input_path = Path(h5ad_path)
     if not input_path.is_file():
-        raise FileNotFoundError(f"tissue h5ad does not exist: {input_path}")
+        raise FileNotFoundError(f"input h5ad does not exist: {input_path}")
     selected_scorers = tuple(dict.fromkeys(scorers))
     if not selected_scorers:
         raise ValueError("scorers must contain at least one scorer")
@@ -1053,7 +1087,7 @@ def tabula_sapiens_scoring_analysis(
             gene_symbol_column=gene_symbol_column,
             expression_layer=expression_layer,
             ncols=6,
-            size=point_size,
+            point_size=point_size,
         )
         _plot_module_gene_heatmaps_by_obs(
             adata=adata,
@@ -1135,7 +1169,7 @@ def _load_scoring_adata(
             min_dist=0.425,
         )
 
-    point_size = 75000 / adata.n_obs
+    point_size = 120000 / adata.n_obs
     if single_tissue is not None:
         point_size /= 4
 
@@ -1175,10 +1209,9 @@ def _plot_module_gene_umaps(
     gene_symbol_column: str = "feature_name",
     expression_layer: str | None = None,
     ncols: int = 6,
-    size: float | None = None,
+    point_size: float,
 ) -> None:
     """Plot one multi-gene UMAP panel per Tabula Sapiens NASP module."""
-    point_size = size if size is not None else 120000 / adata.n_obs
     for module_id in module_ids:
         module_genes = GeneModules.genes(
             module_id,

@@ -19,6 +19,9 @@ from nasp_atlas.single_cell.module_scoring import inverse_module_score_name
 from nasp_atlas.single_cell.module_scoring import module_score_name
 from nasp_atlas.single_cell.module_scoring import positive_module_score_name
 from nasp_atlas.single_cell.score_diagnostics import compare_module_scorers
+from nasp_atlas.single_cell.score_diagnostics import (
+    cross_scorer_module_correlations,
+)
 from nasp_atlas.single_cell.visualization import SCVisualizer
 
 
@@ -500,9 +503,13 @@ def _score_aucell_outputs(
             filename=score_table_filename,
         )
         if len(score_tables) >= 2:
+            combined_scores = pd.concat(score_tables, axis="columns")
+            scored_module_ids = [
+                str(module.module_id) for module in auc_modules
+            ]
             concordance = compare_module_scorers(
-                pd.concat(score_tables, axis="columns"),
-                [str(module.module_id) for module in auc_modules],
+                combined_scores,
+                scored_module_ids,
             )
             concordance_path = (
                 Path(output_dir) / "tabula_sapiens_scorer_concordance.csv"
@@ -511,6 +518,24 @@ def _score_aucell_outputs(
             logger.info(
                 "[tabula_sapiens] scorer concordance -> %s",
                 concordance_path,
+            )
+            cross_module_correlations = cross_scorer_module_correlations(
+                combined_scores,
+                scored_module_ids,
+            )
+            cross_module_path = (
+                Path(output_dir)
+                / "tabula_sapiens_cross_scorer_module_correlations.csv"
+            )
+            cross_module_correlations.to_csv(cross_module_path, index=False)
+            logger.info(
+                "[tabula_sapiens] cross-scorer module correlations -> %s",
+                cross_module_path,
+            )
+            viz.plot_scorer_concordance_heatmap(
+                cross_module_correlations,
+                filename="tabula_sapiens_scorer_concordance",
+                module_order=scored_module_ids,
             )
 
         viz.plot_multi_obs_umap_panel(

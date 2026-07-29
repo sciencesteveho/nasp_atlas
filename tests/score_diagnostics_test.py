@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from nasp_atlas.single_cell import compare_module_scorers
+from nasp_atlas.single_cell import cross_scorer_module_correlations
 
 
 def test_compare_module_scorers_reports_rank_agreement() -> None:
@@ -40,3 +41,28 @@ def test_compare_module_scorers_marks_constant_scores_uninformative() -> None:
     row = result.iloc[0]
     assert row["skipped"]
     assert row["skip_reason"] == "constant_score"
+
+
+def test_cross_scorer_correlations_include_every_module_pair() -> None:
+    """Every available Scanpy module is compared with every AUCell module."""
+    scores = pd.DataFrame(
+        {
+            "MODULE_A_score": [1.0, 2.0, 3.0, 4.0],
+            "MODULE_B_score": [1.0, 3.0, 2.0, 4.0],
+            "MODULE_A_auc": [0.1, 0.2, 0.3, 0.4],
+            "MODULE_B_auc": [0.4, 0.3, 0.2, 0.1],
+        }
+    )
+
+    result = cross_scorer_module_correlations(
+        scores,
+        ["MODULE_A", "MODULE_B"],
+    )
+
+    assert result.shape[0] == 4
+    assert result["matching_module"].sum() == 2
+    module_a_pairs = result.loc[
+        result["scanpy_module_id"] == "MODULE_A"
+    ].set_index("aucell_module_id")
+    assert module_a_pairs.loc["MODULE_A", "spearman_r"] == 1.0
+    assert module_a_pairs.loc["MODULE_B", "spearman_r"] == -1.0
