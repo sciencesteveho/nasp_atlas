@@ -24,8 +24,12 @@ from matplotlib.patches import FancyBboxPatch
 from matplotlib.text import Text
 from nasp_compendium.display import humanize_module_name  # type: ignore[import]
 
+from nasp_atlas.single_cell.hypothesis_priorities import (
+    _hypothesis_priority_label,
+)
 from nasp_atlas.single_cell.visualization.style import ColorbarStyle
-from nasp_atlas.single_cell.visualization.style import _VisualizationStyleMixin
+from nasp_atlas.single_cell.visualization.style import _PlotterBase
+from nasp_atlas.visualization import set_matplotlib_publication_parameters
 
 
 logger = logging.getLogger(__name__)
@@ -48,8 +52,16 @@ def _darkened_rgba_colors(
     ]
 
 
-class _NaspPlotMixin(_VisualizationStyleMixin):
-    """Mechanistic NASP plotting methods for tidy analysis tables."""
+class NaspPlotter(_PlotterBase):
+    """Render mechanistic NASP figures from tidy analysis tables.
+
+    Example Usage:
+      >>> plotter = NaspPlotter(output_dir="path/to/output")
+      >>> plotter.plot_module_coupling_heatmap(
+      ...     coupling,
+      ...     filename="module_coupling",
+      ... )
+    """
 
     def plot_module_coupling_heatmap(
         self,
@@ -63,23 +75,40 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         module_order: Sequence[str] | None = None,
         min_units: int = 3,
         show_fdr: bool = True,
+        title: str | None = None,
         colorbar_style: ColorbarStyle | None = None,
         cbar_height: str | float | None = None,
         cbar_width: str | float | None = None,
+        figsize: tuple[float, float] | None = None,
     ) -> None:
         """Plot symmetric module-coupling matrices with FDR markers.
 
         Duplicate module pairs are summarized by their median correlation,
         which makes the same method usable for consensus plots after tissue
-        result tables have been concatenated.
+        result tables have been concatenated. `title` replaces the automatic
+        analysis-qualified panel title when provided. `figsize` overrides the
+        adaptive total figure dimensions in inches.
 
         Example Usage:
-          >>> viz.plot_module_coupling_heatmap(
+          >>> plotter.plot_module_coupling_heatmap(
           ...     coupling,
           ...     filename="module_coupling",
+          ...     title="Module coupling",
+          ...     figsize=(3.08, 2.97),
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
+        if figsize is not None and (
+            len(figsize) != 2
+            or any(
+                not np.isfinite(dimension) or dimension <= 0.0
+                for dimension in figsize
+            )
+        ):
+            raise ValueError(
+                "figsize must contain two positive finite dimensions in "
+                f"inches; received {figsize}"
+            )
         required = ["module_a", "module_b", statistic]
         self._require_columns(coupling, required, table_name="coupling")
         scoped = self._filter_analysis(coupling, analysis=analysis)
@@ -100,6 +129,8 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
             panel_width=2.8,
             panel_height=2.7,
         )
+        if figsize is not None:
+            fig.set_size_inches(*figsize)
         image = None
         used_axes: list[Axes] = []
         for ax, (facet_label, block) in zip(axes, facets, strict=False):
@@ -133,14 +164,16 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
                     c="#222222",
                     linewidths=0,
                 )
-            title = "Module coupling"
-            if not show_fdr:
-                title += " · descriptive"
-            if analysis is not None:
-                title += f" · {self._display_label(analysis)}"
+            panel_title = title
+            if panel_title is None:
+                panel_title = "Module coupling"
+                if not show_fdr:
+                    panel_title += " · descriptive"
+                if analysis is not None:
+                    panel_title += f" · {self._display_label(analysis)}"
             if facet_column is not None:
-                title += f"\n{facet_label}"
-            ax.set_title(title)
+                panel_title += f"\n{facet_label}"
+            ax.set_title(panel_title)
             used_axes.append(ax)
         self._hide_unused_axes(axes[len(facets) :])
         if image is not None:
@@ -168,6 +201,7 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         filename: str,
         label_columns: Sequence[str],
         facet_column: str | None = None,
+        title: str | None = "NASP evidence state",
         competence_column: str = "relative_competence",
         output_column: str = "relative_output",
         color_column: str = "output_minus_competence_gap",
@@ -201,17 +235,19 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         separation, collision spacing, and the per-iteration movement cap.
         Without `figsize`, each facet scales from the tuned 24-context Liver
         panel according to the number of labels it must accommodate.
-        `figsize` overrides the total figure size.
+        `figsize` overrides the total figure size. Set `title` to `None` to
+        show only the facet value as each panel title.
 
         Example Usage:
-          >>> viz.plot_competence_output_state_map(
+          >>> plotter.plot_competence_output_state_map(
           ...     contexts,
           ...     filename="competence_output",
           ...     label_columns=["cell_type"],
+          ...     title=None,
           ...     figsize=(4.0, 4.0),
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
         required = [
             *label_columns,
             competence_column,
@@ -326,10 +362,11 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
             ax.set_aspect("equal")
             ax.set_xlabel("Relative sensing competence")
             ax.set_ylabel("Relative pathway output")
-            title = "NASP evidence state"
+            panel_title = title or ""
             if facet_column is not None:
-                title += f" · {facet_label}"
-            ax.set_title(title)
+                separator = " · " if panel_title else ""
+                panel_title += f"{separator}{facet_label}"
+            ax.set_title(panel_title)
             self._minimal_axis(ax)
 
             if adjust_labels and texts:
@@ -374,21 +411,26 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         filename: str,
         label_columns: Sequence[str],
         max_per_hypothesis: int = 12,
+        panel_height: float = 1.2,
     ) -> None:
         """Plot the highest supported contexts for each NASP hypothesis.
 
         The method works for a single tissue or an atlas-wide concatenated
         table; callers control whether labels contain cell type alone or both
-        tissue and cell type.
+        tissue and cell type. `panel_height` sets each subplot row's height in
+        inches.
 
         Example Usage:
-          >>> viz.plot_ranked_nasp_hypotheses(
+          >>> plotter.plot_ranked_nasp_hypotheses(
           ...     priorities,
           ...     filename="hypothesis_priorities",
           ...     label_columns=["tissue", "cell_type"],
+          ...     panel_height=1.38,
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
+        if not np.isfinite(panel_height) or panel_height <= 0.0:
+            raise ValueError("panel_height must be a positive finite value")
         required = [*label_columns, "hypothesis", "priority_score"]
         self._require_columns(priorities, required, table_name="priorities")
         scoped = priorities.copy()
@@ -404,7 +446,7 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         fig, axes = self._panel_figure(
             len(hypotheses),
             panel_width=2.0,
-            panel_height=1.2,
+            panel_height=panel_height,
             max_columns=2,
         )
         colors = {
@@ -430,7 +472,22 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
             ax.set_yticks(y)
             ax.set_yticklabels(labels)
             ax.set_xlim(0.0, 1.0)
-            ax.set_xlabel(self._hypothesis_priority_formula(hypothesis))
+            priority_basis = None
+            if "priority_basis" in block:
+                observed_basis = (
+                    block["priority_basis"]
+                    .dropna()
+                    .astype(str)
+                    .drop_duplicates()
+                )
+                if len(observed_basis) == 1:
+                    priority_basis = observed_basis.iloc[0]
+            ax.set_xlabel(
+                _hypothesis_priority_label(
+                    hypothesis,
+                    priority_basis=priority_basis,
+                )
+            )
             ax.set_title(self._hypothesis_display_label(hypothesis))
             self._minimal_axis(ax)
         self._hide_unused_axes(axes[len(hypotheses) :])
@@ -474,7 +531,7 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         when it is `None`.
 
         Example Usage:
-          >>> viz.plot_sensor_output_mismatch(
+          >>> plotter.plot_sensor_output_mismatch(
           ...     sensor_output,
           ...     filename="sensor_output_mismatch",
           ...     column_spacing=0.65,
@@ -483,7 +540,7 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
           ...     figsize=(3.0, 4.0),
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
         for parameter_name, spacing in (
             ("column_spacing", column_spacing),
             ("row_spacing", row_spacing),
@@ -590,15 +647,16 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
                 linewidth=0.2,
                 clip_on=False,
             )
-            ax.set_xticks(range(len(output_order)))
-            ax.set_xticklabels(
+            self._set_vertical_matrix_xticklabels(
+                ax,
                 [self._module_label(value) for value in output_order],
-                rotation=90,
-                ha="center",
-                va="top",
             )
             ax.set_yticks(range(len(gene_order)))
-            ax.set_yticklabels(gene_order, ha="right", va="center")
+            ax.set_yticklabels(
+                [gene.upper() for gene in gene_order],
+                ha="right",
+                va="center",
+            )
             ax.tick_params(axis="both", which="major", pad=2.0)
 
             for label in ax.get_yticklabels():
@@ -684,7 +742,7 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         20-feature by 20-context Liver layout.
 
         Example Usage:
-          >>> viz.plot_age_effect_dotplot(
+          >>> plotter.plot_age_effect_dotplot(
           ...     regressions,
           ...     filename="age_effects",
           ...     column_spacing=0.8,
@@ -694,7 +752,7 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
           ...     figsize=(4.0, 5.0),
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
         for parameter_name, spacing in (
             ("column_spacing", column_spacing),
             ("row_spacing", row_spacing),
@@ -800,9 +858,9 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         display_features = (
             [self._module_label(value) for value in feature_order]
             if feature_type == "module_score"
-            else feature_order
+            else [value.upper() for value in feature_order]
         )
-        ax.set_xticklabels(display_features, rotation=90)
+        self._set_vertical_matrix_xticklabels(ax, display_features)
         if feature_type == "gene_expression":
             for label in ax.get_xticklabels():
                 label.set_fontstyle("italic")
@@ -877,14 +935,14 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         deterministically. `figsize` overrides the adaptive figure dimensions.
 
         Example Usage:
-          >>> viz.plot_age_effect_consistency(
+          >>> plotter.plot_age_effect_consistency(
           ...     stability,
           ...     filename="age_consistency",
           ...     feature_type="module_score",
           ...     figsize=(3.2, 4.0),
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
         required = [
             "feature_label",
             "analysis_scope",
@@ -928,7 +986,7 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         )
         scoped = scoped.assign(
             _display_feature=(
-                scoped["feature_label"].astype(str)
+                scoped["feature_label"].astype(str).str.upper()
                 if feature_type == "gene_expression"
                 else scoped["feature_label"].map(self._module_label)
             ),
@@ -1031,7 +1089,7 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         `tick_label_pad` uses points, and `figsize` uses inches.
 
         Example Usage:
-          >>> viz.plot_mechanistic_edge_barplot(
+          >>> plotter.plot_mechanistic_edge_barplot(
           ...     mechanistic_edges,
           ...     filename="mechanistic_edge_correlations",
           ...     row_spacing=0.9,
@@ -1039,7 +1097,7 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
           ...     figsize=(3.6, 4.5),
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
         for parameter_name, value in (
             ("row_spacing", row_spacing),
             ("bar_height", bar_height),
@@ -1170,8 +1228,8 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         max_layer_span: int | None = None,
         show_fdr: bool = True,
         node_size: tuple[float, float] = (0.265, 0.42),
-        node_corner_radius: float = 0.02,
-        label_gutter: float = 0.23,
+        node_corner_radius: float = 0.012,
+        label_gutter: float = 0.30,
         layer_spacing: float = 1.25,
         within_layer_spacing: float = 1.0,
         colorbar_style: ColorbarStyle | None = None,
@@ -1192,9 +1250,11 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         where each layer band spans one unit vertically. The horizontal layout
         expands when needed so rectangles in the busiest layer never touch;
         the requested size is not silently clamped. `node_corner_radius`
-        controls corner curvature in the same units. `label_gutter` is the
-        fraction of panel width reserved for band labels, and should be widened
-        if a layer name is long enough to reach the first rectangle.
+        controls corner curvature in the same units; rendering compensates for
+        unequal axis scales so the radius remains visually even.
+        `label_gutter` is the fraction of panel width reserved for band labels,
+        and should be widened if a layer name is long enough to reach the first
+        rectangle.
         `layer_spacing` and `within_layer_spacing` scale panel height and width.
         `figsize` overrides the adaptive total figure dimensions in inches;
         reducing it can require taller nodes so wrapped labels still fit.
@@ -1212,18 +1272,18 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         interpreted as evidence of causal direction.
 
         Example Usage:
-          >>> viz.plot_mechanistic_edge_network(
+          >>> plotter.plot_mechanistic_edge_network(
           ...     mechanistic_edges,
           ...     filename="mechanistic_network",
           ...     max_layer_span=1,
           ...     node_size=(0.20, 0.46),
-          ...     label_gutter=0.23,
+          ...     label_gutter=0.30,
           ...     layer_spacing=1.25,
           ...     within_layer_spacing=1.0,
           ...     figsize=(4.0, 3.5),
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
         node_width, node_height = node_size
         if node_width <= 0 or node_height <= 0:
             raise ValueError(
@@ -1321,7 +1381,7 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
             )
 
         widest_layer = max(
-            sum(1 for node in nodes if self._mechanistic_layer(node) == layer)
+            sum(self._mechanistic_layer(node) == layer for node in nodes)
             for _, _, nodes, _, layer_rows, _ in facet_layouts
             for layer in layer_rows
         )
@@ -1357,6 +1417,26 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         used_axes: list[Axes] = []
         for ax, (
             facet_label,
+            _,
+            _,
+            _,
+            layer_rows,
+            horizontal_span,
+        ) in zip(axes, facet_layouts, strict=False):
+            ax.set_xlim(0.0, horizontal_span)
+            ax.set_ylim(-0.5, max(layer_rows.values()) + 0.5)
+            ax.axis("off")
+
+            title = "Module correlation"
+            if facet_column is not None:
+                title += f"\n{facet_label}"
+            ax.set_title(title)
+            used_axes.append(ax)
+
+        fig.canvas.draw()
+        fig.set_layout_engine(None)
+        for ax, (
+            _,
             summary,
             facet_nodes,
             positions,
@@ -1372,6 +1452,9 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
                 layer_rows,
                 gutter_width=horizontal_span * label_gutter,
             )
+            origin = ax.transData.transform((0.0, 0.0))
+            x_scale = abs(ax.transData.transform((1.0, 0.0))[0] - origin[0])
+            y_scale = abs(ax.transData.transform((0.0, 1.0))[1] - origin[1])
             node_labels.extend(
                 self._draw_layer_nodes(
                     ax,
@@ -1379,6 +1462,7 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
                     positions=positions,
                     node_size=node_size,
                     node_corner_radius=node_corner_radius,
+                    node_mutation_aspect=x_scale / y_scale,
                     layer_colors=layer_colors,
                 )
             )
@@ -1394,16 +1478,6 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
                     cmap=cmap,
                     norm=norm,
                 )
-            ax.set_xlim(0.0, horizontal_span)
-            ax.set_ylim(-0.5, max(layer_rows.values()) + 0.5)
-            ax.axis("off")
-
-            title = "Module correlation"
-            if facet_column is not None:
-                title += f"\n{facet_label}"
-
-            ax.set_title(title)
-            used_axes.append(ax)
 
         self._hide_unused_axes(axes[len(facets) :])
 
@@ -1605,16 +1679,30 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         y_labels: Sequence[str],
     ) -> None:
         """Style a labeled matrix with white cell boundaries."""
-        ax.set_xticks(range(len(x_labels)))
-        ax.set_xticklabels(
-            [_NaspPlotMixin._module_label(value) for value in x_labels],
-            rotation=90,
+        NaspPlotter._set_vertical_matrix_xticklabels(
+            ax,
+            [NaspPlotter._module_label(value) for value in x_labels],
         )
         ax.set_yticks(range(len(y_labels)))
         ax.set_yticklabels(
-            [_NaspPlotMixin._module_label(value) for value in y_labels]
+            [NaspPlotter._module_label(value) for value in y_labels]
         )
-        _NaspPlotMixin._matrix_grid(ax, len(x_labels), len(y_labels))
+        NaspPlotter._matrix_grid(ax, len(x_labels), len(y_labels))
+
+    @staticmethod
+    def _set_vertical_matrix_xticklabels(
+        ax: Axes,
+        labels: Sequence[str],
+    ) -> None:
+        """Center vertical labels on their corresponding matrix columns."""
+        ax.set_xticks(range(len(labels)))
+        ax.set_xticklabels(
+            labels,
+            rotation=90,
+            ha="right",
+            va="center",
+            rotation_mode="anchor",
+        )
 
     @staticmethod
     def _matrix_grid(ax: Axes, columns: int, rows: int) -> None:
@@ -1750,22 +1838,6 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
             "post_without_nasp": "Post without NASP",
         }
         return labels.get(hypothesis, hypothesis.replace("_", " ").capitalize())
-
-    @staticmethod
-    def _hypothesis_priority_formula(hypothesis: str) -> str:
-        """Return the exact priority-score formula used for a hypothesis."""
-        formulas = {
-            "active_like": "min(competence, output)",
-            "responsive_like": "max(output - competence, 0) * output",
-            "restricted_buffered": (
-                "max(restriction - output, 0)\n* mean(restriction, competence)"
-            ),
-            "feedback_dominant": "max(feedback - output, 0) * feedback",
-            "post_without_nasp": (
-                "max(post - max(competence, output), 0) * post"
-            ),
-        }
-        return formulas.get(hypothesis, "Priority score")
 
     @staticmethod
     def _module_label(value: object) -> str:
@@ -1936,17 +2008,17 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
     ) -> tuple[float, int]:
         """Return the mean neighbor position and a stable tiebreaker."""
         incoming_index = members.index(node)
-        relative = [
+        if relative := [
             relative_position[neighbor]
             for neighbor in neighbors
             if neighbor in relative_position
-        ]
-        if not relative:
+        ]:
+            return (float(np.mean(relative)), incoming_index)
+        else:
             return (
                 incoming_index / max(1, len(members) - 1),
                 incoming_index,
             )
-        return (float(np.mean(relative)), incoming_index)
 
     @classmethod
     def _draw_layer_bands(
@@ -1989,6 +2061,7 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
         positions: dict[str, tuple[float, float]],
         node_size: tuple[float, float],
         node_corner_radius: float,
+        node_mutation_aspect: float,
         layer_colors: dict[int, str],
     ) -> list[tuple[Text, FancyBboxPatch, str]]:
         """Draw pastel layer rectangles and return their fitted labels."""
@@ -2004,6 +2077,7 @@ class _NaspPlotMixin(_VisualizationStyleMixin):
                 node_width,
                 node_height,
                 boxstyle=f"round,pad=0,rounding_size={node_corner_radius}",
+                mutation_aspect=node_mutation_aspect,
                 facecolor=node_facecolor,
                 edgecolor=tuple(0.8 * channel for channel in node_facecolor),
                 linewidth=0.35,

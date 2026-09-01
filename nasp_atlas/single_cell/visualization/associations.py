@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+import textwrap
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
 import matplotlib.pyplot as plt
@@ -14,30 +15,12 @@ from matplotlib.patches import Patch
 from matplotlib.typing import ColorType
 
 from nasp_atlas.cellxgene.filter import humanize_label
-from nasp_atlas.single_cell.visualization.style import _VisualizationStyleMixin
+from nasp_atlas.single_cell.visualization.style import _PlotterBase
 from nasp_atlas.visualization import darken_color
+from nasp_atlas.visualization import set_matplotlib_publication_parameters
 
 
 logger = logging.getLogger(__name__)
-
-_PREDICTOR_DISPLAY_NAMES = {
-    "age_years": "Age (years)",
-    "tissue_specific_eqtls": "Tissue-specific significant eQTL pairs",
-    "total_eqtls": "Total significant eQTL pairs",
-}
-_GROUP_DISPLAY_NAMES = {
-    "cell_type": "Cell type",
-    "sex": "Sex",
-    "tissue_in_publication": "Tissue",
-}
-_STATISTICAL_UNIT_DISPLAY_NAMES = {
-    "cell": "Cells",
-    "metacell": "Metacells",
-    "donor": "Donors",
-    "donor_tissue": "Donor-tissue units",
-    "donor_tissue_cell_type": "Donor-tissue-cell type units",
-    "donor_tissue_sex": "Donor-tissue-sex units",
-}
 
 
 def _numeric_scalar(value: object) -> float:
@@ -48,8 +31,56 @@ def _numeric_scalar(value: object) -> float:
         return np.nan
 
 
-class _AssociationPlotMixin(_VisualizationStyleMixin):
-    """Regression and association plotting methods."""
+def _predictor_display_name(predictor_key: str) -> str:
+    """Return a publication label for an association predictor."""
+    return humanize_label(
+        predictor_key,
+        {
+            "age_years": "Age (years)",
+            "tissue_specific_eqtls": (
+                "Tissue-specific\nsignificant eQTL pairs"
+            ),
+            "total_eqtls": "Total significant eQTL pairs",
+        },
+    )
+
+
+def _group_display_name(group_key: str) -> str:
+    """Return a publication label for a grouping variable."""
+    return humanize_label(
+        group_key,
+        {
+            "cell_type": "Cell type",
+            "sex": "Sex",
+            "tissue_in_publication": "Tissue",
+        },
+    )
+
+
+def _statistical_unit_display_name(statistical_unit: str) -> str:
+    """Return a plural publication label for a statistical unit."""
+    return {
+        "cell": "Cells",
+        "metacell": "Metacells",
+        "donor": "Donors",
+        "donor_tissue": "Donor-tissue units",
+        "donor_tissue_cell_type": "Donor-tissue-cell type units",
+        "donor_tissue_sex": "Donor-tissue-sex units",
+    }.get(statistical_unit, humanize_label(statistical_unit))
+
+
+class AssociationPlotter(_PlotterBase):
+    """Render regression and grouped-association figures.
+
+    Example Usage:
+      >>> plotter = AssociationPlotter(output_dir="path/to/output")
+      >>> plotter.plot_feature_regression(
+      ...     unit_frame,
+      ...     feature_id="CGAS",
+      ...     predictor_key="age_years",
+      ...     filename="cgas_by_age",
+      ... )
+    """
 
     def plot_feature_regression(
         self,
@@ -63,6 +94,8 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
         value_column: str = "feature_value",
         feature_label: str | None = None,
         point_color: str | None = "black",
+        category_colors: Mapping[str, ColorType] | None = None,
+        legend_handletextpad: float = 0.1,
         figsize: tuple[float, float] | None = None,
     ) -> None:
         """Scatter one feature against a continuous predictor with a fit line.
@@ -86,17 +119,32 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
           feature_label: Optional display label; defaults to `feature_id`.
           point_color: Fixed point color. Set to None to use categorical colors
             from `color_key`.
+          category_colors: Optional mapping from `color_key` categories to
+            point colors when `point_color` is None.
+          legend_handletextpad: Horizontal gap in font-size units between a
+            legend marker and its label.
           figsize: Optional figure size in inches.
 
         Example Usage:
-          >>> viz.plot_feature_regression(
+          >>> plotter.plot_feature_regression(
           ...     unit_frame,
           ...     feature_id="IL6",
           ...     predictor_key="age_years",
           ...     filename="il6_age_regression",
+          ...     color_key="sex",
+          ...     point_color=None,
+          ...     category_colors={
+          ...         "male": "#d2e7ef",
+          ...         "female": "#f9bebc",
+          ...     },
+          ...     legend_handletextpad=0.1,
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
+        if not np.isfinite(legend_handletextpad) or legend_handletextpad < 0.0:
+            raise ValueError(
+                "legend_handletextpad must be a nonnegative finite value"
+            )
         block = unit_frame[unit_frame["feature_id"].astype(str) == feature_id]
         plot_df = pd.DataFrame(
             {
@@ -115,28 +163,47 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
 
         fig, ax = plt.subplots(figsize=figsize or (1.2, 1.2))
         if "color" in plot_df.columns and point_color is None:
-            for category in sorted(plot_df["color"].unique()):
+            default_colors = plt.get_cmap("tab10")
+            for index, category in enumerate(sorted(plot_df["color"].unique())):
                 sub = plot_df[plot_df["color"] == category]
-                ax.scatter(sub["x"], sub["y"], s=6, label=str(category))
-            ax.legend(frameon=False, loc="best")
+                color = (
+                    category_colors[category]
+                    if category_colors is not None
+                    and category in category_colors
+                    else default_colors(index % 10)
+                )
+                ax.scatter(
+                    sub["x"],
+                    sub["y"],
+                    s=2.5,
+                    color=color,
+                    label=str(category),
+                )
+            ax.legend(
+                frameon=False,
+                loc="best",
+                handletextpad=legend_handletextpad,
+            )
         else:
             ax.scatter(
                 plot_df["x"],
                 plot_df["y"],
-                s=3,
+                s=2.5,
                 color=point_color or "black",
             )
 
         unit = "" if block.empty else str(block["statistical_unit"].iloc[0])
         self._draw_regression_line(ax=ax, result_row=result_row)
-        ax.set_xlabel(humanize_label(predictor_key, _PREDICTOR_DISPLAY_NAMES))
-        ax.set_ylabel(
+        ax.set_xlabel(_predictor_display_name(predictor_key))
+        y_label = ax.set_ylabel(
             self._regression_y_label(
                 feature_id=feature_id,
                 feature_label=feature_label or feature_id,
                 result_row=result_row,
             )
         )
+        if self._is_gene_expression(feature_id, result_row):
+            y_label.set_fontstyle("italic")
         title = self._regression_title(
             statistical_unit=unit,
             result_row=result_row,
@@ -146,6 +213,229 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
         ax.set_title(title)
         self._save_figure_and_log(
             fig, self.output_dir / filename, "[plot] feature regression -> %s"
+        )
+
+    def plot_feature_regression_grid(
+        self,
+        unit_frame: pd.DataFrame,
+        *,
+        feature_id: str,
+        predictor_key: str,
+        filename: str,
+        results: pd.DataFrame,
+        stratify_key: str,
+        value_column: str = "feature_value",
+        feature_label: str | None = None,
+        stratum_order: Sequence[str] | None = None,
+        max_columns: int = 10,
+        panel_width: float = 0.9,
+        panel_height: float = 0.9,
+        point_size: float = 3.0,
+        label_wrap_width: int = 20,
+        column_gap: float = 0.45,
+        row_gap: float = 0.85,
+        y_label_x: float = 0.09,
+        figsize: tuple[float, float] | None = None,
+    ) -> None:
+        """Combine one feature's stratum-specific regressions in one figure.
+
+        Every saved stratum receives a panel with shared predictor and response
+        limits. Estimable panels show their saved OLS line and correlation;
+        non-estimable panels retain their observed points and are labeled as
+        such. Panel dimensions are in inches and `point_size` is marker area in
+        points squared. `label_wrap_width` is the target character count for
+        long stratum labels; and `column_gap`/`row_gap` are Matplotlib subplot
+        spacing fractions that expand the adaptive total figure size rather
+        than shrinking its panels. `y_label_x` positions the shared response
+        label in figure coordinates. Text uses the shared 5-point publication
+        style.
+
+        Example Usage:
+          >>> plotter.plot_feature_regression_grid(
+          ...     unit_frame,
+          ...     feature_id="IL6",
+          ...     predictor_key="age_years",
+          ...     filename="il6_age_by_tissue",
+          ...     results=regression_results,
+          ...     stratify_key="tissue",
+          ...     max_columns=6,
+          ...     column_gap=0.45,
+          ...     row_gap=0.85,
+          ...     y_label_x=0.09,
+          ... )
+        """
+        set_matplotlib_publication_parameters()
+        required_frame = {
+            "feature_id",
+            predictor_key,
+            stratify_key,
+            value_column,
+        }
+        if missing := sorted(required_frame.difference(unit_frame.columns)):
+            raise KeyError(
+                f"unit frame missing regression-grid columns: {missing}"
+            )
+        required_results = {"feature_id", "stratum", "skipped"}
+        if missing := sorted(required_results.difference(results.columns)):
+            raise KeyError(
+                f"results missing regression-grid columns: {missing}"
+            )
+        if max_columns < 1:
+            raise ValueError("max_columns must be at least 1")
+        for parameter_name, value in (
+            ("panel_width", panel_width),
+            ("panel_height", panel_height),
+            ("point_size", point_size),
+        ):
+            if not np.isfinite(value) or value <= 0.0:
+                raise ValueError(
+                    f"{parameter_name} must be a positive finite value"
+                )
+        if label_wrap_width < 1:
+            raise ValueError("label_wrap_width must be at least 1")
+        for parameter_name, value in (
+            ("column_gap", column_gap),
+            ("row_gap", row_gap),
+        ):
+            if not np.isfinite(value) or value < 0.0:
+                raise ValueError(
+                    f"{parameter_name} must be a nonnegative finite value"
+                )
+        if not np.isfinite(y_label_x) or not 0.0 <= y_label_x <= 1.0:
+            raise ValueError("y_label_x must be finite and between 0 and 1")
+        if figsize is not None and (
+            len(figsize) != 2
+            or any(
+                not np.isfinite(dimension) or dimension <= 0.0
+                for dimension in figsize
+            )
+        ):
+            raise ValueError("figsize dimensions must be positive and finite")
+
+        selected_results = results.loc[
+            results["feature_id"].astype(str) == feature_id
+        ].copy()
+        if "stratify_key" in selected_results:
+            selected_results = selected_results.loc[
+                selected_results["stratify_key"].astype(str) == stratify_key
+            ]
+        selected_results = selected_results.loc[
+            selected_results["stratum"].notna()
+            & selected_results["stratum"].astype(str).ne("")
+        ]
+        if selected_results.empty:
+            logger.warning(
+                "[plot] No saved strata for regression grid %s. Skipping.",
+                filename,
+            )
+            return
+        if selected_results["stratum"].astype(str).duplicated().any():
+            raise ValueError(
+                f"results contain duplicate {stratify_key} strata for "
+                f"feature_id={feature_id}"
+            )
+
+        rows_by_stratum = {
+            str(row["stratum"]): row for _, row in selected_results.iterrows()
+        }
+        strata = (
+            sorted(rows_by_stratum)
+            if stratum_order is None
+            else [str(stratum) for stratum in stratum_order]
+        )
+        if missing := sorted(set(strata).difference(rows_by_stratum)):
+            raise KeyError(
+                f"requested regression-grid strata are unavailable: {missing}"
+            )
+
+        n_columns = min(max_columns, len(strata))
+        n_rows = (len(strata) + n_columns - 1) // n_columns
+        resolved_figsize = figsize or (
+            panel_width * (n_columns + max(0, n_columns - 1) * column_gap),
+            panel_height * (n_rows + max(0, n_rows - 1) * row_gap),
+        )
+        fig, axes_grid = plt.subplots(
+            n_rows,
+            n_columns,
+            squeeze=False,
+            sharex=True,
+            sharey=True,
+            figsize=resolved_figsize,
+        )
+        axes = axes_grid.ravel().tolist()
+        feature_block = unit_frame.loc[
+            unit_frame["feature_id"].astype(str) == feature_id
+        ]
+        feature_strata = feature_block[stratify_key].astype(str)
+        plotted: list[tuple[Axes, pd.Series]] = []
+        for ax, stratum in zip(axes, strata, strict=False):
+            result_row = rows_by_stratum[stratum]
+            block = feature_block.loc[feature_strata == stratum]
+            plot_df = pd.DataFrame(
+                {
+                    "x": pd.to_numeric(
+                        block[predictor_key],
+                        errors="coerce",
+                    ),
+                    "y": pd.to_numeric(
+                        block[value_column],
+                        errors="coerce",
+                    ),
+                }
+            ).replace([np.inf, -np.inf], np.nan)
+            plot_df.dropna(inplace=True)
+            ax.scatter(
+                plot_df["x"],
+                plot_df["y"],
+                s=point_size,
+                color="black",
+            )
+
+            title = self._regression_facet_label(
+                stratum,
+                wrap_width=label_wrap_width,
+            )
+            if self._result_is_skipped(result_row):
+                title += "\nNot estimable"
+                ax.set_facecolor("#f3f3f3")
+            elif annotation := self._regression_annotation(result_row):
+                title += f"\n{annotation}"
+            ax.set_title(title)
+            plotted.append((ax, result_row))
+
+        for ax, result_row in plotted:
+            if not self._result_is_skipped(result_row):
+                self._draw_regression_line(ax=ax, result_row=result_row)
+        for ax in axes[len(strata) :]:
+            ax.set_visible(False)
+        fig.subplots_adjust(wspace=column_gap, hspace=row_gap)
+
+        representative = selected_results.iloc[0]
+        resolved_feature_label = feature_label or (
+            str(feature_block["feature_label"].iloc[0])
+            if "feature_label" in feature_block and not feature_block.empty
+            else feature_id
+        )
+        fig.supxlabel(
+            _predictor_display_name(predictor_key),
+            fontsize=5,
+            y=-0.025,
+        )
+        y_label = fig.supylabel(
+            self._regression_y_label(
+                feature_id=feature_id,
+                feature_label=resolved_feature_label,
+                result_row=representative,
+            ),
+            fontsize=5,
+            x=y_label_x,
+        )
+        if self._is_gene_expression(feature_id, representative):
+            y_label.set_fontstyle("italic")
+        self._save_figure_and_log(
+            fig,
+            self.output_dir / filename,
+            "[plot] feature regression grid -> %s",
         )
 
     def plot_feature_group_boxplot(
@@ -163,6 +453,7 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
         stratify_key: str | None = None,
         stratify_colors: Mapping[str, str] | None = None,
         box_width: float | None = None,
+        point_size: float = 1.8,
         x_margin: float = 0.01,
         y_margin: float = 0.01,
         figsize: tuple[float, float] | None = None,
@@ -190,26 +481,32 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
           stratify_colors: Optional mapping from strata to box fill colors.
           box_width: Box width in categorical-axis units. Defaults to an
             adaptive width based on the number of strata.
+          point_size: Individual unit marker area in points squared.
           x_margin: Fractional whitespace at each end of the x axis.
           y_margin: Fractional whitespace at each end of the y axis.
           figsize: Optional figure size in inches.
 
         Example Usage:
-          >>> viz.plot_feature_group_boxplot(
+          >>> plotter.plot_feature_group_boxplot(
           ...     unit_frame,
           ...     feature_id="IL6",
           ...     group_key="disease_status",
           ...     filename="il6_by_disease",
           ...     box_width=0.25,
+          ...     point_size=1.8,
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
         if errorbar is not None:
             logger.warning(
                 "[plot] errorbar=%s is ignored for true boxplots", errorbar
             )
-        if box_width is not None and box_width <= 0:
-            raise ValueError("box_width must be greater than zero")
+        if box_width is not None and (
+            not np.isfinite(box_width) or box_width <= 0.0
+        ):
+            raise ValueError("box_width must be a positive finite value")
+        if not np.isfinite(point_size) or point_size <= 0.0:
+            raise ValueError("point_size must be a positive finite value")
 
         block, plot_df = self._prepare_feature_group_plot(
             unit_frame,
@@ -238,7 +535,7 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
         centers = np.arange(len(group_order), dtype=float)
         slot_width = 0.72 / len(stratum_order)
         resolved_box_width = (
-            slot_width * 1.25 if box_width is None else box_width
+            slot_width * 0.72 if box_width is None else box_width
         )
         offsets = (
             np.arange(len(stratum_order), dtype=float)
@@ -292,7 +589,7 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
                 ax.scatter(
                     np.full(values.size, position) + jitter,
                     values,
-                    s=3,
+                    s=point_size,
                     color=detail_color,
                     alpha=0.7,
                     linewidths=0,
@@ -332,6 +629,8 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
         errorbar: Literal["sem", "sd", "none"] = "sem",
         stratify_key: str | None = None,
         stratify_colors: Mapping[str, str] | None = None,
+        bar_width: float | None = None,
+        point_size: float = 1.8,
         figsize: tuple[float, float] | None = None,
     ) -> None:
         """Plot grouped central values, uncertainty, and unit-level points.
@@ -348,17 +647,28 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
           errorbar: Standard error, standard deviation, or no error bar.
           stratify_key: Optional categorical column drawn as adjacent bars.
           stratify_colors: Optional mapping from strata to bar fill colors.
+          bar_width: Bar width in categorical-axis units. Defaults to an
+            adaptive width that leaves space between adjacent strata.
+          point_size: Individual unit marker area in points squared.
           figsize: Optional figure size in inches.
 
         Example Usage:
-          >>> viz.plot_feature_group_barplot(
+          >>> plotter.plot_feature_group_barplot(
           ...     unit_frame,
           ...     feature_id="IL6",
           ...     group_key="tissue",
           ...     filename="il6_by_tissue",
+          ...     bar_width=0.25,
+          ...     point_size=1.8,
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
+        if bar_width is not None and (
+            not np.isfinite(bar_width) or bar_width <= 0.0
+        ):
+            raise ValueError("bar_width must be a positive finite value")
+        if not np.isfinite(point_size) or point_size <= 0.0:
+            raise ValueError("point_size must be a positive finite value")
 
         block, plot_df = self._prepare_feature_group_plot(
             unit_frame,
@@ -386,7 +696,9 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
         )
         centers = np.arange(len(group_order), dtype=float)
         slot_width = 0.72 / len(stratum_order)
-        bar_width = slot_width * 0.86
+        resolved_bar_width = (
+            slot_width * 0.72 if bar_width is None else bar_width
+        )
         offsets = (
             np.arange(len(stratum_order), dtype=float)
             - (len(stratum_order) - 1) / 2.0
@@ -418,7 +730,7 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
                 positions[valid],
                 summary.loc[valid, central].to_numpy(dtype=float),
                 yerr=yerr,
-                width=bar_width,
+                width=resolved_bar_width,
                 color=fill_color,
                 edgecolor=detail_color,
                 linewidth=0.6,
@@ -439,11 +751,13 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
                     continue
 
                 position = float(positions[group_index])
-                jitter = (rng.random(values.size) - 0.5) * bar_width * 0.55
+                jitter = (
+                    (rng.random(values.size) - 0.5) * resolved_bar_width * 0.55
+                )
                 ax.scatter(
                     np.full(values.size, position) + jitter,
                     values,
-                    s=3,
+                    s=point_size,
                     color=detail_color,
                     alpha=0.7,
                     linewidths=0,
@@ -579,20 +893,22 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
             [humanize_label(group) for group in group_order], rotation=90
         )
         ax.tick_params(axis="both", which="major", pad=1.0)
-        ax.set_xlabel(humanize_label(group_key, _GROUP_DISPLAY_NAMES))
+        ax.set_xlabel(_group_display_name(group_key))
 
         resolved_feature_label = feature_label or (
             str(block["feature_label"].iloc[0])
             if "feature_label" in block.columns and not block.empty
             else feature_id
         )
-        ax.set_ylabel(
+        y_label = ax.set_ylabel(
             self._regression_y_label(
                 feature_id=feature_id,
                 feature_label=resolved_feature_label,
                 result_row=result_row,
             )
         )
+        if self._is_gene_expression(feature_id, result_row):
+            y_label.set_fontstyle("italic")
 
         statistical_unit = (
             "" if block.empty else str(block["statistical_unit"].iloc[0])
@@ -650,6 +966,34 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
         ax.set_xlim(x_limits)
 
     @staticmethod
+    def _regression_facet_label(
+        stratum: str,
+        *,
+        wrap_width: int,
+    ) -> str:
+        """Return a compact tissue or tissue-cell-type panel label."""
+        if "::" not in stratum:
+            return textwrap.fill(
+                humanize_label(stratum),
+                width=wrap_width,
+            )
+        tissue, cell_type = stratum.split("::", 1)
+        cell_type_label = textwrap.fill(
+            humanize_label(cell_type),
+            width=wrap_width,
+        )
+        return f"{humanize_label(tissue)}\n{cell_type_label}"
+
+    @staticmethod
+    def _result_is_skipped(result_row: pd.Series) -> bool:
+        """Return whether a serialized result row is non-estimable."""
+        return str(result_row.get("skipped", "false")).lower() in {
+            "true",
+            "1",
+            "yes",
+        }
+
+    @staticmethod
     def _regression_title(
         *,
         statistical_unit: str,
@@ -703,6 +1047,9 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
         result_row: pd.Series | None,
     ) -> str:
         """Return a readable feature label with module-scoring provenance."""
+        if AssociationPlotter._is_gene_expression(feature_id, result_row):
+            return feature_label.strip().upper()
+
         label = feature_label.replace("_", " ").strip()
         if label.isupper():
             label = label.lower()
@@ -734,6 +1081,22 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
         return f"{label}\n(Scanpy)" if feature_id.endswith("_score") else label
 
     @staticmethod
+    def _is_gene_expression(
+        feature_id: str,
+        result_row: pd.Series | None,
+    ) -> bool:
+        """Return whether a plotted feature represents a human gene."""
+        feature_type = (
+            ""
+            if result_row is None
+            else str(result_row.get("feature_type", ""))
+        )
+        return (
+            feature_type == "gene_expression"
+            or feature_id.upper().startswith("ENSG")
+        )
+
+    @staticmethod
     def _group_title(
         *,
         statistical_unit: str,
@@ -750,9 +1113,7 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
         Returns:
           A compact title identifying the unit and optional raw test p-value.
         """
-        title = _STATISTICAL_UNIT_DISPLAY_NAMES.get(
-            statistical_unit, humanize_label(statistical_unit)
-        )
+        title = _statistical_unit_display_name(statistical_unit)
         if result_row is None:
             return title
         test = str(result_row.get("parametric_test", ""))
@@ -762,7 +1123,7 @@ class _AssociationPlotMixin(_VisualizationStyleMixin):
             "welch_t": "Welch's t-test",
         }
         if test and pd.notna(pvalue) and np.isfinite(float(pvalue)):
-            comparison = humanize_label(group_key, _GROUP_DISPLAY_NAMES).lower()
+            comparison = _group_display_name(group_key).lower()
             title += (
                 f"\n{test_labels.get(test, humanize_label(test))} across "
                 f"{comparison}, raw p={float(pvalue):.1e}"

@@ -12,7 +12,9 @@ import pandas as pd
 from nasp_atlas.cellxgene.metadata import add_development_stage_age_obs
 from nasp_atlas.cellxgene.metadata import category_color_map_from_uns
 from nasp_atlas.single_cell.umap import UmapPanelSpec
-from nasp_atlas.single_cell.visualization import SCVisualizer
+from nasp_atlas.single_cell.visualization import MixedModelPlotter
+from nasp_atlas.single_cell.visualization import NaspPlotter
+from nasp_atlas.single_cell.visualization import UmapPlotter
 
 
 __all__ = [
@@ -20,8 +22,156 @@ __all__ = [
     "plot_global_nasp_visualizations",
     "plot_nasp_association_visualizations",
     "plot_tabula_sapiens_metadata_umaps",
+    "plot_tabula_sapiens_mixed_model_inference",
     "resolve_tissue_color_map",
 ]
+
+
+def plot_tabula_sapiens_mixed_model_inference(
+    *,
+    output_dir: str | Path,
+    contrasts: pd.DataFrame,
+    variance_components: pd.DataFrame,
+    feature_type: str = "module_score",
+    max_effects: int = 30,
+    max_features: int = 30,
+) -> list[Path]:
+    """Plot every prespecified Tabula Sapiens mixed-model estimand.
+
+    Five forest plots show planned marginal contrasts or simple age slopes
+    with 95% confidence intervals, donor support, references, and FDR. A sixth
+    stacked plot shows conditional study, donor, repeated-context, and residual
+    variance fractions. Analyses without an estimable result are skipped rather
+    than displayed as zero; their reasons remain available in the workflow's
+    availability and diagnostics tables.
+
+    Args:
+      output_dir: Directory receiving PNG figures.
+      contrasts: Planned contrasts from `TabulaMixedModelResults`.
+      variance_components: Conditional variance-component table from the same
+        mixed-model run.
+      feature_type: Feature family to display. Module scores are the default;
+        gene-expression results remain available in the saved tables.
+      max_effects: Maximum rows displayed in each effect forest plot.
+      max_features: Maximum features displayed in the variance plot.
+
+    Returns:
+      Paths of figures produced for estimable analyses in deterministic order.
+
+    Example Usage:
+      >>> paths = plot_tabula_sapiens_mixed_model_inference(
+      ...     output_dir="results/association_plots/mixed_models",
+      ...     contrasts=mixed_results.contrasts,
+      ...     variance_components=mixed_results.variance_components,
+      ... )
+    """
+    destination = Path(output_dir)
+    plotter = MixedModelPlotter(output_dir=destination)
+    plotted: list[Path] = []
+    effect_plots = (
+        (
+            "adjusted_context",
+            "adjusted_cell_type",
+            "nasp_mixed_adjusted_cell_type_effects",
+            "Adjusted cell-type effects",
+        ),
+        (
+            "condition_by_cell_type",
+            "condition_by_cell_type",
+            "nasp_mixed_condition_effects_by_cell_type",
+            "Condition effects by cell type",
+        ),
+        (
+            "age_by_cell_type",
+            "age_by_cell_type",
+            "nasp_mixed_age_slopes_by_cell_type",
+            "Age slopes by cell type",
+        ),
+        (
+            "paired_tissue",
+            "paired_tissue",
+            "nasp_mixed_paired_tissue_effects",
+            "Paired tissue effects",
+        ),
+        (
+            "adjusted_context",
+            "assay_batch_effects",
+            "nasp_mixed_assay_batch_effects",
+            "Assay batch effects",
+        ),
+    )
+    for analysis, estimand, filename, title in effect_plots:
+        path = destination / f"{filename}.png"
+        path.unlink(missing_ok=True)
+        if not _has_estimable_mixed_rows(
+            contrasts,
+            analysis=analysis,
+            estimand=estimand,
+            feature_type=feature_type,
+        ):
+            continue
+        plotter.plot_mixed_model_effects(
+            contrasts,
+            analysis=analysis,
+            estimand=estimand,
+            feature_type=feature_type,
+            filename=filename,
+            title=title,
+            max_effects=max_effects,
+        )
+        if path.is_file():
+            plotted.append(path)
+
+    variance_filename = "nasp_mixed_variance_decomposition"
+    variance_path = destination / f"{variance_filename}.png"
+    variance_path.unlink(missing_ok=True)
+    if _has_estimable_mixed_rows(
+        variance_components,
+        analysis="adjusted_context",
+        feature_type=feature_type,
+    ):
+        plotter.plot_mixed_model_variance(
+            variance_components,
+            analysis="adjusted_context",
+            feature_type=feature_type,
+            component_order=("study", "donor", "context", "residual"),
+            filename=variance_filename,
+            title="Mixed-model variance decomposition",
+            max_features=max_features,
+        )
+        if variance_path.is_file():
+            plotted.append(variance_path)
+    return plotted
+
+
+def _has_estimable_mixed_rows(
+    table: pd.DataFrame,
+    *,
+    analysis: str,
+    estimand: str | None = None,
+    feature_type: str | None = None,
+) -> bool:
+    """Return whether a model table has an estimable requested result."""
+    required = {"analysis", "estimable", "status"}
+    if table.empty or not required.issubset(table.columns):
+        return False
+    scoped = table.loc[table["analysis"].astype(str).eq(analysis)]
+    if feature_type is not None:
+        if "feature_type" not in scoped:
+            return False
+        scoped = scoped.loc[scoped["feature_type"].astype(str).eq(feature_type)]
+    if estimand is not None:
+        if "estimand" not in scoped:
+            return False
+        scoped = scoped.loc[scoped["estimand"].astype(str).eq(estimand)]
+    values = scoped["estimable"]
+    estimable = (
+        values.fillna(False).astype(bool)
+        if pd.api.types.is_bool_dtype(values.dtype)
+        else values.astype("string").str.casefold().isin({"true", "1", "yes"})
+    )
+    status_ok = scoped["status"].astype(str).str.casefold().eq("ok")
+    return bool((estimable & status_ok).any())
 
 
 def plot_nasp_association_visualizations(
@@ -68,7 +218,7 @@ def plot_nasp_association_visualizations(
       ...     mechanistic_edges=mechanistic_edges,
       ... )
     """
-    visualizer = SCVisualizer(output_dir=output_dir)
+    plotter = NaspPlotter(output_dir=output_dir)
     multi_tissue = any(
         tissue_key in table
         and table[tissue_key].dropna().astype(str).nunique() > 1
@@ -76,20 +226,20 @@ def plot_nasp_association_visualizations(
     )
     sensor_gene_labels = _sensor_gene_labels(sensor_output_coupling)
     if not module_coupling.empty:
-        visualizer.plot_module_coupling_heatmap(
+        plotter.plot_module_coupling_heatmap(
             module_coupling,
             filename="nasp_module_coupling_heatmap",
             show_fdr=False,
         )
     if not context_summary.empty:
-        visualizer.plot_competence_output_state_map(
+        plotter.plot_competence_output_state_map(
             context_summary,
             filename="nasp_competence_output_state_map",
             label_columns=[cell_type_key],
             facet_column=tissue_key if multi_tissue else None,
         )
     if not hypothesis_priorities.empty:
-        visualizer.plot_ranked_nasp_hypotheses(
+        plotter.plot_ranked_nasp_hypotheses(
             hypothesis_priorities,
             filename="nasp_ranked_hypotheses",
             label_columns=(
@@ -97,31 +247,31 @@ def plot_nasp_association_visualizations(
             ),
         )
     if not sensor_output_coupling.empty:
-        visualizer.plot_sensor_output_mismatch(
+        plotter.plot_sensor_output_mismatch(
             sensor_output_coupling,
             filename="nasp_sensor_output_mismatch",
             show_fdr=False,
         )
     if not regression_results.empty and "analysis_scope" in regression_results:
-        visualizer.plot_age_effect_dotplot(
+        plotter.plot_age_effect_dotplot(
             regression_results,
             filename="nasp_age_effects_by_cell_type",
             feature_type="module_score",
         )
-        visualizer.plot_age_effect_dotplot(
+        plotter.plot_age_effect_dotplot(
             regression_results,
             filename="nasp_sensor_age_effects_by_cell_type",
             feature_type="gene_expression",
             feature_labels=sensor_gene_labels,
         )
     if not age_stability.empty:
-        visualizer.plot_age_effect_consistency(
+        plotter.plot_age_effect_consistency(
             age_stability,
             filename="nasp_age_effect_consistency_across_cell_types",
             analysis_scope="within_tissue_cell_type",
             feature_type="module_score",
         )
-        visualizer.plot_age_effect_consistency(
+        plotter.plot_age_effect_consistency(
             age_stability,
             filename="nasp_sensor_age_effect_consistency_across_cell_types",
             analysis_scope="within_tissue_cell_type",
@@ -130,7 +280,7 @@ def plot_nasp_association_visualizations(
             max_features=len(sensor_gene_labels),
         )
     if not mechanistic_edges.empty:
-        visualizer.plot_mechanistic_edge_network(
+        plotter.plot_mechanistic_edge_network(
             mechanistic_edges,
             filename="nasp_mechanistic_edge_network",
             show_fdr=False,
@@ -182,53 +332,53 @@ def plot_global_nasp_visualizations(
       ...     mechanistic_edges=mechanistic_edges,
       ... )
     """
-    visualizer = SCVisualizer(output_dir=output_dir)
+    plotter = NaspPlotter(output_dir=output_dir)
     sensor_gene_labels = _sensor_gene_labels(sensor_output_coupling)
     if not module_coupling.empty:
-        visualizer.plot_module_coupling_heatmap(
+        plotter.plot_module_coupling_heatmap(
             module_coupling,
             filename="global_nasp_module_coupling_consensus",
             show_fdr=False,
         )
     if not context_summary.empty:
-        visualizer.plot_competence_output_state_map(
+        plotter.plot_competence_output_state_map(
             context_summary,
             filename="global_nasp_competence_output_states",
             label_columns=[cell_type_key],
             facet_column=tissue_key,
         )
     if not hypothesis_priorities.empty:
-        visualizer.plot_ranked_nasp_hypotheses(
+        plotter.plot_ranked_nasp_hypotheses(
             hypothesis_priorities,
             filename="global_nasp_ranked_hypotheses",
             label_columns=[tissue_key, cell_type_key],
         )
     if not sensor_output_coupling.empty:
-        visualizer.plot_sensor_output_mismatch(
+        plotter.plot_sensor_output_mismatch(
             sensor_output_coupling,
             filename="global_nasp_sensor_output_consensus",
             show_fdr=False,
         )
     if not regression_results.empty and "analysis_scope" in regression_results:
-        visualizer.plot_age_effect_dotplot(
+        plotter.plot_age_effect_dotplot(
             regression_results,
             filename="global_nasp_age_effects",
             feature_type="module_score",
         )
-        visualizer.plot_age_effect_dotplot(
+        plotter.plot_age_effect_dotplot(
             regression_results,
             filename="global_nasp_sensor_age_effects",
             feature_type="gene_expression",
             feature_labels=sensor_gene_labels,
         )
     if not age_stability.empty:
-        visualizer.plot_age_effect_consistency(
+        plotter.plot_age_effect_consistency(
             age_stability,
             filename="global_nasp_age_effect_consistency",
             analysis_scope="within_tissue",
             feature_type="module_score",
         )
-        visualizer.plot_age_effect_consistency(
+        plotter.plot_age_effect_consistency(
             age_stability,
             filename="global_nasp_sensor_age_effect_consistency",
             analysis_scope="within_tissue",
@@ -237,7 +387,7 @@ def plot_global_nasp_visualizations(
             max_features=len(sensor_gene_labels),
         )
     if not mechanistic_edges.empty:
-        visualizer.plot_mechanistic_edge_network(
+        plotter.plot_mechanistic_edge_network(
             mechanistic_edges,
             filename="global_nasp_mechanistic_edge_consensus",
             show_fdr=False,
@@ -256,7 +406,7 @@ def _sensor_gene_labels(sensor_output_coupling: pd.DataFrame) -> list[str]:
 def plot_tabula_sapiens_metadata_umaps(
     adata: ad.AnnData,
     *,
-    viz: SCVisualizer,
+    plotter: UmapPlotter,
     tissue_key: str = "tissue_in_publication",
     sex_key: str = "sex",
     development_stage_key: str = "development_stage",
@@ -272,7 +422,7 @@ def plot_tabula_sapiens_metadata_umaps(
     Example Usage:
       >>> plot_tabula_sapiens_metadata_umaps(
       ...     adata,
-      ...     viz=viz,
+      ...     plotter=plotter,
       ...     filename="tabula_sapiens_metadata_umaps",
       ... )
     """
@@ -305,7 +455,7 @@ def plot_tabula_sapiens_metadata_umaps(
         panels=panels,
     )
 
-    viz.plot_umap_panel(
+    plotter.plot_umap_panel(
         adata,
         panels=requested_panels,
         filename=filename,

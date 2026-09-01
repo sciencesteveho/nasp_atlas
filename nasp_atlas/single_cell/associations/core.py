@@ -36,7 +36,7 @@ EqtlMergeMode = Literal[
     "donor",
 ]
 
-MIN_UNITS_FOR_TEST = 3
+MIN_UNITS_FOR_TEST: int = 3
 DESCRIPTIVE_UNITS: tuple[StatisticalUnit, ...] = ("cell", "metacell")
 
 __all__ = [
@@ -81,6 +81,8 @@ class ObsSchema:
     assay_key: str = "assay"
     development_stage_key: str = "development_stage"
     age_key: str = "age_years"
+    condition_key: str = "disease"
+    study_key: str = "dataset_id"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -150,14 +152,16 @@ def metadata_columns(schema: ObsSchema) -> list[str]:
         schema.assay_key,
         schema.development_stage_key,
         schema.age_key,
+        schema.condition_key,
+        schema.study_key,
     ]
 
 
 def benjamini_hochberg(pvalues: Sequence[float]) -> np.ndarray:
     """Return Benjamini-Hochberg FDR-adjusted p-values.
 
-    A self-contained implementation so the package does not depend on
-    `statsmodels`. NaN inputs are preserved as NaN and excluded from the
+    A self-contained implementation keeps adjustment behavior stable across
+    association methods. NaN inputs are preserved as NaN and excluded from the
     ranking denominator.
 
     Args:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import anndata as ad  # type: ignore[import]
@@ -28,86 +29,22 @@ from nasp_atlas.single_cell.module_profiles import pairwise_module_correlations
 from nasp_atlas.single_cell.module_profiles import (
     relative_nasp_evidence_profiles,
 )
-from nasp_atlas.single_cell.visualization import SCVisualizer
+from nasp_atlas.single_cell.visualization import AssociationPlotter
 
 
 logger = logging.getLogger(__name__)
 
-_EXPECTED_NASP_EDGES: tuple[tuple[str, str, str], ...] = (
-    (
-        "NASP_DNA_SENSING",
-        "SIGNALING_CONTEXT_TBK1_IRF",
-        "dna_sensing_to_proximal_signaling",
-    ),
-    (
-        "NASP_RNA_SENSING",
-        "SIGNALING_CONTEXT_TBK1_IRF",
-        "rna_sensing_to_proximal_signaling",
-    ),
-    (
-        "NASP_DNA_SENSING",
-        "IFN_I_OUTPUT",
-        "dna_sensing_to_ifn_output",
-    ),
-    (
-        "NASP_RNA_SENSING",
-        "IFN_I_OUTPUT",
-        "rna_sensing_to_ifn_output",
-    ),
-    (
-        "NASP_DNA_SENSING",
-        "NFKB_CYTOKINE_OUTPUT",
-        "dna_sensing_to_nfkb_output",
-    ),
-    (
-        "NASP_RNA_SENSING",
-        "NFKB_CYTOKINE_OUTPUT",
-        "rna_sensing_to_nfkb_output",
-    ),
-    (
-        "SIGNALING_CONTEXT_TBK1_IRF",
-        "IFN_I_OUTPUT",
-        "proximal_signaling_to_ifn_output",
-    ),
-    (
-        "SIGNALING_CONTEXT_TLR",
-        "NFKB_CYTOKINE_OUTPUT",
-        "tlr_context_to_nfkb_output",
-    ),
-    (
-        "SIGNALING_CONTEXT_NFKB",
-        "NFKB_CYTOKINE_OUTPUT",
-        "nfkb_context_to_nfkb_output",
-    ),
-    (
-        "SIGNALING_CONTEXT_IFN_JAK_STAT",
-        "IFN_I_OUTPUT",
-        "ifn_response_context_to_ifn_output",
-    ),
-    ("NASP_RNA_SENSING", "ISR", "rna_sensing_to_isr"),
-    ("NASP_DNA_SENSING", "INFLAMMASOME", "dna_sensing_to_inflammasome"),
-    (
-        "MITOCHONDRIAL_NA_SENSING",
-        "NASP_DNA_SENSING",
-        "mitochondrial_na_to_dna_sensing",
-    ),
-    (
-        "MITOCHONDRIAL_NA_SENSING",
-        "INFLAMMASOME",
-        "mitochondrial_na_to_inflammasome",
-    ),
-    ("TE_DEREPRESSION", "NASP_DNA_SENSING", "te_to_dna_sensing"),
-    ("TE_DEREPRESSION", "NASP_RNA_SENSING", "te_to_rna_sensing"),
-    ("CGAMP_TRANSPORT", "IFN_I_OUTPUT", "cgamp_transport_to_ifn_output"),
-    ("IFN_I_OUTPUT", "NASP_FEEDBACK", "ifn_output_to_feedback"),
-    (
-        "NFKB_CYTOKINE_OUTPUT",
-        "NASP_FEEDBACK",
-        "nfkb_output_to_feedback",
-    ),
-    ("IFN_I_OUTPUT", "INFLAMMAGING", "ifn_output_to_inflammaging"),
-    ("NFKB_CYTOKINE_OUTPUT", "SASP", "nfkb_output_to_sasp"),
-)
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class _AssociationOutputLayout:
+    """Directories owned by one association-analysis run."""
+
+    tables_dir: Path
+    regression_plots_dir: Path
+    boxplots_dir: Path
+    barplots_dir: Path
+    mixed_model_plots_dir: Path
+    nasp_plots_dir: Path
 
 
 def _plot_allowed(plot_count: int, max_plots: int | None) -> bool:
@@ -253,26 +190,31 @@ def _required_score_metadata_present(
     return sorted(key for key in metadata_keys if key not in available)
 
 
-def _association_output_dirs(output_dir: Path) -> dict[str, Path]:
+def _association_output_dirs(output_dir: Path) -> _AssociationOutputLayout:
     """Create and return the association output directory layout.
 
     Args:
       output_dir: Root association output directory.
 
     Returns:
-      Mapping of layout keys to created directories: `tables`, `regressions`,
-      `boxplots`, `barplots`, and `nasp`.
+      Named directories for tables and each plot family.
     """
     tables = output_dir / "association_tables"
     plots = output_dir / "association_plots"
-    layout = {
-        "tables": tables,
-        "regressions": plots / "regressions",
-        "boxplots": plots / "boxplots",
-        "barplots": plots / "barplots",
-        "nasp": plots / "nasp",
-    }
-    for path in layout.values():
+    layout = _AssociationOutputLayout(
+        tables_dir=tables,
+        regression_plots_dir=plots / "regressions",
+        boxplots_dir=plots / "boxplots",
+        barplots_dir=plots / "barplots",
+        mixed_model_plots_dir=plots / "mixed_models",
+        nasp_plots_dir=plots / "nasp",
+    )
+    for path in (
+        layout.tables_dir,
+        layout.regression_plots_dir,
+        layout.mixed_model_plots_dir,
+        layout.nasp_plots_dir,
+    ):
         path.mkdir(parents=True, exist_ok=True)
     return layout
 
@@ -614,8 +556,7 @@ def _run_continuous_associations(
     unit_frame: pd.DataFrame,
     *,
     predictor_key: str,
-    visualizer: SCVisualizer,
-    layout: Mapping[str, Path],
+    plotter: AssociationPlotter,
     statistical_unit: str,
     aggregation: str,
     manifest: list[dict[str, object]],
@@ -630,8 +571,7 @@ def _run_continuous_associations(
     Args:
       unit_frame: Aggregated unit-level feature frame.
       predictor_key: Continuous predictor column (e.g. age).
-      visualizer: Visualizer writing into the regressions directory.
-      layout: Association output directory layout.
+      plotter: Visualizer writing into the regressions directory.
       statistical_unit: Statistical unit label recorded in filenames.
       aggregation: Aggregation label recorded in filenames.
       manifest: Mutable plot-manifest accumulator.
@@ -671,7 +611,7 @@ def _run_continuous_associations(
             aggregation=aggregation,
             stratum=stratum_label,
         )
-        visualizer.plot_feature_regression(
+        plotter.plot_feature_regression(
             subframe,
             feature_id=str(row["feature_id"]),
             predictor_key=predictor_key,
@@ -689,7 +629,7 @@ def _run_continuous_associations(
                 "aggregation": aggregation,
                 "stratum": stratum_label,
                 "analysis_scope": analysis_scope,
-                "path": str(layout["regressions"] / filename),
+                "path": str(plotter.output_dir / filename),
             }
         )
     return plot_count
@@ -700,8 +640,8 @@ def _run_group_associations(
     *,
     group_key: str,
     schema: ObsSchema,
-    visualizer: SCVisualizer,
-    barplot_visualizer: SCVisualizer,
+    plotter: AssociationPlotter,
+    barplot_plotter: AssociationPlotter,
     statistical_unit: str,
     aggregation: str,
     tissue_key: str,
@@ -720,8 +660,8 @@ def _run_group_associations(
       unit_frame: Aggregated unit-level feature frame.
       group_key: Categorical grouping column (sex/tissue/cell type/donor).
       schema: Column-name schema.
-      visualizer: Visualizer writing boxplots.
-      barplot_visualizer: Visualizer writing tissue-activity barplots.
+      plotter: Visualizer writing boxplots.
+      barplot_plotter: Plotter writing tissue-activity barplots.
       statistical_unit: Statistical unit label recorded in filenames.
       aggregation: Aggregation label recorded in filenames.
       tissue_key: Tissue column, used to select barplot outputs.
@@ -752,7 +692,7 @@ def _run_group_associations(
         row = _first_omnibus_row(result, feature_id)
         if not _plot_allowed(plot_count, max_plots):
             continue
-        target = barplot_visualizer if is_tissue else visualizer
+        target = barplot_plotter if is_tissue else plotter
         kind = "barplot" if is_tissue else "boxplot"
         filename = _association_plot_filename(
             kind=kind,
@@ -878,7 +818,7 @@ def _run_cell_level_descriptive_plots(
     cell_frame: pd.DataFrame,
     *,
     predictor_key: str,
-    visualizer: SCVisualizer,
+    plotter: AssociationPlotter,
     aggregation: str,
     manifest: list[dict[str, object]],
     plot_count: int,
@@ -889,7 +829,7 @@ def _run_cell_level_descriptive_plots(
     Args:
       cell_frame: Long cell-level feature frame.
       predictor_key: Continuous predictor column (e.g. age).
-      visualizer: Visualizer writing into the regressions directory.
+      plotter: Visualizer writing into the regressions directory.
       aggregation: Aggregation label recorded in filenames.
       manifest: Mutable plot-manifest accumulator.
       plot_count: Number of plots already emitted.
@@ -911,7 +851,7 @@ def _run_cell_level_descriptive_plots(
             statistical_unit="cell",
             aggregation=aggregation,
         )
-        visualizer.plot_feature_regression(
+        plotter.plot_feature_regression(
             subframe,
             feature_id=str(feature_id),
             predictor_key=predictor_key,
@@ -927,7 +867,7 @@ def _run_cell_level_descriptive_plots(
                 "statistical_unit": "cell",
                 "aggregation": aggregation,
                 "stratum": None,
-                "path": str(visualizer.output_dir / filename),
+                "path": str(plotter.output_dir / filename),
             }
         )
     return plot_count

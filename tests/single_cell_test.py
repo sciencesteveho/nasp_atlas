@@ -7,22 +7,23 @@ from collections import Counter
 
 import anndata as ad  # type: ignore[import]
 import h5py  # type: ignore[import]
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
 import scipy.sparse as sp
 from matplotlib.axes import Axes
+from matplotlib.figure import Figure
+from matplotlib.text import Text
 from nasp_compendium.types import GeneModule
 
 import nasp_atlas.single_cell.utils as single_cell_utils
 import nasp_atlas.single_cell.visualization.umap as umap_visualization
 from nasp_atlas.cellxgene import add_development_stage_age_obs
-from nasp_atlas.single_cell import ColorbarStyle
 from nasp_atlas.single_cell import EmbeddingConfig
 from nasp_atlas.single_cell import SCProcessor
 from nasp_atlas.single_cell import SCUtils
-from nasp_atlas.single_cell import SCVisualizer
 from nasp_atlas.single_cell import combine_module_scores
 from nasp_atlas.single_cell import expression_matrix
 from nasp_atlas.single_cell import inverse_module_score_name
@@ -34,6 +35,11 @@ from nasp_atlas.single_cell import read_h5ad_rows
 from nasp_atlas.single_cell import score_scanpy_module
 from nasp_atlas.single_cell import split_anndata_by_obs
 from nasp_atlas.single_cell.umap import resolve_umap_panel_specs
+from nasp_atlas.single_cell.visualization import AssociationPlotter
+from nasp_atlas.single_cell.visualization import ColorbarStyle
+from nasp_atlas.single_cell.visualization import HeatmapPlotter
+from nasp_atlas.single_cell.visualization import SummaryPlotter
+from nasp_atlas.single_cell.visualization import UmapPlotter
 
 
 def test_embedding_config_roundtrip() -> None:
@@ -623,8 +629,8 @@ def test_read_h5ad_rows_loads_only_requested_sources(tmp_path) -> None:
     assert loaded.X.nnz == 0
 
 
-def test_visualizer_plots_obs_umap_panel(tmp_path) -> None:
-    """SCVisualizer plots categorical and numeric obs UMAP panels."""
+def test_plotter_plots_obs_umap_panel(tmp_path) -> None:
+    """UmapPlotter plots categorical and numeric obs UMAP panels."""
     adata = ad.AnnData(
         X=np.ones((4, 2)),
         obs=pd.DataFrame(
@@ -644,9 +650,9 @@ def test_visualizer_plots_obs_umap_panel(tmp_path) -> None:
             [1.0, 1.0],
         ]
     )
-    viz = SCVisualizer(output_dir=tmp_path)
+    plotter = UmapPlotter(output_dir=tmp_path)
 
-    viz.plot_umap_panel(
+    plotter.plot_umap_panel(
         adata,
         panels=[
             {
@@ -709,7 +715,7 @@ def test_resolve_umap_panel_specs_preserves_order() -> None:
     assert panels[2].cbar_ticks == [0.2, 0.5, 0.8]
 
 
-def test_visualizer_umap_panel_writes_mixed_metadata_plot(tmp_path) -> None:
+def test_plotter_umap_panel_writes_mixed_metadata_plot(tmp_path) -> None:
     """A mixed categorical and numeric UMAP panel is written to disk."""
     adata = ad.AnnData(
         X=np.ones((3, 1)),
@@ -730,9 +736,9 @@ def test_visualizer_umap_panel_writes_mixed_metadata_plot(tmp_path) -> None:
         ]
     )
 
-    viz = SCVisualizer(output_dir=tmp_path)
+    plotter = UmapPlotter(output_dir=tmp_path)
 
-    viz.plot_umap_panel(
+    plotter.plot_umap_panel(
         adata,
         panels=["group", "score"],
         filename="direct_obs_panel",
@@ -754,9 +760,9 @@ def test_multi_obs_umap_panel_writes_available_scores(tmp_path) -> None:
         var=pd.DataFrame(index=["gene_a"]),
     )
     adata.obsm["X_umap"] = np.array([[0.0, 0.0], [1.0, 1.0]])
-    viz = SCVisualizer(output_dir=tmp_path)
+    plotter = UmapPlotter(output_dir=tmp_path)
 
-    viz.plot_multi_obs_umap_panel(
+    plotter.plot_multi_obs_umap_panel(
         adata,
         obs_keys=["signed_score", "missing"],
         filename="signed_scores",
@@ -773,7 +779,7 @@ def test_multi_obs_umap_panel_writes_available_scores(tmp_path) -> None:
     assert (tmp_path / "signed_scores.png").stat().st_size > 0
 
 
-def test_visualizer_gene_umap_uses_x_not_raw_by_default(
+def test_plotter_gene_umap_uses_x_not_raw_by_default(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -797,9 +803,9 @@ def test_visualizer_gene_umap_uses_x_not_raw_by_default(
         return scatter(self, *args, **kwargs)
 
     monkeypatch.setattr(Axes, "scatter", capture_scatter)
-    viz = SCVisualizer(output_dir=tmp_path)
+    plotter = UmapPlotter(output_dir=tmp_path)
 
-    viz.plot_multi_gene_umap_panel(
+    plotter.plot_multi_gene_umap_panel(
         adata,
         genes=["gene_a"],
         filename="gene_panel",
@@ -811,7 +817,7 @@ def test_visualizer_gene_umap_uses_x_not_raw_by_default(
     assert (tmp_path / "gene_panel.png").stat().st_size > 0
 
 
-def test_visualizer_gene_umap_extracts_once_and_renders_bounded_batches(
+def test_plotter_gene_umap_extracts_once_and_renders_bounded_batches(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -843,9 +849,9 @@ def test_visualizer_gene_umap_extracts_once_and_renders_bounded_batches(
         capture_expression_matrix,
     )
     monkeypatch.setattr(Axes, "scatter", capture_scatter)
-    viz = SCVisualizer(output_dir=tmp_path)
+    plotter = UmapPlotter(output_dir=tmp_path)
 
-    viz.plot_multi_gene_umap_panel(
+    plotter.plot_multi_gene_umap_panel(
         adata,
         genes=genes,
         filename="batched_gene_panel",
@@ -859,7 +865,301 @@ def test_visualizer_gene_umap_extracts_once_and_renders_bounded_batches(
     assert list(tmp_path.iterdir()) == [tmp_path / "batched_gene_panel.png"]
 
 
-def test_visualizer_gene_expression_heatmap_groups_obs(
+def test_plotter_gene_umap_shared_colorbar_uses_global_expression_range(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Shared gene scaling stays global across bounded render batches."""
+    genes = [f"gene_{index}" for index in range(5)]
+    matrix = np.arange(15, dtype=float).reshape(3, 5)
+    adata = ad.AnnData(
+        X=sp.csr_matrix(matrix),
+        obs=pd.DataFrame(index=["cell_a", "cell_b", "cell_c"]),
+        var=pd.DataFrame(index=genes),
+    )
+    adata.obsm["X_umap"] = np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]])
+    collections = []
+    colorbar_calls: list[dict[str, object]] = []
+    colorbar_mappables = []
+    scatter = Axes.scatter
+    colorbar = Figure.colorbar
+
+    def capture_scatter(self, *args, **kwargs):
+        collection = scatter(self, *args, **kwargs)
+        collections.append(collection)
+        return collection
+
+    def capture_colorbar(self, *args, **kwargs):
+        colorbar_calls.append(kwargs.copy())
+        colorbar_mappables.append(args[0])
+        return colorbar(self, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "scatter", capture_scatter)
+    monkeypatch.setattr(Figure, "colorbar", capture_colorbar)
+    plotter = UmapPlotter(output_dir=tmp_path)
+
+    plotter.plot_multi_gene_umap_panel(
+        adata,
+        genes=genes,
+        filename="shared_gene_panel",
+        ncols=2,
+        max_rows_per_batch=1,
+        shared_colorbar=True,
+    )
+
+    assert len(collections) == len(genes)
+    assert {collection.get_clim() for collection in collections} == {
+        (0.0, float(matrix.max()))
+    }
+    assert len(colorbar_calls) == 1
+    assert colorbar_mappables[0].get_clim() == (0.0, float(matrix.max()))
+    assert (tmp_path / "shared_gene_panel.png").stat().st_size > 0
+
+
+def test_plotter_shared_gene_colorbar_matches_panel_size_across_rows(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A shared bar retains the former per-panel colorbar dimensions."""
+    obs = pd.DataFrame(index=["cell_a", "cell_b", "cell_c"])
+    coordinates = np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]])
+    one_row = ad.AnnData(
+        X=sp.csr_matrix(np.arange(1, 7, dtype=float).reshape(3, 2)),
+        obs=obs.copy(),
+        var=pd.DataFrame(index=["gene_0", "gene_1"]),
+    )
+    one_row.obsm["X_umap"] = coordinates
+    three_rows = ad.AnnData(
+        X=sp.csr_matrix(np.arange(1, 19, dtype=float).reshape(3, 6)),
+        obs=obs.copy(),
+        var=pd.DataFrame(index=[f"gene_{index}" for index in range(6)]),
+    )
+    three_rows.obsm["X_umap"] = coordinates
+    colorbar_axes: list[Axes] = []
+    colorbar = Figure.colorbar
+
+    def capture_colorbar(self, *args, **kwargs):
+        rendered_colorbar = colorbar(self, *args, **kwargs)
+        colorbar_axes.append(rendered_colorbar.ax)
+        return rendered_colorbar
+
+    monkeypatch.setattr(Figure, "colorbar", capture_colorbar)
+    plotter = UmapPlotter(output_dir=tmp_path)
+
+    plotter.plot_multi_gene_umap_panel(
+        one_row,
+        genes=one_row.var_names.tolist(),
+        filename="one_row_unshared_genes",
+        ncols=2,
+        max_rows_per_batch=1,
+        shared_colorbar=False,
+    )
+    reference_bounds = colorbar_axes[-1].get_window_extent()
+    plotter.plot_multi_gene_umap_panel(
+        three_rows,
+        genes=three_rows.var_names.tolist(),
+        filename="three_row_shared_genes",
+        ncols=2,
+        max_rows_per_batch=1,
+        shared_colorbar=True,
+    )
+    shared_bounds = colorbar_axes[-1].get_window_extent()
+
+    assert shared_bounds.width == pytest.approx(
+        reference_bounds.width, rel=0.05
+    )
+    assert shared_bounds.height == pytest.approx(
+        reference_bounds.height,
+        rel=0.05,
+    )
+
+
+def test_plotter_gene_umap_rejects_undefined_shared_zero_range(
+    tmp_path,
+) -> None:
+    """An all-zero gene panel does not invent a non-observed shared range."""
+    adata = ad.AnnData(
+        X=sp.csr_matrix(np.zeros((2, 1))),
+        obs=pd.DataFrame(index=["cell_a", "cell_b"]),
+        var=pd.DataFrame(index=["gene_a"]),
+    )
+    adata.obsm["X_umap"] = np.array([[0.0, 0.0], [1.0, 1.0]])
+
+    with pytest.raises(
+        ValueError,
+        match="requested 0-to-0 range is undefined",
+    ):
+        UmapPlotter(output_dir=tmp_path).plot_multi_gene_umap_panel(
+            adata,
+            genes=["gene_a"],
+            filename="all_zero_gene",
+            shared_colorbar=True,
+        )
+
+
+def test_multi_obs_umap_zscores_without_mutating_scores(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Shared score panels use comparable SD units without changing obs."""
+    adata = ad.AnnData(
+        X=np.ones((4, 1)),
+        obs=pd.DataFrame(
+            {
+                "small_score": [1.0, 2.0, 3.0, 4.0],
+                "large_score": [10.0, 20.0, 30.0, 40.0],
+                "tiny_score": [0.0, 1e-9, 2e-9, 3e-9],
+                "partial_score": [1.0, 2.0, np.nan, np.inf],
+            },
+            index=["cell_a", "cell_b", "cell_c", "cell_d"],
+        ),
+        var=pd.DataFrame(index=["gene_a"]),
+    )
+    adata.obsm["X_umap"] = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]]
+    )
+    original_obs = adata.obs.copy(deep=True)
+    collections = []
+    colorbar_calls: list[dict[str, object]] = []
+    scatter = Axes.scatter
+    colorbar = Figure.colorbar
+
+    def capture_scatter(self, *args, **kwargs):
+        collection = scatter(self, *args, **kwargs)
+        collections.append(collection)
+        return collection
+
+    def capture_colorbar(self, *args, **kwargs):
+        colorbar_calls.append(kwargs.copy())
+        return colorbar(self, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "scatter", capture_scatter)
+    monkeypatch.setattr(Figure, "colorbar", capture_colorbar)
+    plotter = UmapPlotter(output_dir=tmp_path)
+
+    plotter.plot_multi_obs_umap_panel(
+        adata,
+        obs_keys=[
+            "small_score",
+            "large_score",
+            "tiny_score",
+            "partial_score",
+        ],
+        filename="standardized_scores",
+        shared_colorbar=True,
+        standardization="zscore",
+        center_zero=True,
+        vmin=-3.0,
+        vmax=3.0,
+        cbar_extend="both",
+    )
+
+    assert len(collections) == 4
+    plotted_values = [
+        np.ma.asarray(collection.get_array(), dtype=float)
+        for collection in collections
+    ]
+    for values in plotted_values:
+        finite_values = values.compressed()
+        assert np.isclose(finite_values.mean(), 0.0)
+        assert np.isclose(finite_values.std(ddof=0), 1.0)
+    np.testing.assert_allclose(plotted_values[0], plotted_values[1])
+    np.testing.assert_allclose(plotted_values[0], plotted_values[2])
+    assert np.ma.getmaskarray(plotted_values[3]).tolist() == [
+        False,
+        False,
+        True,
+        True,
+    ]
+    assert {collection.get_clim() for collection in collections} == {
+        (-3.0, 3.0)
+    }
+    assert len(colorbar_calls) == 1
+    assert colorbar_calls[0]["extend"] == "both"
+    pd.testing.assert_frame_equal(adata.obs, original_obs)
+    assert (tmp_path / "standardized_scores.png").stat().st_size > 0
+
+
+def test_multi_obs_umap_zscore_requires_symmetric_bound_pair(tmp_path) -> None:
+    """A one-sided standardized limit cannot imply an asymmetric scale."""
+    adata = ad.AnnData(
+        X=np.ones((3, 1)),
+        obs=pd.DataFrame(
+            {"score": [-1.0, 0.0, 1.0]},
+            index=["cell_a", "cell_b", "cell_c"],
+        ),
+        var=pd.DataFrame(index=["gene_a"]),
+    )
+    adata.obsm["X_umap"] = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+
+    with pytest.raises(
+        ValueError,
+        match="require both vmin and vmax or neither",
+    ):
+        UmapPlotter(output_dir=tmp_path).plot_multi_obs_umap_panel(
+            adata,
+            obs_keys=["score"],
+            filename="one_sided_zscore",
+            standardization="zscore",
+            center_zero=True,
+            vmin=-3.0,
+            vmax=None,
+        )
+
+
+def test_multi_obs_umap_marks_constant_zscore_unavailable(
+    tmp_path,
+    monkeypatch,
+    caplog,
+) -> None:
+    """A constant score is not fabricated as a zero z-score panel."""
+    adata = ad.AnnData(
+        X=np.ones((3, 1)),
+        obs=pd.DataFrame(
+            {"constant_score": [5.0, 5.0, 5.0]},
+            index=["cell_a", "cell_b", "cell_c"],
+        ),
+        var=pd.DataFrame(index=["gene_a"]),
+    )
+    adata.obsm["X_umap"] = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    collections = []
+    rendered_text: list[str] = []
+    scatter = Axes.scatter
+    add_text = Axes.text
+
+    def capture_scatter(self, *args, **kwargs):
+        collection = scatter(self, *args, **kwargs)
+        collections.append(collection)
+        return collection
+
+    def capture_text(self, *args, **kwargs):
+        rendered_text.append(str(args[2]))
+        return add_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Axes, "scatter", capture_scatter)
+    monkeypatch.setattr(Axes, "text", capture_text)
+    plotter = UmapPlotter(output_dir=tmp_path)
+
+    with caplog.at_level("WARNING"):
+        plotter.plot_multi_obs_umap_panel(
+            adata,
+            obs_keys=["constant_score"],
+            filename="constant_score",
+            shared_colorbar=True,
+            standardization="zscore",
+            center_zero=True,
+            vmin=-3.0,
+            vmax=3.0,
+        )
+
+    assert len(collections) == 1
+    assert np.ma.getmaskarray(collections[0].get_array()).all()
+    assert "Unavailable" in rendered_text
+    assert "constant; z-score UMAP renders it as unavailable" in caplog.text
+    assert (tmp_path / "constant_score.png").stat().st_size > 0
+
+
+def test_plotter_gene_expression_heatmap_groups_obs(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -886,13 +1186,13 @@ def test_visualizer_gene_expression_heatmap_groups_obs(
             index=["gene_a", "gene_b"],
         ),
     )
-    viz = SCVisualizer(output_dir=tmp_path)
+    plotter = HeatmapPlotter(output_dir=tmp_path)
     figures = []
     close_figure = plt.close
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        viz.plot_multi_gene_expression_heatmap(
+        plotter.plot_multi_gene_expression_heatmap(
             adata,
             genes=["CGAS", "AIM2"],
             groupby="cell_type",
@@ -920,7 +1220,7 @@ def test_visualizer_gene_expression_heatmap_groups_obs(
             close_figure(figure)
 
 
-def test_visualizer_score_heatmap_groups_obs_scores(
+def test_plotter_score_heatmap_groups_obs_scores(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -940,13 +1240,13 @@ def test_visualizer_score_heatmap_groups_obs_scores(
         ),
         var=pd.DataFrame(index=["gene_a"]),
     )
-    viz = SCVisualizer(output_dir=tmp_path)
+    plotter = HeatmapPlotter(output_dir=tmp_path)
     figures = []
     close_figure = plt.close
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        viz.plot_grouped_obs_score_heatmap(
+        plotter.plot_grouped_obs_score_heatmap(
             adata,
             score_keys=["module_a", "module_b"],
             groupby="cell_type",
@@ -973,7 +1273,7 @@ def test_visualizer_score_heatmap_groups_obs_scores(
             close_figure(figure)
 
 
-def test_visualizer_score_barplot_orders_groups_by_mean(tmp_path) -> None:
+def test_plotter_score_barplot_orders_groups_by_mean(tmp_path) -> None:
     """Score barplots order obs groups from largest to smallest mean score."""
     adata = ad.AnnData(
         X=np.ones((6, 1)),
@@ -986,9 +1286,9 @@ def test_visualizer_score_barplot_orders_groups_by_mean(tmp_path) -> None:
         ),
         var=pd.DataFrame(index=["gene_a"]),
     )
-    viz = SCVisualizer(output_dir=tmp_path)
+    plotter = SummaryPlotter(output_dir=tmp_path)
 
-    summary = viz.plot_grouped_obs_score_barplot(
+    summary = plotter.plot_grouped_obs_score_barplot(
         adata,
         score_key="module_score",
         groupby="cell_type",
@@ -1026,13 +1326,13 @@ def test_feature_regression_uses_readable_axes_and_full_width(
             "stratum": "male",
         }
     )
-    viz = SCVisualizer(output_dir=tmp_path)
+    plotter = AssociationPlotter(output_dir=tmp_path)
     figures = []
     close_figure = plt.close
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        viz.plot_feature_regression(
+        plotter.plot_feature_regression(
             unit_frame,
             feature_id="NASP_DNA_SENSING_auc",
             predictor_key="age_years",
@@ -1052,6 +1352,165 @@ def test_feature_regression_uses_readable_axes_and_full_width(
             ax.lines[0].get_xdata()[[0, -1]], ax.get_xlim()
         )
         assert (tmp_path / "age_regression.png").stat().st_size > 0
+    finally:
+        for figure in figures:
+            close_figure(figure)
+
+
+def test_feature_regression_uses_requested_category_colors(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Categorical regression points use the caller-supplied palette."""
+    unit_frame = pd.DataFrame(
+        {
+            "feature_id": ["NASP_DNA_SENSING_auc"] * 4,
+            "feature_value": [0.2, 0.3, 0.5, 0.6],
+            "age_years": [20.0, 40.0, 20.0, 40.0],
+            "sex": ["male", "male", "female", "female"],
+            "statistical_unit": ["donor"] * 4,
+        }
+    )
+    requested_colors = {
+        "male": "#d2e7ef",
+        "female": "#f9bebc",
+    }
+    figures = []
+    close_figure = plt.close
+    monkeypatch.setattr(plt, "close", figures.append)
+
+    try:
+        AssociationPlotter(tmp_path).plot_feature_regression(
+            unit_frame,
+            feature_id="NASP_DNA_SENSING_auc",
+            predictor_key="age_years",
+            filename="sex_colored_regression",
+            color_key="sex",
+            point_color=None,
+            category_colors=requested_colors,
+        )
+
+        rendered_colors = {
+            collection.get_label(): collection.get_facecolors()[0]
+            for collection in figures[0].axes[0].collections
+        }
+        for category, color in requested_colors.items():
+            np.testing.assert_allclose(
+                rendered_colors[category],
+                mcolors.to_rgba(color),
+            )
+    finally:
+        for figure in figures:
+            close_figure(figure)
+
+
+def test_feature_regression_grid_combines_saved_strata(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A regression grid renders each stratum's observations."""
+    unit_frame = pd.DataFrame(
+        {
+            "feature_id": ["NASP_DNA_SENSING_score"] * 6,
+            "feature_label": ["NASP_DNA_SENSING"] * 6,
+            "feature_value": [0.1, 0.2, 0.3, 0.6, 0.7, 0.8],
+            "age_years": [20.0, 40.0, 60.0] * 2,
+            "tissue_in_publication": ["liver"] * 3 + ["lung"] * 3,
+            "statistical_unit": ["donor_tissue"] * 6,
+        }
+    )
+    results = pd.DataFrame(
+        {
+            "feature_id": ["NASP_DNA_SENSING_score"] * 2,
+            "feature_type": ["module_score"] * 2,
+            "stratify_key": ["tissue_in_publication"] * 2,
+            "stratum": ["liver", "lung"],
+            "slope": [0.005, 0.005],
+            "intercept": [0.0, 0.5],
+            "pearson_r": [1.0, 1.0],
+            "pearson_pvalue": [0.001, 0.001],
+            "skipped": [False, False],
+        }
+    )
+    figures = []
+    close_figure = plt.close
+    monkeypatch.setattr(plt, "close", figures.append)
+
+    try:
+        AssociationPlotter(tmp_path).plot_feature_regression_grid(
+            unit_frame,
+            feature_id="NASP_DNA_SENSING_score",
+            predictor_key="age_years",
+            filename="atlas_tissue_regressions",
+            results=results,
+            stratify_key="tissue_in_publication",
+        )
+
+        axes = figures[0].axes
+        assert [axis.get_title().splitlines()[0] for axis in axes] == [
+            "Liver",
+            "Lung",
+        ]
+        np.testing.assert_allclose(
+            axes[0].collections[0].get_offsets()[:, 1],
+            [0.1, 0.2, 0.3],
+        )
+        np.testing.assert_allclose(
+            axes[1].collections[0].get_offsets()[:, 1],
+            [0.6, 0.7, 0.8],
+        )
+        assert all(len(axis.lines) == 1 for axis in axes)
+        text_sizes = {
+            text.get_fontsize()
+            for text in figures[0].findobj(Text)
+            if text.get_text()
+        }
+        assert text_sizes == {5.0}
+        assert (tmp_path / "atlas_tissue_regressions.png").stat().st_size > 0
+    finally:
+        for figure in figures:
+            close_figure(figure)
+
+
+def test_feature_regression_grid_marks_non_estimable_strata(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """A non-estimable stratum keeps its points without drawing a fit line."""
+    unit_frame = pd.DataFrame(
+        {
+            "feature_id": ["CGAS"] * 2,
+            "feature_value": [0.1, 0.1],
+            "age_years": [20.0, 40.0],
+            "tissue": ["liver"] * 2,
+        }
+    )
+    results = pd.DataFrame(
+        {
+            "feature_id": ["CGAS"],
+            "stratify_key": ["tissue"],
+            "stratum": ["liver"],
+            "skipped": [True],
+        }
+    )
+    figures = []
+    close_figure = plt.close
+    monkeypatch.setattr(plt, "close", figures.append)
+
+    try:
+        AssociationPlotter(tmp_path).plot_feature_regression_grid(
+            unit_frame,
+            feature_id="CGAS",
+            predictor_key="age_years",
+            filename="non_estimable_regression",
+            results=results,
+            stratify_key="tissue",
+        )
+
+        axis = figures[0].axes[0]
+        assert "Not estimable" in axis.get_title()
+        assert len(axis.collections[0].get_offsets()) == 2
+        assert len(axis.lines) == 0
     finally:
         for figure in figures:
             close_figure(figure)
@@ -1097,7 +1556,7 @@ def test_feature_group_boxplot_stratifies_units_with_readable_context(
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        SCVisualizer(output_dir=tmp_path).plot_feature_group_boxplot(
+        AssociationPlotter(output_dir=tmp_path).plot_feature_group_boxplot(
             unit_frame,
             feature_id="NASP_DNA_SENSING_auc",
             group_key="cell_type",
@@ -1146,7 +1605,7 @@ def test_feature_group_boxplot_default_width_scales_with_group_count(
 
     try:
         for group_count in (2, 24):
-            SCVisualizer(output_dir=tmp_path).plot_feature_group_boxplot(
+            AssociationPlotter(output_dir=tmp_path).plot_feature_group_boxplot(
                 unit_frame(group_count),
                 feature_id="NASP_DNA_SENSING_auc",
                 group_key="cell_type",
@@ -1163,7 +1622,7 @@ def test_feature_group_boxplot_default_width_scales_with_group_count(
             close_figure(figure)
 
 
-def test_visualizer_maps_cross_scorer_module_pairs_to_heatmap(
+def test_plotter_maps_cross_scorer_module_pairs_to_heatmap(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -1190,7 +1649,7 @@ def test_visualizer_maps_cross_scorer_module_pairs_to_heatmap(
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        SCVisualizer(output_dir=tmp_path).plot_scorer_concordance_heatmap(
+        SummaryPlotter(output_dir=tmp_path).plot_scorer_concordance_heatmap(
             concordance,
             filename="scorer_concordance",
             module_order=["NASP_DNA_SENSING", "IFN_I_OUTPUT"],

@@ -82,7 +82,7 @@ def test_single_tissue_subsets_before_recomputing_umap(
         lambda *args, **kwargs: [],
     )
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.UmapPlotter,
         "plot_multi_gene_umap_panel",
         lambda *args, **kwargs: None,
     )
@@ -101,7 +101,7 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
     tmp_path,
     monkeypatch,
 ) -> None:
-    """The batch workflow persists final scores and requests score UMAPs."""
+    """The workflow saves scores and plots only native-scale score UMAPs."""
     adata = ad.AnnData(
         X=np.ones((2, 1)),
         obs=pd.DataFrame(
@@ -128,6 +128,13 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
         context_dependent_genes=(),
         gene_id_output="symbols",
     )
+    retired_score_umaps = [
+        tmp_path / "tabula_sapiens_scanpy_module_zscore_umaps.png",
+        tmp_path / "tabula_sapiens_aucell_module_zscore_umaps.png",
+    ]
+    for retired_score_umap in retired_score_umaps:
+        retired_score_umap.write_bytes(b"stale figure")
+
     plot_calls: list[dict[str, object]] = []
     score_heatmap_calls: list[dict[str, object]] = []
     concordance_calls: list[pd.DataFrame] = []
@@ -148,7 +155,7 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
         lambda *args, **kwargs: [],
     )
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.UmapPlotter,
         "plot_multi_gene_umap_panel",
         lambda *args, **kwargs: None,
     )
@@ -157,7 +164,7 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
         plot_calls.append(kwargs)
 
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.UmapPlotter,
         "plot_multi_obs_umap_panel",
         capture_score_plot,
     )
@@ -166,12 +173,12 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
         score_heatmap_calls.append(kwargs)
 
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.HeatmapPlotter,
         "plot_grouped_obs_score_heatmap",
         capture_score_heatmap,
     )
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.SummaryPlotter,
         "plot_scorer_concordance_heatmap",
         lambda _, concordance, **kwargs: concordance_calls.append(concordance),
     )
@@ -245,12 +252,20 @@ def test_tabula_sapiens_saves_combined_scores_and_plots_score_umaps(
     assert scores["scoring_n_modules"].unique().tolist() == [1]
     assert scores.loc["cell_a", "NASP_DNA_SENSING_score"] == -2.0
     assert scores.loc["cell_a", "NASP_DNA_SENSING_auc"] == -0.25
-    assert Counter(tuple(call["obs_keys"]) for call in plot_calls) == Counter(
-        [
-            ("NASP_DNA_SENSING_score",),
-            ("NASP_DNA_SENSING_auc",),
-        ]
-    )
+    calls_by_filename = {str(call["filename"]): call for call in plot_calls}
+    assert set(calls_by_filename) == {
+        "tabula_sapiens_scanpy_module_umaps",
+        "tabula_sapiens_aucell_module_umaps",
+    }
+    for scorer, score_key in (
+        ("scanpy", "NASP_DNA_SENSING_score"),
+        ("aucell", "NASP_DNA_SENSING_auc"),
+    ):
+        raw_call = calls_by_filename[f"tabula_sapiens_{scorer}_module_umaps"]
+        assert raw_call["obs_keys"] == [score_key]
+        assert raw_call["standardization"] == "none"
+        assert raw_call["shared_colorbar"] is False
+    assert all(not path.exists() for path in retired_score_umaps)
     assert Counter(
         (tuple(call["score_keys"]), call["groupby"])
         for call in score_heatmap_calls
@@ -314,12 +329,12 @@ def test_tabula_sapiens_heatmap_groupby_controls_all_heatmaps(
         lambda *args, **kwargs: ["CGAS"],
     )
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.UmapPlotter,
         "plot_multi_gene_umap_panel",
         lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.UmapPlotter,
         "plot_multi_obs_umap_panel",
         lambda *args, **kwargs: None,
     )
@@ -328,7 +343,7 @@ def test_tabula_sapiens_heatmap_groupby_controls_all_heatmaps(
         expression_heatmap_calls.append(kwargs)
 
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.HeatmapPlotter,
         "plot_multi_gene_expression_heatmap",
         capture_expression_heatmap,
     )
@@ -347,7 +362,7 @@ def test_tabula_sapiens_heatmap_groupby_controls_all_heatmaps(
         score_heatmap_calls.append(kwargs)
 
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.HeatmapPlotter,
         "plot_grouped_obs_score_heatmap",
         capture_score_heatmap,
     )
@@ -402,17 +417,17 @@ def test_tabula_sapiens_saves_scanpy_scores_before_aucell_failure(
         lambda *args, **kwargs: [],
     )
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.UmapPlotter,
         "plot_multi_gene_umap_panel",
         lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.UmapPlotter,
         "plot_multi_obs_umap_panel",
         lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.HeatmapPlotter,
         "plot_grouped_obs_score_heatmap",
         lambda *args, **kwargs: None,
     )
@@ -491,7 +506,7 @@ def test_tabula_sapiens_sensor_heatmaps_use_tissue_and_cell_type(
         lambda *args, **kwargs: ["CGAS"],
     )
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.UmapPlotter,
         "plot_multi_gene_umap_panel",
         lambda *args, **kwargs: None,
     )
@@ -500,7 +515,7 @@ def test_tabula_sapiens_sensor_heatmaps_use_tissue_and_cell_type(
         heatmap_calls.append(kwargs)
 
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.HeatmapPlotter,
         "plot_multi_gene_expression_heatmap",
         capture_heatmap,
     )
@@ -571,7 +586,7 @@ def test_tabula_sapiens_module_heatmaps_follow_marker_umap_modules(
     )
 
     summarize_expression = (
-        tabula_sapiens_workflows.SCVisualizer.summarize_gene_expression_by_obs
+        tabula_sapiens_workflows.HeatmapPlotter.summarize_gene_expression_by_obs
     )
 
     def capture_summary(self, adata_arg, genes, **kwargs):
@@ -579,7 +594,7 @@ def test_tabula_sapiens_module_heatmaps_follow_marker_umap_modules(
         return summarize_expression(self, adata_arg, genes, **kwargs)
 
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.HeatmapPlotter,
         "summarize_gene_expression_by_obs",
         capture_summary,
     )
@@ -588,7 +603,7 @@ def test_tabula_sapiens_module_heatmaps_follow_marker_umap_modules(
         umap_calls.append(kwargs)
 
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.UmapPlotter,
         "plot_multi_gene_umap_panel",
         capture_module_umaps,
     )
@@ -597,7 +612,7 @@ def test_tabula_sapiens_module_heatmaps_follow_marker_umap_modules(
         heatmap_calls.append(kwargs)
 
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.HeatmapPlotter,
         "plot_multi_gene_expression_heatmap",
         capture_heatmap,
     )
@@ -639,6 +654,80 @@ def test_tabula_sapiens_module_heatmaps_follow_marker_umap_modules(
     assert all(call["grouped_expression"] is not None for call in heatmap_calls)
 
 
+def test_tabula_sapiens_expression_umaps_use_shared_gene_scale(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    """Sensor and module expression UMAPs request comparable gene colors."""
+    adata = ad.AnnData(
+        X=np.ones((2, 2)),
+        obs=pd.DataFrame(
+            {
+                "tissue_in_publication": ["lung", "blood"],
+                "cell_type": ["T cell", "B cell"],
+            },
+            index=["cell_a", "cell_b"],
+        ),
+        var=pd.DataFrame(
+            {"feature_name": ["CGAS", "IFIH1"]},
+            index=["gene_a", "gene_b"],
+        ),
+    )
+    umap_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        tabula_sapiens_workflows,
+        "read_h5ad",
+        lambda *args, **kwargs: (adata, adata.n_obs),
+    )
+    monkeypatch.setattr(
+        tabula_sapiens_workflows,
+        "plot_tabula_sapiens_metadata_umaps",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        tabula_sapiens_workflows.GeneModules,
+        "sensors",
+        lambda *args, **kwargs: ["CGAS"],
+    )
+    monkeypatch.setattr(
+        tabula_sapiens_workflows.GeneModules,
+        "genes",
+        lambda *args, **kwargs: ["IFIH1"],
+    )
+    monkeypatch.setattr(
+        tabula_sapiens_workflows.HeatmapPlotter,
+        "summarize_gene_expression_by_obs",
+        lambda *args, **kwargs: object(),
+    )
+    monkeypatch.setattr(
+        tabula_sapiens_workflows.UmapPlotter,
+        "plot_multi_gene_umap_panel",
+        lambda *args, **kwargs: umap_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        tabula_sapiens_workflows.HeatmapPlotter,
+        "plot_multi_gene_expression_heatmap",
+        lambda *args, **kwargs: None,
+    )
+
+    tabula_sapiens.tabula_sapiens_scoring_analysis(
+        h5ad_path=tmp_path / "input.h5ad",
+        output_dir=tmp_path,
+        module_ids=["NASP_DNA_SENSING"],
+        plot_modules=True,
+    )
+
+    assert Counter(
+        (tuple(call["genes"]), call["shared_colorbar"]) for call in umap_calls
+    ) == Counter(
+        [
+            (("CGAS",), True),
+            (("IFIH1",), True),
+        ]
+    )
+
+
 def test_tissue_analysis_scores_once_then_analyzes_each_scorer(
     tmp_path,
     monkeypatch,
@@ -673,6 +762,7 @@ def test_tissue_analysis_scores_once_then_analyzes_each_scorer(
         tissue_label="liver",
         run_name="liver_run",
         module_ids=["NASP_DNA_SENSING"],
+        detection_threshold=0.25,
     )
 
     assert len(scoring_calls) == 1
@@ -686,6 +776,9 @@ def test_tissue_analysis_scores_once_then_analyzes_each_scorer(
     assert all(
         call["score_csv_path"] == outputs["score_table"]
         for call in association_calls
+    )
+    assert all(
+        call["detection_threshold"] == 0.25 for call in association_calls
     )
     assert outputs["association_scanpy"].name == "scanpy"
     assert outputs["association_aucell"].name == "aucell"
@@ -844,7 +937,7 @@ def test_single_tissue_loader_keeps_umap_representation(
         lambda *args, **kwargs: [],
     )
     monkeypatch.setattr(
-        tabula_sapiens_workflows.SCVisualizer,
+        tabula_sapiens_workflows.UmapPlotter,
         "plot_multi_gene_umap_panel",
         lambda *args, **kwargs: None,
     )

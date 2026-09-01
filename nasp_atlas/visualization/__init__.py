@@ -1,41 +1,10 @@
 """Visualization utilities."""
 
-import matplotlib.colors as mcolors
-from matplotlib import pyplot as plt
-from matplotlib.typing import ColorType
+from nasp_atlas.visualization.style import darken_color
+from nasp_atlas.visualization.style import set_matplotlib_publication_parameters
 
 
 __all__ = [
     "darken_color",
     "set_matplotlib_publication_parameters",
 ]
-
-
-def set_matplotlib_publication_parameters() -> None:
-    """Set matplotlib parameters for publication-quality figures."""
-    plt.rcParams.update(
-        {
-            "font.size": 5,
-            "axes.titlesize": 5,
-            "axes.labelsize": 5,
-            "xtick.labelsize": 5,
-            "ytick.labelsize": 5,
-            "legend.fontsize": 5,
-            "figure.titlesize": 5,
-            "figure.dpi": 450,
-            "font.sans-serif": ["Arial", "Nimbus Sans", "DejaVu Sans"],
-            "axes.linewidth": 0.25,
-            "xtick.major.width": 0.25,
-            "ytick.major.width": 0.25,
-            "xtick.minor.width": 0.25,
-            "ytick.minor.width": 0.25,
-        }
-    )
-
-
-def darken_color(
-    color: ColorType, factor: float = 0.975
-) -> tuple[float, float, float]:
-    """Return a darker RGB version of a matplotlib-compatible color."""
-    red, green, blue = mcolors.to_rgb(color)
-    return red * factor, green * factor, blue * factor

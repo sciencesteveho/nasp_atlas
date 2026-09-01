@@ -13,14 +13,23 @@ import scanpy as sc  # type: ignore[import]
 from scipy import stats  # type: ignore[import]
 
 from nasp_atlas.single_cell.visualization.style import ColorbarStyle
-from nasp_atlas.single_cell.visualization.style import _VisualizationStyleMixin
+from nasp_atlas.single_cell.visualization.style import _PlotterBase
+from nasp_atlas.visualization import set_matplotlib_publication_parameters
 
 
 logger = logging.getLogger(__name__)
 
 
-class _SummaryPlotMixin(_VisualizationStyleMixin):
-    """Grouped score bars and annotation distributions."""
+class SummaryPlotter(_PlotterBase):
+    """Render grouped score summaries and annotation distributions.
+
+    Example Usage:
+      >>> plotter = SummaryPlotter(output_dir="path/to/output")
+      >>> plotter.plot_scorer_concordance_heatmap(
+      ...     concordance,
+      ...     filename="scorer_concordance",
+      ... )
+    """
 
     def plot_scorer_concordance_heatmap(
         self,
@@ -62,12 +71,12 @@ class _SummaryPlotMixin(_VisualizationStyleMixin):
           annotate: Whether to print correlation values in heatmap cells.
 
         Example Usage:
-          >>> viz.plot_scorer_concordance_heatmap(
+          >>> plotter.plot_scorer_concordance_heatmap(
           ...     concordance,
           ...     filename="scorer_concordance",
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
 
         required = {"scanpy_module_id", "aucell_module_id", statistic}
         if missing := sorted(required.difference(concordance.columns)):
@@ -244,14 +253,14 @@ class _SummaryPlotMixin(_VisualizationStyleMixin):
           Per-group summary table in plotted order.
 
         Example Usage:
-          >>> summary = viz.plot_grouped_obs_score_barplot(
+          >>> summary = plotter.plot_grouped_obs_score_barplot(
           ...     adata,
           ...     score_key="senescence_score",
           ...     groupby="cell_type",
           ...     filename="senescence_by_cell_type",
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
         if groupby not in adata.obs.columns:
             raise KeyError(f"obs column not found for barplot: {groupby}")
         if score_key not in adata.obs.columns:
@@ -348,14 +357,14 @@ class _SummaryPlotMixin(_VisualizationStyleMixin):
           ref_ax_h: Height per subplot row in inches.
 
         Example Usage:
-          >>> viz.plot_annotation_violins(
+          >>> plotter.plot_annotation_violins(
           ...     score_adata,
           ...     leiden_key="leiden",
           ...     score_keys=["T_cell_score", "B_cell_score"],
           ...     filename="annotation_violins",
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
         out = self.output_dir / filename
 
         n_groups = score.obs[leiden_key].nunique()

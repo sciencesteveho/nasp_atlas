@@ -2,29 +2,88 @@
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Sequence
-from typing import TypeAlias
+from typing import Final, TypeAlias
 
 import numpy as np
 import pandas as pd
 
 
 MechanisticEdgeSpec: TypeAlias = tuple[str, str, str]
-_HypothesisSpec: TypeAlias = tuple[
-    str,
-    str,
-    pd.Series,
-    pd.Series,
-    str,
-    str,
-    str,
-]
+
+
+@dataclasses.dataclass(frozen=True)
+class _HypothesisPriorityDescription:
+    """Keep report and plotting text for one priority rule together."""
+
+    report_basis: str
+    plot_label: str
+
+
+@dataclasses.dataclass(frozen=True)
+class _HypothesisSpec:
+    """Name the scientific quantities defining one hypothesis ranking."""
+
+    hypothesis: str
+    contrast_name: str
+    contrast: pd.Series
+    priority: pd.Series
+    priority_basis: str
+    interpretation: str
+    experimental_follow_up: str
+
+
+_HYPOTHESIS_PRIORITY_DESCRIPTIONS: Final[
+    dict[str, _HypothesisPriorityDescription]
+] = {
+    "active_like": _HypothesisPriorityDescription(
+        report_basis="min(competence, output)",
+        plot_label="min(competence, output)",
+    ),
+    "responsive_like": _HypothesisPriorityDescription(
+        report_basis="positive(output - competence) * output",
+        plot_label="max(output - competence, 0) * output",
+    ),
+    "restricted_buffered": _HypothesisPriorityDescription(
+        report_basis=(
+            "positive(restriction - output) * mean(restriction, competence)"
+        ),
+        plot_label=(
+            "max(restriction - output, 0)\n* mean(restriction, competence)"
+        ),
+    ),
+    "feedback_dominant": _HypothesisPriorityDescription(
+        report_basis="positive(feedback - output) * feedback",
+        plot_label="max(feedback - output, 0) * feedback",
+    ),
+    "post_without_nasp": _HypothesisPriorityDescription(
+        report_basis="positive(post - max(competence, output)) * post",
+        plot_label="max(post - max(competence, output), 0) * post",
+    ),
+}
 
 __all__ = [
     "MechanisticEdgeSpec",
     "expected_module_coupling_report",
     "rank_nasp_hypotheses",
 ]
+
+
+def _hypothesis_priority_label(
+    hypothesis: str,
+    *,
+    priority_basis: str | None = None,
+) -> str:
+    """Return an authoritative or caller-supplied priority-score label."""
+    description = _HYPOTHESIS_PRIORITY_DESCRIPTIONS.get(hypothesis)
+    if description is not None and (
+        priority_basis is None or priority_basis == description.report_basis
+    ):
+        return description.plot_label
+    if priority_basis is not None and priority_basis.strip():
+        return priority_basis
+    return "Priority score"
 
 
 def expected_module_coupling_report(
@@ -374,70 +433,86 @@ def _hypothesis_specs(base: pd.DataFrame) -> list[_HypothesisSpec]:
     ).mean(axis="columns", skipna=True)
 
     return [
-        (
-            "active_like",
-            "joint_competence_and_output",
-            joint_active,
-            joint_active,
-            "min(competence, output)",
-            (
+        _HypothesisSpec(
+            hypothesis="active_like",
+            contrast_name="joint_competence_and_output",
+            contrast=joint_active,
+            priority=joint_active,
+            priority_basis=_HYPOTHESIS_PRIORITY_DESCRIPTIONS[
+                "active_like"
+            ].report_basis,
+            interpretation=(
                 "Joint relative competence and output are compatible with an "
                 "active-like transcriptomic state, but do not establish "
                 "sensor engagement or pathway causality."
             ),
-            "matched_sensor_or_adaptor_perturbation",
+            experimental_follow_up="matched_sensor_or_adaptor_perturbation",
         ),
-        (
-            "responsive_like",
-            "output_minus_competence",
-            responsive_gap,
-            responsive_gap.clip(lower=0.0) * output,
-            "positive(output - competence) * output",
-            (
+        _HypothesisSpec(
+            hypothesis="responsive_like",
+            contrast_name="output_minus_competence",
+            contrast=responsive_gap,
+            priority=responsive_gap.clip(lower=0.0) * output,
+            priority_basis=_HYPOTHESIS_PRIORITY_DESCRIPTIONS[
+                "responsive_like"
+            ].report_basis,
+            interpretation=(
                 "Output exceeding measured competence is compatible with a "
                 "paracrine response, sensor dropout, or unmeasured sensing; "
                 "it is not evidence of a sender-receiver link."
             ),
-            "co_culture_and_receptor_blockade",
+            experimental_follow_up="co_culture_and_receptor_blockade",
         ),
-        (
-            "restricted_buffered",
-            "restriction_minus_output",
-            restriction_gap,
-            restriction_gap.clip(lower=0.0) * restriction_weight,
-            "positive(restriction - output) * mean(restriction, competence)",
-            (
+        _HypothesisSpec(
+            hypothesis="restricted_buffered",
+            contrast_name="restriction_minus_output",
+            contrast=restriction_gap,
+            priority=restriction_gap.clip(lower=0.0) * restriction_weight,
+            priority_basis=_HYPOTHESIS_PRIORITY_DESCRIPTIONS[
+                "restricted_buffered"
+            ].report_basis,
+            interpretation=(
                 "Restriction exceeding output, especially with competence, "
                 "is compatible with buffering; expression alone does not "
                 "demonstrate functional suppression."
             ),
-            "restriction_factor_perturbation_and_ligand_challenge",
+            experimental_follow_up=(
+                "restriction_factor_perturbation_and_ligand_challenge"
+            ),
         ),
-        (
-            "feedback_dominant",
-            "feedback_minus_output",
-            feedback_gap,
-            feedback_gap.clip(lower=0.0) * feedback,
-            "positive(feedback - output) * feedback",
-            (
+        _HypothesisSpec(
+            hypothesis="feedback_dominant",
+            contrast_name="feedback_minus_output",
+            contrast=feedback_gap,
+            priority=feedback_gap.clip(lower=0.0) * feedback,
+            priority_basis=_HYPOTHESIS_PRIORITY_DESCRIPTIONS[
+                "feedback_dominant"
+            ].report_basis,
+            interpretation=(
                 "Feedback exceeding output is compatible with dampened, "
                 "recent, or resolving activation; a snapshot cannot resolve "
                 "the temporal explanation."
             ),
-            "ligand_time_course_with_feedback_perturbation",
+            experimental_follow_up=(
+                "ligand_time_course_with_feedback_perturbation"
+            ),
         ),
-        (
-            "post_without_nasp",
-            "post_minus_maximum_nasp_evidence",
-            post_gap,
-            post_gap.clip(lower=0.0) * post,
-            "positive(post - max(competence, output)) * post",
-            (
+        _HypothesisSpec(
+            hypothesis="post_without_nasp",
+            contrast_name="post_minus_maximum_nasp_evidence",
+            contrast=post_gap,
+            priority=post_gap.clip(lower=0.0) * post,
+            priority_basis=_HYPOTHESIS_PRIORITY_DESCRIPTIONS[
+                "post_without_nasp"
+            ].report_basis,
+            interpretation=(
                 "A post-NASP phenotype exceeding competence and output "
                 "provides weak evidence for NASP causality; parallel or "
                 "downstream inflammation remains plausible."
             ),
-            "compare_nasp_and_parallel_pathway_perturbations",
+            experimental_follow_up=(
+                "compare_nasp_and_parallel_pathway_perturbations"
+            ),
         ),
     ]
 
@@ -451,23 +526,18 @@ def _score_hypothesis_states(
 ) -> pd.DataFrame:
     """Expand eligible contexts into supported hypothesis-score rows."""
     state_tables: list[pd.DataFrame] = []
-    for (
-        hypothesis,
-        contrast_name,
-        contrast,
-        priority,
-        priority_basis,
-        interpretation,
-        follow_up,
-    ) in state_specs:
+    for state_spec in state_specs:
         state = base.copy()
-        state["hypothesis"] = hypothesis
-        state["contrast_name"] = contrast_name
-        state["contrast_value"] = contrast
-        state["priority_score"] = priority.clip(lower=0.0, upper=1.0)
-        state["priority_basis"] = priority_basis
-        state["interpretation"] = interpretation
-        state["experimental_follow_up"] = follow_up
+        state["hypothesis"] = state_spec.hypothesis
+        state["contrast_name"] = state_spec.contrast_name
+        state["contrast_value"] = state_spec.contrast
+        state["priority_score"] = state_spec.priority.clip(
+            lower=0.0,
+            upper=1.0,
+        )
+        state["priority_basis"] = state_spec.priority_basis
+        state["interpretation"] = state_spec.interpretation
+        state["experimental_follow_up"] = state_spec.experimental_follow_up
 
         supported = state["priority_score"].notna()
         supported &= state["priority_score"].gt(0.0)
@@ -512,7 +582,8 @@ def _rank_hypothesis_states(
     )
 
     hypothesis_order = {
-        state_spec[0]: order for order, state_spec in enumerate(state_specs)
+        state_spec.hypothesis: order
+        for order, state_spec in enumerate(state_specs)
     }
     result["__hypothesis_order"] = result["hypothesis"].map(hypothesis_order)
     result = result.sort_values(

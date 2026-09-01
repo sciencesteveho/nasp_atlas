@@ -4,9 +4,13 @@ from nasp_atlas.single_cell.associations import Aggregation
 from nasp_atlas.single_cell.associations import EqtlMergeMode
 from nasp_atlas.single_cell.associations import FeatureSpec
 from nasp_atlas.single_cell.associations import FeatureType
+from nasp_atlas.single_cell.associations import MixedModelContrast
+from nasp_atlas.single_cell.associations import MixedModelInferenceResult
+from nasp_atlas.single_cell.associations import MixedModelSpec
 from nasp_atlas.single_cell.associations import ObsSchema
 from nasp_atlas.single_cell.associations import StatisticalUnit
 from nasp_atlas.single_cell.associations import aggregate_feature_frame
+from nasp_atlas.single_cell.associations import aggregate_feature_frame_by_keys
 from nasp_atlas.single_cell.associations import (
     associate_features_with_eqtl_counts,
 )
@@ -15,6 +19,7 @@ from nasp_atlas.single_cell.associations import build_cell_feature_frame
 from nasp_atlas.single_cell.associations import build_eqtl_association_frames
 from nasp_atlas.single_cell.associations import merge_eqtl_counts
 from nasp_atlas.single_cell.associations import metadata_columns
+from nasp_atlas.single_cell.associations import mixed_model_inference
 from nasp_atlas.single_cell.associations import (
     partial_correlation_controlling_tissue,
 )
@@ -67,31 +72,29 @@ from nasp_atlas.single_cell.utils import expression_matrix
 from nasp_atlas.single_cell.utils import normalize_h5ad_string_storage
 from nasp_atlas.single_cell.utils import snake_case
 from nasp_atlas.single_cell.utils import split_anndata_by_obs
-from nasp_atlas.single_cell.visualization import ColorbarStyle
-from nasp_atlas.single_cell.visualization import GroupedGeneExpression
-from nasp_atlas.single_cell.visualization import SCVisualizer
 
 
 __all__ = [
     "Aggregation",
-    "ColorbarStyle",
     "EmbeddingConfig",
     "EqtlMergeMode",
     "EvidenceRole",
     "FeatureSpec",
     "FeatureType",
-    "GroupedGeneExpression",
     "MechanisticEdgeSpec",
+    "MixedModelContrast",
+    "MixedModelInferenceResult",
+    "MixedModelSpec",
     "ObsSchema",
     "RoleAssignment",
     "SCProcessor",
     "SCUtils",
-    "SCVisualizer",
     "ScorerName",
     "StatisticalUnit",
     "UmapPanelSpec",
     "aggregate_counts_by_coverage",
     "aggregate_feature_frame",
+    "aggregate_feature_frame_by_keys",
     "aggregate_metacells",
     "associate_features_with_eqtl_counts",
     "benjamini_hochberg",
@@ -106,6 +109,7 @@ __all__ = [
     "inverse_module_score_name",
     "merge_eqtl_counts",
     "metadata_columns",
+    "mixed_model_inference",
     "module_gene_overlap",
     "module_score_name",
     "normalize_h5ad_string_storage",

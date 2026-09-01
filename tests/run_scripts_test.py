@@ -26,6 +26,8 @@ def test_score_modules_cli_passes_none_for_default_expression_sources(
             "--h5ad-path",
             "input.h5ad",
             "--single-tissue-use-x",
+            "--detection-threshold",
+            "0.25",
         ],
     )
     monkeypatch.setattr(
@@ -38,3 +40,4 @@ def test_score_modules_cli_passes_none_for_default_expression_sources(
 
     assert captured["expression_layer"] is None
     assert captured["single_tissue_use_rep"] is None
+    assert captured["detection_threshold"] == 0.25

@@ -14,8 +14,11 @@ For each input h5ad, the worker:
 1. optionally subsets one tissue and recomputes its embedding;
 2. scores compendium modules with Scanpy, AUCell, or both;
 3. writes one shared cell-level score table;
-4. runs an independent association analysis for each scorer; and
-5. writes tables, general association plots, and optional NASP summary plots.
+4. runs an independent repeated-donor mixed-model analysis for each scorer;
+   and
+5. writes model tables and, when NASP visualizations are enabled, up to five
+   estimable contrast figures, a variance figure, and descriptive NASP
+   summaries.
 
 Scanpy and AUCell remain separate sensitivity analyses downstream. See
 [Analysis outputs and interpretation](../docs/analysis_outputs.md) for output
@@ -36,13 +39,18 @@ Default metadata names are:
 | Cell type | `obs["cell_type"]` |
 | Sex | `obs["sex"]` |
 | Assay | `obs["assay"]` |
+| Condition | `obs["disease"]` |
+| Study | `obs["dataset_id"]` |
 | Development stage | `obs["development_stage"]` |
 | Numeric age | `obs["age_years"]` |
 | Gene symbol | `var["feature_name"]` |
 
-Donor-aware inference requires donor identifiers. Missing optional metadata
-reduces the analyses that can be estimated and should be checked in the
-skipped-feature and result tables.
+Mixed-model inference requires donor, tissue, and cell-type identifiers.
+Missing optional metadata reduces the fixed or random structure that can be
+estimated and is recorded in the availability and diagnostic tables. In the
+current Tabula Sapiens input, `disease` contains only `normal` and
+`dataset_id` is absent, so condition contrasts and the multi-study structure
+are expected to be unavailable rather than estimated.
 
 ## Run locally
 
@@ -79,12 +87,24 @@ Common options:
 | `--tissue-label Liver` | Subset an exact tissue label and recompute its embedding; omit for the complete atlas. |
 | `--single-tissue-use-rep X_scvi` | AnnData representation used for the recomputed neighbors and UMAP. |
 | `--single-tissue-use-x` | Use `adata.X` instead of a named representation. |
-| `--statistical-unit donor` | Independent or observational unit used for the main association frame. |
+| `--statistical-unit donor` | Unit used by retained non-mixed stages, including optional eQTL analysis; mixed-model rows use their prespecified unit below. |
 | `--aggregation mean` | Cell-to-unit aggregation. |
+| `--detection-threshold 0.0` | Finite per-cell expression floor for fraction/percent aggregations. |
+| `--condition-key disease` | Observation column identifying biological condition. |
+| `--condition-reference normal` | Reference condition for effects estimated within each cell type. |
+| `--study-key dataset_id` | Observation column identifying source studies in combined inputs. |
+| `--mixed-model-min-cells 10` | Minimum cells supporting each donor–study–tissue–cell-type–assay observation. |
+| `--mixed-model-min-donors 3` | Minimum independent donors required overall and for each reported focal level or pair. |
+| `--mixed-model-min-studies 3` | Minimum studies required for a study random intercept. |
+| `--mixed-model-min-repeated-contexts 3` | Minimum donor-contexts with repeated assay observations required for a context random effect. |
 | `--subset-fraction 0.1` | Deterministic exploratory cell subset. |
 | `--no-plot-modules` | Skip per-module marker plots. |
-| `--no-nasp-visualizations` | Skip the fixed NASP summary figure set. |
+| `--no-nasp-visualizations` | Skip the fixed mixed-model and descriptive NASP figure sets; model tables are still written. |
 | `--max-plots 200` | Cap general association plots per scorer. |
+
+`--detection-threshold` must be finite. `--mixed-model-min-cells` must be at
+least 1. The donor, study, and repeated-context thresholds must each be at
+least 3 and independently govern their documented support checks.
 
 ## Submit with PBS
 
@@ -132,11 +152,19 @@ Values are passed with `qsub -v` as comma-separated `NAME=value` pairs.
 | `SCORERS` | `scanpy:aucell` | Colon-separated scorer list. |
 | `RESUME` | `0` | Reuse a complete compatible score table. |
 | `PLOT_MODULES` | `1` | Generate module marker plots. |
-| `PLOT_NASP_VISUALIZATIONS` | `1` | Generate fixed mechanistic summary plots. |
+| `PLOT_NASP_VISUALIZATIONS` | `1` | Generate fixed mixed-model inference and descriptive NASP summary plots. |
 | `EXPRESSION_LAYER` | unset | Expression layer; unset uses `adata.X`. |
 | `SINGLE_TISSUE_USE_REP` | `X_scvi` | Representation for a recomputed tissue embedding; use `none` for `X`. |
 | `STATISTICAL_UNIT` | `donor` | Main association unit. |
 | `AGGREGATION` | `mean` | Cell-to-unit aggregation. |
+| `DETECTION_THRESHOLD` | `0.0` | Finite expression floor for fraction/percent aggregations. |
+| `CONDITION_KEY` | `disease` | Observation column identifying biological condition. |
+| `CONDITION_REFERENCE` | `normal` | Reference condition for within-cell-type contrasts. |
+| `STUDY_KEY` | `dataset_id` | Observation column identifying studies in combined inputs. |
+| `MIXED_MODEL_MIN_CELLS` | `10` | Minimum cells supporting one mixed-model aggregate. |
+| `MIXED_MODEL_MIN_DONORS` | `3` | Minimum independent donors supporting the model and each focal level or pair. |
+| `MIXED_MODEL_MIN_STUDIES` | `3` | Minimum studies supporting a study random intercept. |
+| `MIXED_MODEL_MIN_REPEATED_CONTEXTS` | `3` | Minimum repeated assay contexts supporting a context random effect. |
 | `MAX_PLOTS` | `200` | Maximum general association plots per scorer. |
 | `RANDOM_STATE` | `42` | Seed for subsetting, embedding, and scoring. |
 | `AUCELL_CHUNK_SIZE` | `1000` | Cells processed in each AUCell block. |
@@ -173,7 +201,15 @@ Each run is isolated under `<OUT_DIR>/<run-name>`:
 │   └── tabula_sapiens_module_scores.csv.gz
 └── associations/
     ├── scanpy/
+    │   ├── association_tables/
+    │   └── association_plots/
+    │       ├── mixed_models/
+    │       └── nasp/
     └── aucell/
+        ├── association_tables/
+        └── association_plots/
+            ├── mixed_models/
+            └── nasp/
 ```
 
 Use distinct run names for concurrent inputs. `RESUME=1` reuses scoring only
@@ -190,7 +226,26 @@ python run_scripts/score_modules.py --help
 
 Start with a deterministic subset run. Confirm resolved paths, requested
 resources, scorer selection, random seed, output location, and resulting table
-schemas before submitting a full atlas. A complete-atlas run pools one row per
-donor for the primary association estimand and estimates tissue- and
-cell-type-specific age effects within donor strata; it does not treat cells as
-independent biological replicates.
+schemas before submitting a full atlas. Mixed models aggregate cells to one
+equally weighted row per donor, optional study, tissue, cell type, optional
+assay, and feature, with donor as the independent biological unit and
+repeated-measures grouping factor. They estimate adjusted cell-type
+deviations, paired tissue
+differences, condition effects within cell type, age slopes per 10 years within
+cell type, assay deviations, and conditional variance components. Cells count
+toward measurement support only; they are not independent biological
+replicates.
+
+The six model tables are
+`association_mixed_model_contrasts.csv`,
+`association_mixed_model_fixed_effects.csv`,
+`association_mixed_model_term_tests.csv`,
+`association_mixed_model_variance_components.csv`,
+`association_mixed_model_diagnostics.csv`, and
+`association_mixed_model_availability.csv`. Always inspect availability,
+support, `status`, `reason`, convergence, and optimizer warnings. Planned
+contrasts use Benjamini–Hochberg FDR within each analysis and estimand family;
+unsupported or failed models remain explicit and are not interpreted as zero
+or as evidence for no association. `association_provenance.csv` ties these
+outputs to the input files, score-generation metadata, resolved features,
+compendium marker-panel hash, and analysis configuration.

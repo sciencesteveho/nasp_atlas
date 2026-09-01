@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 import matplotlib.pyplot as plt
@@ -21,7 +22,8 @@ from nasp_atlas.single_cell.visualization.gene_resolution import (
     _VisualizationGeneMixin,
 )
 from nasp_atlas.single_cell.visualization.style import ColorbarStyle
-from nasp_atlas.single_cell.visualization.style import _VisualizationStyleMixin
+from nasp_atlas.single_cell.visualization.style import _PlotterBase
+from nasp_atlas.visualization import set_matplotlib_publication_parameters
 
 
 logger = logging.getLogger(__name__)
@@ -50,8 +52,38 @@ class GroupedGeneExpression:
     use_raw: bool
 
 
-class _HeatmapMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
-    """Grouped gene-expression and observation-score heatmaps."""
+class HeatmapPlotter(_VisualizationGeneMixin, _PlotterBase):
+    """Render grouped expression and observation-score heatmaps.
+
+    Example Usage:
+      >>> plotter = HeatmapPlotter(output_dir="path/to/output")
+      >>> plotter.plot_multi_gene_expression_heatmap(
+      ...     adata,
+      ...     genes=["CGAS", "STING1"],
+      ...     groupby="cell_type",
+      ...     filename="sensor_expression",
+      ... )
+    """
+
+    def __init__(
+        self,
+        output_dir: str | Path,
+        *,
+        dpi: int = 450,
+        expression_cmap: Colormap | None = None,
+    ) -> None:
+        """Initialize heatmap rendering dependencies.
+
+        Args:
+          output_dir: Directory where figures are written.
+          dpi: Saved PNG resolution.
+          expression_cmap: Optional expression colormap override.
+        """
+        super().__init__(output_dir, dpi=dpi)
+        if expression_cmap is None:
+            expression_cmap = self._pastelize_cmap("YlGnBu", blend=0.20)
+            expression_cmap = self._zero_gray_cmap(expression_cmap)
+        self.expression_cmap = expression_cmap
 
     def summarize_gene_expression_by_obs(
         self,
@@ -217,15 +249,15 @@ class _HeatmapMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
           cbar_width: Optional override for colorbar width.
           cbar_pad: Optional override for heatmap-to-colorbar padding.
           cbar_title: Optional title drawn above the heatmap colorbar.
-          vmin: Lower color limit. Defaults to 0 so zero maps to gray when
-            using `umap_expression_cmap`.
+          vmin: Lower color limit. Defaults to 0 so zero maps to gray with the
+            default expression colormap.
           vmax: Upper color limit.
           grouped_expression: Optional reusable grouped means prepared by
             `summarize_gene_expression_by_obs`. When supplied, its recorded
             expression source is used instead of reading adata again.
 
         Example Usage:
-          >>> viz.plot_multi_gene_expression_heatmap(
+          >>> plotter.plot_multi_gene_expression_heatmap(
           ...     adata,
           ...     genes=["CD3D", "MS4A1"],
           ...     groupby="cell_type",
@@ -233,7 +265,7 @@ class _HeatmapMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
           ...     gene_symbol_column="gene_symbol",
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
         out = self.output_dir / filename
         colorbar_style = (
             colorbar_style or ColorbarStyle(height=0.36, width=0.07, pad=0.02)
@@ -242,7 +274,7 @@ class _HeatmapMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             width=cbar_width,
             pad=cbar_pad,
         )
-        cmap = self.zero_gray_cmap(
+        cmap = self._zero_gray_cmap(
             cmap if cmap is not None else self.expression_cmap,
             zero_position=self._zero_cmap_position(vmin=vmin, vmax=vmax),
         )
@@ -386,14 +418,14 @@ class _HeatmapMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             when explicit limits are not supplied.
 
         Example Usage:
-          >>> viz.plot_grouped_obs_score_heatmap(
+          >>> plotter.plot_grouped_obs_score_heatmap(
           ...     adata,
           ...     score_keys=["senescence_score", "immune_score"],
           ...     groupby="cell_type",
           ...     filename="score_heatmap",
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
         out = self.output_dir / filename
         colorbar_style = (
             colorbar_style or ColorbarStyle(height=0.36, width=0.07, pad=0.02)
@@ -445,7 +477,7 @@ class _HeatmapMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
                 vmin = -limit
             if vmax is None:
                 vmax = limit
-        cmap = self.zero_gray_cmap(
+        cmap = self._zero_gray_cmap(
             cmap,
             zero_position=self._zero_cmap_position(vmin=vmin, vmax=vmax),
         )

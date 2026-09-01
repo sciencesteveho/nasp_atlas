@@ -59,24 +59,19 @@ class ColorbarStyle:
         )
 
 
-class _VisualizationStyleMixin:
-    """Shared style, layout and colormap helpers."""
+class _PlotterBase:
+    """Own output state and shared visualization helpers."""
 
-    dpi: int
-    legend_w: float
-    size_legend_h: float
-    cbar_w: float
-    cbar_h: float
-    legend_inner_gap: float
-    bar_h: float
-    bar_gap: float
-    left_margin: float
-    bottom_margin: float
-    annotation_height: float
-    annotation_gap: float
-    output_dir: Path
-    expression_cmap: Colormap
-    dotplot_cmap: Colormap
+    def __init__(
+        self,
+        output_dir: str | Path,
+        *,
+        dpi: int = 450,
+    ) -> None:
+        """Initialize shared figure-output settings."""
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.dpi = dpi
 
     def _save_figure_and_log(
         self,
@@ -97,6 +92,7 @@ class _VisualizationStyleMixin:
         mappable: Any | None = None,
         ticks: Sequence[float] | None = None,
         title: str | None = None,
+        extend: Literal["neither", "both", "min", "max"] = "neither",
     ) -> None:
         """Add a consistently styled inset colorbar beside a plot."""
         cax = inset_axes(
@@ -112,6 +108,7 @@ class _VisualizationStyleMixin:
             mappable if mappable is not None else ax.collections[0],
             cax=cax,
             ticks=ticks,
+            extend=extend,
         )
         cbar.ax.tick_params(
             length=colorbar_style.tick_length,
@@ -203,33 +200,7 @@ class _VisualizationStyleMixin:
         return fig.add_axes(rectangle)
 
     @staticmethod
-    def _set_matplotlib_publication_parameters() -> None:
-        """Set matplotlib parameters for publication-quality figures."""
-        plt.rcParams.update(
-            {
-                "font.size": 5,
-                "axes.titlesize": 5,
-                "axes.labelsize": 5,
-                "xtick.labelsize": 5,
-                "ytick.labelsize": 5,
-                "legend.fontsize": 5,
-                "figure.titlesize": 5,
-                "figure.dpi": 450,
-                "font.sans-serif": [
-                    "Arial",
-                    "Nimbus Sans",
-                    "DejaVu Sans",
-                ],
-                "axes.linewidth": 0.25,
-                "xtick.major.width": 0.25,
-                "ytick.major.width": 0.25,
-                "xtick.minor.width": 0.25,
-                "ytick.minor.width": 0.25,
-            }
-        )
-
-    @staticmethod
-    def pastelize_cmap(
+    def _pastelize_cmap(
         cmap_name: str = "Blues",
         blend: float = 0.35,
     ) -> LinearSegmentedColormap:
@@ -245,7 +216,7 @@ class _VisualizationStyleMixin:
         return LinearSegmentedColormap.from_list(f"{cmap_name}_pastel", colors)
 
     @staticmethod
-    def umap_expression_cmap(
+    def _umap_expression_cmap(
         cmap_name: str = "RdYlBu_r",
         *,
         blue_blend: float = 0.0,
@@ -268,7 +239,7 @@ class _VisualizationStyleMixin:
         return mcolors.ListedColormap(colors)
 
     @staticmethod
-    def zero_gray_cmap(
+    def _zero_gray_cmap(
         cmap: Colormap | str,
         *,
         zero_position: float | Literal["low", "center", "high"] = "low",

@@ -6,6 +6,7 @@ import gc
 import hashlib
 import logging
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -14,6 +15,8 @@ import pandas as pd
 from nasp_compendium import GeneModules  # type: ignore[import]
 from nasp_compendium.types import GeneModule  # type: ignore[import]
 
+from nasp_atlas.single_cell.associations import ObsSchema
+from nasp_atlas.single_cell.associations import metadata_columns
 from nasp_atlas.single_cell.module_scoring import ScorerName
 from nasp_atlas.single_cell.module_scoring import inverse_module_score_name
 from nasp_atlas.single_cell.module_scoring import module_score_name
@@ -23,7 +26,9 @@ from nasp_atlas.single_cell.score_diagnostics import (
     cross_scorer_module_correlations,
 )
 from nasp_atlas.single_cell.visualization import GroupedGeneExpression
-from nasp_atlas.single_cell.visualization import SCVisualizer
+from nasp_atlas.single_cell.visualization import HeatmapPlotter
+from nasp_atlas.single_cell.visualization import SummaryPlotter
+from nasp_atlas.single_cell.visualization import UmapPlotter
 
 
 logger = logging.getLogger(__name__)
@@ -72,11 +77,24 @@ class _AucellModuleScorer(Protocol):
         ...
 
 
+@dataclass(frozen=True, kw_only=True, slots=True)
+class _ModuleScoringPlan:
+    """Settings shared by both module-scoring stages."""
+
+    gene_symbol_column: str
+    expression_layer: str | None
+    random_state: int
+    score_heatmap_groupby_key: str
+    point_size: float
+
+
 def module_scoring_outputs(
     adata: ad.AnnData,
     module_ids: Sequence[str],
     *,
-    viz: SCVisualizer,
+    umap_plotter: UmapPlotter,
+    heatmap_plotter: HeatmapPlotter,
+    summary_plotter: SummaryPlotter,
     output_dir: str | Path,
     score_table_filename: str,
     score_scanpy: bool,
@@ -104,7 +122,9 @@ def module_scoring_outputs(
     Args:
       adata: AnnData to score.
       module_ids: Module ids selected for scoring.
-      viz: Visualizer used for score plots.
+      umap_plotter: Plotter used for module-score UMAPs.
+      heatmap_plotter: Plotter used for module-score heatmaps.
+      summary_plotter: Plotter used for scorer-concordance summaries.
       output_dir: Directory where score tables are written.
       score_table_filename: Score CSV filename under `output_dir`.
       score_scanpy: Whether to run scanpy scoring.
@@ -136,18 +156,38 @@ def module_scoring_outputs(
         )
         if enabled
     ]
+    for scorer in ("scanpy", "aucell"):
+        retired_umap = (
+            Path(output_dir)
+            / f"tabula_sapiens_{scorer}_module_zscore_umaps.png"
+        )
+        if retired_umap.is_file():
+            retired_umap.unlink()
+            logger.info(
+                "[tabula_sapiens] removed retired score UMAP -> %s",
+                retired_umap,
+            )
+
+    schema = ObsSchema(
+        donor_key=donor_key,
+        tissue_key=tissue_key,
+        cell_type_key=cell_type_key,
+        sex_key=sex_key,
+        assay_key=assay_key,
+        development_stage_key=development_stage_key,
+        age_key=age_key,
+    )
+    scoring_plan = _ModuleScoringPlan(
+        gene_symbol_column=gene_symbol_column,
+        expression_layer=expression_layer,
+        random_state=random_state,
+        score_heatmap_groupby_key=score_heatmap_groupby_key,
+        point_size=point_size,
+    )
 
     score_metadata = score_table_obs_metadata(
         cast(pd.DataFrame, adata.obs),
-        obs_keys=(
-            donor_key,
-            tissue_key,
-            cell_type_key,
-            sex_key,
-            assay_key,
-            development_stage_key,
-            age_key,
-        ),
+        obs_keys=metadata_columns(schema),
     )
     score_provenance = score_table_provenance(
         n_obs=adata.n_obs,
@@ -170,17 +210,14 @@ def module_scoring_outputs(
         _score_scanpy_outputs(
             adata,
             module_ids,
-            viz=viz,
+            umap_plotter=umap_plotter,
+            heatmap_plotter=heatmap_plotter,
             score_tables=score_tables,
             score_metadata=score_metadata,
             output_dir=output_dir,
             score_table_filename=score_table_filename,
             scanpy_scorer=scanpy_scorer,
-            gene_symbol_column=gene_symbol_column,
-            expression_layer=expression_layer,
-            random_state=random_state,
-            score_heatmap_groupby_key=score_heatmap_groupby_key,
-            point_size=point_size,
+            scoring_plan=scoring_plan,
         )
 
         completed_scorers.append("scanpy")
@@ -196,19 +233,17 @@ def module_scoring_outputs(
         _score_aucell_outputs(
             adata,
             module_ids,
-            viz=viz,
+            umap_plotter=umap_plotter,
+            heatmap_plotter=heatmap_plotter,
+            summary_plotter=summary_plotter,
             score_tables=score_tables,
             score_metadata=score_metadata,
             output_dir=output_dir,
             score_table_filename=score_table_filename,
             aucell_scorer=aucell_scorer,
-            gene_symbol_column=gene_symbol_column,
-            expression_layer=expression_layer,
-            random_state=random_state,
+            scoring_plan=scoring_plan,
             chunk_size=aucell_chunk_size,
             num_workers=aucell_num_workers,
-            score_heatmap_groupby_key=score_heatmap_groupby_key,
-            point_size=point_size,
         )
 
 
@@ -317,7 +352,7 @@ def plot_gene_expression_heatmaps_by_obs(
     *,
     adata: ad.AnnData,
     genes: Sequence[str],
-    viz: SCVisualizer,
+    plotter: HeatmapPlotter,
     filename_prefix: str,
     groupby_keys: Sequence[str],
     gene_symbol_column: str,
@@ -332,7 +367,7 @@ def plot_gene_expression_heatmaps_by_obs(
       >>> plot_gene_expression_heatmaps_by_obs(
       ...     adata=adata,
       ...     genes=["CD3D", "MS4A1"],
-      ...     viz=viz,
+      ...     plotter=plotter,
       ...     filename_prefix="tabula_sapiens",
       ...     groupby_keys=["tissue", "cell_type"],
       ...     gene_symbol_column="feature_name",
@@ -344,7 +379,7 @@ def plot_gene_expression_heatmaps_by_obs(
         return
 
     for groupby_key in groupby_keys:
-        viz.plot_multi_gene_expression_heatmap(
+        plotter.plot_multi_gene_expression_heatmap(
             adata=adata,
             genes=gene_list,
             groupby=groupby_key,
@@ -387,29 +422,50 @@ def _module_export_score_keys(
     return keys
 
 
+def _plot_module_score_umaps(
+    adata: ad.AnnData,
+    score_keys: list[str],
+    *,
+    scorer: ScorerName,
+    plotter: UmapPlotter,
+    point_size: float,
+) -> None:
+    """Plot final module scores with their separate native-scale colorbars."""
+    plotter.plot_multi_obs_umap_panel(
+        adata,
+        obs_keys=score_keys,
+        filename=f"tabula_sapiens_{scorer}_module_umaps",
+        cmap="RdBu_r",
+        ncols=5,
+        size=point_size,
+        vmin=None,
+        vmax=None,
+        center_zero=True,
+        shared_colorbar=False,
+        standardization="none",
+    )
+
+
 def _score_scanpy_outputs(
     adata: ad.AnnData,
     module_ids: Sequence[str],
     *,
-    viz: SCVisualizer,
+    umap_plotter: UmapPlotter,
+    heatmap_plotter: HeatmapPlotter,
     score_tables: list[pd.DataFrame],
     score_metadata: pd.DataFrame,
     output_dir: str | Path,
     score_table_filename: str,
     scanpy_scorer: _ScanpyModuleScorer,
-    gene_symbol_column: str,
-    expression_layer: str | None,
-    random_state: int,
-    score_heatmap_groupby_key: str,
-    point_size: float,
+    scoring_plan: _ModuleScoringPlan,
 ) -> None:
     """Run scanpy scoring and emit scanpy score outputs."""
     scanpy_modules = scanpy_scorer(
         adata,
         module_ids,
-        gene_symbol_column=gene_symbol_column,
-        random_state=random_state,
-        expression_layer=expression_layer,
+        gene_symbol_column=scoring_plan.gene_symbol_column,
+        random_state=scoring_plan.random_state,
+        expression_layer=scoring_plan.expression_layer,
     )
     scanpy_score_keys = [
         module_score_name(module, scorer="scanpy") for module in scanpy_modules
@@ -433,25 +489,21 @@ def _score_scanpy_outputs(
         filename=score_table_filename,
     )
 
-    viz.plot_multi_obs_umap_panel(
+    _plot_module_score_umaps(
         adata,
-        obs_keys=scanpy_score_keys,
-        filename="tabula_sapiens_scanpy_module_umaps",
-        cmap="RdBu_r",
-        ncols=5,
-        size=point_size,
-        vmin=None,
-        vmax=None,
-        center_zero=True,
+        scanpy_score_keys,
+        scorer="scanpy",
+        plotter=umap_plotter,
+        point_size=scoring_plan.point_size,
     )
 
-    viz.plot_grouped_obs_score_heatmap(
+    heatmap_plotter.plot_grouped_obs_score_heatmap(
         adata,
         score_keys=scanpy_score_keys,
-        groupby=score_heatmap_groupby_key,
+        groupby=scoring_plan.score_heatmap_groupby_key,
         filename=(
             "tabula_sapiens_scanpy_module_score_heatmap_by_"
-            f"{safe_filename_token(score_heatmap_groupby_key)}"
+            f"{safe_filename_token(scoring_plan.score_heatmap_groupby_key)}"
         ),
         score_labels=[str(module.module_id) for module in scanpy_modules],
         cmap="RdBu_r",
@@ -464,28 +516,26 @@ def _score_aucell_outputs(
     adata: ad.AnnData,
     module_ids: Sequence[str],
     *,
-    viz: SCVisualizer,
+    umap_plotter: UmapPlotter,
+    heatmap_plotter: HeatmapPlotter,
+    summary_plotter: SummaryPlotter,
     score_tables: list[pd.DataFrame],
     score_metadata: pd.DataFrame,
     output_dir: str | Path,
     score_table_filename: str,
     aucell_scorer: _AucellModuleScorer,
-    gene_symbol_column: str,
-    expression_layer: str | None,
-    random_state: int,
+    scoring_plan: _ModuleScoringPlan,
     chunk_size: int,
     num_workers: int,
-    score_heatmap_groupby_key: str,
-    point_size: float,
 ) -> None:
     """Run AUCell scoring and emit AUCell score outputs."""
     adata_auc, auc_df, auc_modules = aucell_scorer(
         adata,
         module_ids,
-        gene_symbol_column=gene_symbol_column,
-        expression_layer=expression_layer,
+        gene_symbol_column=scoring_plan.gene_symbol_column,
+        expression_layer=scoring_plan.expression_layer,
         chunk_size=chunk_size,
-        random_state=random_state,
+        random_state=scoring_plan.random_state,
         num_workers=num_workers,
     )
     auc_score_keys: list[str] | None = None
@@ -512,60 +562,27 @@ def _score_aucell_outputs(
             filename=score_table_filename,
         )
         if len(score_tables) >= 2:
-            combined_scores = pd.concat(score_tables, axis="columns")
-            scored_module_ids = [
-                str(module.module_id) for module in auc_modules
-            ]
-            concordance = compare_module_scorers(
-                combined_scores,
-                scored_module_ids,
+            _write_cross_scorer_comparison_outputs(
+                score_tables,
+                auc_modules,
+                output_dir=output_dir,
+                plotter=summary_plotter,
             )
-            concordance_path = (
-                Path(output_dir) / "tabula_sapiens_scorer_concordance.csv"
-            )
-            concordance.to_csv(concordance_path, index=False)
-            logger.info(
-                "[tabula_sapiens] scorer concordance -> %s",
-                concordance_path,
-            )
-            cross_module_correlations = cross_scorer_module_correlations(
-                combined_scores,
-                scored_module_ids,
-            )
-            cross_module_path = (
-                Path(output_dir)
-                / "tabula_sapiens_cross_scorer_module_correlations.csv"
-            )
-            cross_module_correlations.to_csv(cross_module_path, index=False)
-            logger.info(
-                "[tabula_sapiens] cross-scorer module correlations -> %s",
-                cross_module_path,
-            )
-            viz.plot_scorer_concordance_heatmap(
-                cross_module_correlations,
-                filename="tabula_sapiens_scorer_concordance",
-                module_order=scored_module_ids,
-            )
-
-        viz.plot_multi_obs_umap_panel(
+        _plot_module_score_umaps(
             adata_auc,
-            obs_keys=auc_score_keys,
-            filename="tabula_sapiens_aucell_module_umaps",
-            cmap="RdBu_r",
-            ncols=5,
-            size=point_size,
-            vmin=None,
-            vmax=None,
-            center_zero=True,
+            auc_score_keys,
+            scorer="aucell",
+            plotter=umap_plotter,
+            point_size=scoring_plan.point_size,
         )
 
-        viz.plot_grouped_obs_score_heatmap(
+        heatmap_plotter.plot_grouped_obs_score_heatmap(
             adata_auc,
             score_keys=auc_score_keys,
-            groupby=score_heatmap_groupby_key,
+            groupby=scoring_plan.score_heatmap_groupby_key,
             filename=(
                 "tabula_sapiens_aucell_module_score_heatmap_by_"
-                f"{safe_filename_token(score_heatmap_groupby_key)}"
+                f"{safe_filename_token(scoring_plan.score_heatmap_groupby_key)}"
             ),
             score_labels=[str(module.module_id) for module in auc_modules],
             cmap="RdBu_r",
@@ -576,3 +593,45 @@ def _score_aucell_outputs(
         auc_score_keys = None
         auc_scores = None
         gc.collect()
+
+
+def _write_cross_scorer_comparison_outputs(
+    score_tables: Sequence[pd.DataFrame],
+    auc_modules: Sequence[GeneModule],
+    *,
+    output_dir: str | Path,
+    plotter: SummaryPlotter,
+) -> None:
+    """Write cross-scorer comparison tables and the concordance heatmap."""
+    combined_scores = pd.concat(score_tables, axis="columns")
+    scored_module_ids = [str(module.module_id) for module in auc_modules]
+    concordance = compare_module_scorers(
+        combined_scores,
+        scored_module_ids,
+    )
+    concordance_path = (
+        Path(output_dir) / "tabula_sapiens_scorer_concordance.csv"
+    )
+    concordance.to_csv(concordance_path, index=False)
+    logger.info(
+        "[tabula_sapiens] scorer concordance -> %s",
+        concordance_path,
+    )
+
+    cross_module_correlations = cross_scorer_module_correlations(
+        combined_scores,
+        scored_module_ids,
+    )
+    cross_module_path = (
+        Path(output_dir) / "tabula_sapiens_cross_scorer_module_correlations.csv"
+    )
+    cross_module_correlations.to_csv(cross_module_path, index=False)
+    logger.info(
+        "[tabula_sapiens] cross-scorer module correlations -> %s",
+        cross_module_path,
+    )
+    plotter.plot_scorer_concordance_heatmap(
+        cross_module_correlations,
+        filename="tabula_sapiens_scorer_concordance",
+        module_order=scored_module_ids,
+    )

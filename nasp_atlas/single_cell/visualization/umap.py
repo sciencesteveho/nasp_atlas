@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any, Literal
 
 import matplotlib.colors as mcolors
@@ -15,6 +16,8 @@ import scanpy as sc  # type: ignore[import]
 import scipy.sparse as sp  # type: ignore[import]
 from matplotlib.axes import Axes
 from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.cm import ScalarMappable
+from matplotlib.collections import PathCollection
 from matplotlib.colors import Colormap
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
@@ -33,14 +36,45 @@ from nasp_atlas.single_cell.visualization.gene_resolution import (
     _VisualizationGeneMixin,
 )
 from nasp_atlas.single_cell.visualization.style import ColorbarStyle
-from nasp_atlas.single_cell.visualization.style import _VisualizationStyleMixin
+from nasp_atlas.single_cell.visualization.style import _PlotterBase
+from nasp_atlas.visualization import set_matplotlib_publication_parameters
 
 
 logger = logging.getLogger(__name__)
 
 
-class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
-    """UMAP and embedding panel plotting methods."""
+class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
+    """Render UMAP and embedding panels.
+
+    Example Usage:
+      >>> plotter = UmapPlotter(output_dir="path/to/output")
+      >>> plotter.plot_umap_panel(
+      ...     adata,
+      ...     panels=["cell_type"],
+      ...     filename="cell_type_umap",
+      ... )
+    """
+
+    def __init__(
+        self,
+        output_dir: str | Path,
+        *,
+        dpi: int = 450,
+        expression_cmap: Colormap | None = None,
+    ) -> None:
+        """Initialize UMAP rendering dependencies.
+
+        Args:
+          output_dir: Directory where figures are written.
+          dpi: Saved PNG resolution.
+          expression_cmap: Optional expression colormap override.
+        """
+        super().__init__(output_dir, dpi=dpi)
+        if expression_cmap is None:
+            expression_cmap = self._pastelize_cmap("YlGnBu", blend=0.20)
+            expression_cmap = self._zero_gray_cmap(expression_cmap)
+        self.expression_cmap = expression_cmap
+        logging.getLogger("matplotlib.category").setLevel(logging.WARNING + 1)
 
     def plot_embedding(
         self,
@@ -66,13 +100,13 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
           **kwargs: Forwarded to sc.pl.embedding.
 
         Example Usage:
-          >>> viz.plot_embedding(
+          >>> plotter.plot_embedding(
           ...     adata,
           ...     color="cell_type",
           ...     filename="cell_type_umap",
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
 
         if filename is None:
             label = color if isinstance(color, str) else "_".join(color)
@@ -158,14 +192,14 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
           cbar_pad: Optional override for panel-to-colorbar padding.
 
         Example Usage:
-          >>> viz.plot_umap_panel(
+          >>> plotter.plot_umap_panel(
           ...     adata,
           ...     panels=["cell_type", "module_score"],
           ...     filename="metadata_panel",
           ...     ncols=2,
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
         if not panels:
             logger.warning("[plot] no obs UMAP panels requested")
             return
@@ -179,8 +213,45 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             pad=cbar_pad,
         )
         resolved_panels = resolve_umap_panel_specs(adata, panels)
-        ncols = ncols if ncols is not None else len(resolved_panels)
-        nrows = math.ceil(len(resolved_panels) / ncols)
+        self._render_umap_panel_grid(
+            adata=adata,
+            panels=resolved_panels,
+            filename=filename,
+            basis=basis,
+            ncols=ncols,
+            panel_w=panel_w,
+            panel_h=panel_h,
+            size=size,
+            row_hspace=row_hspace,
+            col_wspace=col_wspace,
+            colorbar_style=colorbar_style,
+        )
+
+    def _render_umap_panel_grid(
+        self,
+        *,
+        adata: Any,
+        panels: Sequence[UmapPanel],
+        filename: str,
+        basis: str,
+        ncols: int | None,
+        panel_w: float,
+        panel_h: float,
+        size: float,
+        row_hspace: float,
+        col_wspace: float,
+        colorbar_style: ColorbarStyle,
+        numeric_values: dict[str, np.ndarray] | None = None,
+        shared_colorbar: bool = False,
+        cbar_title: str | None = None,
+        cbar_extend: Literal["neither", "both", "min", "max"] = "neither",
+    ) -> None:
+        """Render resolved UMAP panels with optional shared numeric scaling."""
+        if not panels:
+            return
+
+        ncols = ncols if ncols is not None else len(panels)
+        nrows = math.ceil(len(panels) / ncols)
         fig, axes = plt.subplots(
             nrows,
             ncols,
@@ -188,18 +259,41 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             squeeze=False,
         )
 
-        for ax, panel in zip(axes.flat, resolved_panels, strict=False):
-            self._plot_umap_panel_axis(
+        numeric_panels: list[tuple[Axes, PathCollection, UmapPanel]] = []
+        for ax, panel in zip(axes.flat, panels, strict=False):
+            collection = self._plot_umap_panel_axis(
                 adata=adata,
                 ax=ax,
                 panel=panel,
                 basis=basis,
                 size=size,
                 colorbar_style=colorbar_style,
+                values=(
+                    numeric_values.get(panel.obs_key)
+                    if numeric_values is not None
+                    else None
+                ),
+                add_colorbar=not shared_colorbar,
+                cbar_title=cbar_title,
+                cbar_extend=cbar_extend,
             )
+            if collection is not None:
+                numeric_panels.append((ax, collection, panel))
 
-        for ax in axes.flat[len(resolved_panels) :]:
+        for ax in axes.flat[len(panels) :]:
             ax.axis("off")
+
+        if shared_colorbar and numeric_panels:
+            ax, collection, panel = numeric_panels[-1]
+            self._add_embedding_colorbar(
+                fig=fig,
+                ax=ax,
+                mappable=collection,
+                colorbar_style=colorbar_style,
+                ticks=panel.cbar_ticks,
+                title=cbar_title,
+                extend=cbar_extend,
+            )
 
         fig.subplots_adjust(hspace=row_hspace, wspace=col_wspace)
         out = self.output_dir / filename
@@ -224,6 +318,8 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
         cbar_height: str | float | None = None,
         cbar_width: str | float | None = None,
         cbar_pad: float | None = None,
+        shared_colorbar: bool = False,
+        cbar_title: str | None = None,
         size: float = 8.0,
         max_rows_per_batch: int | None = 4,
     ) -> None:
@@ -247,20 +343,25 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
           cbar_height: Optional override for colorbar height.
           cbar_width: Optional override for colorbar width.
           cbar_pad: Optional override for panel-to-colorbar padding.
+          shared_colorbar: Whether every gene uses one colorbar with a common
+            range from zero to the highest finite expression value shown.
+            At least one requested gene must have positive finite expression.
+          cbar_title: Optional colorbar label.
           size: Scatter point size.
           max_rows_per_batch: Maximum live scatter rows rendered at once.
             Raster batches are recomposed into the original output filename.
             Use None to render every row in one batch.
 
         Example Usage:
-          >>> viz.plot_multi_gene_umap_panel(
+          >>> plotter.plot_multi_gene_umap_panel(
           ...     adata,
           ...     genes=["CD3D", "MS4A1"],
           ...     filename="marker_gene_umaps",
           ...     gene_symbol_column="gene_symbol",
+          ...     shared_colorbar=True,
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
         out = self.output_dir / filename
         if ncols <= 0:
             raise ValueError(f"ncols must be positive; got {ncols}.")
@@ -277,7 +378,7 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             width=cbar_width,
             pad=cbar_pad,
         )
-        cmap = self.zero_gray_cmap(
+        cmap = self._zero_gray_cmap(
             cmap if cmap is not None else self.expression_cmap
         ).with_extremes(bad="lightgray")
         if expression_layer is not None and use_raw:
@@ -328,6 +429,14 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             var_name: position
             for position, var_name in enumerate(source_var_names)
         }
+        shared_vmax = (
+            self._highest_gene_expression_value(
+                source_matrix,
+                positions=list(source_positions.values()),
+            )
+            if shared_colorbar
+            else None
+        )
         xy = embedding_xy(adata, basis=basis)
         batch_size = (
             len(ordered_var_names)
@@ -336,6 +445,7 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
         )
         n_batches = math.ceil(len(ordered_var_names) / batch_size)
         rendered_batches: list[np.ndarray] = []
+        reference_panel_size_inches: tuple[float, float] | None = None
         for batch_index, start in enumerate(
             range(0, len(ordered_var_names), batch_size),
             start=1,
@@ -348,22 +458,26 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
                     batch_index,
                     n_batches,
                 )
-            rendered_batches.append(
-                self._render_gene_umap_batch(
-                    xy=xy,
-                    source_matrix=source_matrix,
-                    source_positions=source_positions,
-                    var_names=ordered_var_names[start:stop],
-                    labels=labels[start:stop],
-                    ncols=ncols,
-                    panel_w=panel_w,
-                    panel_h=panel_h,
-                    row_hspace=row_hspace,
-                    cmap=cmap,
-                    colorbar_style=colorbar_style,
-                    size=size,
-                )
+            batch_rgba, panel_size_inches = self._render_gene_umap_batch(
+                xy=xy,
+                source_matrix=source_matrix,
+                source_positions=source_positions,
+                var_names=ordered_var_names[start:stop],
+                labels=labels[start:stop],
+                ncols=ncols,
+                panel_w=panel_w,
+                panel_h=panel_h,
+                row_hspace=row_hspace,
+                cmap=cmap,
+                colorbar_style=colorbar_style,
+                vmax=shared_vmax,
+                show_colorbars=not shared_colorbar,
+                cbar_title=cbar_title,
+                size=size,
             )
+            rendered_batches.append(batch_rgba)
+            if reference_panel_size_inches is None:
+                reference_panel_size_inches = panel_size_inches
 
         batch_gap = round(row_hspace * panel_h * self.dpi)
         composite = self._stack_rgba_batches(
@@ -371,8 +485,23 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             gap_pixels=batch_gap,
             pad_pixels=round(0.1 * self.dpi),
         )
-        plt.imsave(f"{out}.png", composite, dpi=self.dpi)
-        logger.info("[plot] multi-gene UMAP panel -> %s", out)
+        if (
+            shared_colorbar
+            and shared_vmax is not None
+            and reference_panel_size_inches is not None
+        ):
+            self._save_gene_umap_with_shared_colorbar(
+                composite,
+                out=out,
+                cmap=cmap,
+                vmax=shared_vmax,
+                colorbar_style=colorbar_style,
+                cbar_title=cbar_title,
+                panel_size_inches=reference_panel_size_inches,
+            )
+        else:
+            plt.imsave(f"{out}.png", composite, dpi=self.dpi)
+            logger.info("[plot] multi-gene UMAP panel -> %s", out)
 
     def _render_gene_umap_batch(
         self,
@@ -388,9 +517,12 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
         row_hspace: float,
         cmap: Colormap,
         colorbar_style: ColorbarStyle,
+        vmax: float | None,
+        show_colorbars: bool,
+        cbar_title: str | None,
         size: float,
-    ) -> np.ndarray:
-        """Render one bounded gene-expression UMAP batch as RGBA pixels."""
+    ) -> tuple[np.ndarray, tuple[float, float]]:
+        """Render a gene UMAP batch and report one panel's physical size."""
         nrows = math.ceil(len(var_names) / ncols)
         fig, axes = plt.subplots(
             nrows,
@@ -416,7 +548,8 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
                     c=values[order],
                     s=size,
                     cmap=cmap,
-                    vmin=0,
+                    vmin=0.0,
+                    vmax=vmax,
                     linewidths=0,
                     edgecolors="none",
                     plotnonfinite=True,
@@ -431,18 +564,26 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
                 for spine in ax.spines.values():
                     spine.set_visible(False)
 
-                self._add_embedding_colorbar(
-                    fig=fig,
-                    ax=ax,
-                    mappable=collection,
-                    colorbar_style=colorbar_style,
-                )
+                if show_colorbars:
+                    self._add_embedding_colorbar(
+                        fig=fig,
+                        ax=ax,
+                        mappable=collection,
+                        colorbar_style=colorbar_style,
+                        title=cbar_title,
+                    )
 
             for ax in axes.flat[len(var_names) :]:
                 ax.axis("off")
 
             fig.subplots_adjust(hspace=row_hspace, wspace=0.35)
-            return self._figure_rgba(fig)
+            rgba = self._figure_rgba(fig)
+            panel_bounds = axes.flat[0].get_window_extent()
+            panel_size_inches = (
+                panel_bounds.width / self.dpi,
+                panel_bounds.height / self.dpi,
+            )
+            return rgba, panel_size_inches
         finally:
             plt.close(fig)
 
@@ -510,6 +651,94 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             return column.toarray().reshape(-1)
         return np.asarray(column).reshape(-1)
 
+    def _highest_gene_expression_value(
+        self,
+        matrix: Any,
+        *,
+        positions: Sequence[int],
+    ) -> float:
+        """Return the highest finite expression value across selected genes."""
+        highest: float | None = None
+        for position in positions:
+            values = self._dense_expression_column(matrix, position)
+            finite = values[np.isfinite(values)]
+            if finite.size:
+                candidate = float(finite.max())
+                highest = (
+                    candidate if highest is None else max(highest, candidate)
+                )
+
+        if highest is None:
+            raise ValueError(
+                "shared gene-expression colorbar requires at least one "
+                "finite expression value"
+            )
+        if highest == 0.0:
+            raise ValueError(
+                "shared gene-expression colorbar requires at least one "
+                "positive finite expression value; the requested 0-to-0 "
+                "range is undefined"
+            )
+        if highest < 0.0:
+            raise ValueError(
+                "shared gene-expression colorbar requires a nonnegative "
+                f"maximum because vmin is fixed at 0.0; received {highest}"
+            )
+        return highest
+
+    def _save_gene_umap_with_shared_colorbar(
+        self,
+        composite: np.ndarray,
+        *,
+        out: Path,
+        cmap: Colormap,
+        vmax: float,
+        colorbar_style: ColorbarStyle,
+        cbar_title: str | None,
+        panel_size_inches: tuple[float, float],
+    ) -> None:
+        """Save a stacked gene-panel raster beside one shared colorbar."""
+        height, width = composite.shape[:2]
+        fig, ax = plt.subplots(
+            figsize=(width / self.dpi, height / self.dpi),
+        )
+        try:
+            ax.imshow(composite)
+            ax.axis("off")
+            fig.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0)
+            mappable = ScalarMappable(
+                norm=mcolors.Normalize(vmin=0.0, vmax=vmax),
+                cmap=cmap,
+            )
+            mappable.set_array([])
+            panel_width, panel_height = panel_size_inches
+            anchor_width = panel_width / fig.get_figwidth()
+            anchor_height = panel_height / fig.get_figheight()
+            colorbar_anchor = fig.add_axes(
+                (
+                    1.0 - anchor_width,
+                    (1.0 - anchor_height) / 2.0,
+                    anchor_width,
+                    anchor_height,
+                ),
+                frameon=False,
+            )
+            colorbar_anchor.set_axis_off()
+            self._add_embedding_colorbar(
+                fig=fig,
+                ax=colorbar_anchor,
+                mappable=mappable,
+                colorbar_style=colorbar_style,
+                title=cbar_title,
+            )
+            self._save_figure_and_log(
+                fig,
+                out,
+                "[plot] multi-gene UMAP panel -> %s",
+            )
+        finally:
+            plt.close(fig)
+
     def plot_multi_obs_umap_panel(
         self,
         adata: Any,
@@ -526,6 +755,10 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
         cbar_height: str | float | None = None,
         cbar_width: str | float | None = None,
         cbar_pad: float | None = None,
+        shared_colorbar: bool = False,
+        standardization: Literal["none", "zscore"] = "none",
+        cbar_title: str | None = None,
+        cbar_extend: Literal["neither", "both", "min", "max"] = "neither",
         size: float = 8.0,
         vmin: float | None = 0,
         vmax: float | None = None,
@@ -533,8 +766,10 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
     ) -> None:
         """Save a multi-panel UMAP figure for numeric obs columns.
 
-        Applies one numeric panel style to several observation columns while
-        resolving color limits independently for each column.
+        Applies one numeric panel style to several observation columns. Values
+        can remain on their native scale or be z-scored independently within
+        each column across the finite cells displayed. The transformation is
+        plot-local and does not mutate `adata`.
 
         Args:
           adata: AnnData object with UMAP embedding computed.
@@ -551,21 +786,62 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
           cbar_height: Optional override for colorbar height.
           cbar_width: Optional override for colorbar width.
           cbar_pad: Optional override for panel-to-colorbar padding.
+          shared_colorbar: Whether numeric panels use one colorbar and one
+            common pair of color limits.
+          standardization: Value transformation ("none" or "zscore").
+            Population z-scores use finite displayed cells and `ddof=0`.
+          cbar_title: Optional colorbar label.
+          cbar_extend: Which colorbar ends indicate values beyond the displayed
+            color limits ("neither", "both", "min", or "max").
           size: Point size forwarded to Scanpy.
-          vmin: Lower color limit. Defaults to 0 so zero maps to gray when
-            using `umap_expression_cmap`.
+          vmin: Lower color limit. Defaults to 0 so zero maps to gray with the
+            default expression colormap.
           vmax: Upper color limit.
           center_zero: Whether to derive per-panel symmetric color limits
             around zero when explicit limits are not supplied.
 
         Example Usage:
-          >>> viz.plot_multi_obs_umap_panel(
+          >>> plotter.plot_multi_obs_umap_panel(
           ...     adata,
           ...     obs_keys=["module_score", "age_accel"],
           ...     filename="score_umaps",
-          ...     cbar_height="25%",
+          ...     shared_colorbar=True,
+          ...     standardization="zscore",
+          ...     center_zero=True,
+          ...     vmin=-3.0,
+          ...     vmax=3.0,
           ... )
         """
+        set_matplotlib_publication_parameters()
+        if standardization not in {"none", "zscore"}:
+            raise ValueError(
+                "standardization must be 'none' or 'zscore'; "
+                f"received {standardization!r}"
+            )
+        if standardization == "zscore":
+            if not center_zero:
+                raise ValueError(
+                    "standardization='zscore' requires center_zero=True"
+                )
+            if (vmin is None) != (vmax is None):
+                raise ValueError(
+                    "standardized score colors require both vmin and vmax "
+                    "or neither"
+                )
+            if vmin is not None and vmin >= 0.0:
+                raise ValueError(
+                    "standardized score colors require a negative vmin or "
+                    "vmin=None"
+                )
+            if (
+                vmin is not None
+                and vmax is not None
+                and not np.isclose(abs(vmin), abs(vmax))
+            ):
+                raise ValueError(
+                    "standardized score colors require symmetric vmin/vmax"
+                )
+
         valid_keys = [key for key in obs_keys if key in adata.obs.columns]
         if not valid_keys:
             logger.warning(
@@ -582,23 +858,44 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             pad=cbar_pad,
         )
         numeric_cmap = (
-            cmap if cmap is not None else self.umap_expression_cmap("viridis")
+            cmap if cmap is not None else self._umap_expression_cmap("viridis")
+        )
+        values_by_key = {
+            key: self._numeric_obs_values(
+                adata,
+                key,
+                standardization=standardization,
+            )
+            for key in valid_keys
+        }
+        shared_limits = (
+            self._shared_obs_color_limits(
+                values_by_key,
+                vmin=vmin,
+                vmax=vmax,
+                center_zero=center_zero,
+            )
+            if shared_colorbar
+            else None
         )
         panels: list[UmapPanelSpec] = []
         for key in valid_keys:
-            panel_vmin = vmin
-            panel_vmax = vmax
-            if center_zero and (panel_vmin is None or panel_vmax is None):
-                limit = self._symmetric_obs_limit(adata, key)
-                if panel_vmin is None:
-                    panel_vmin = -limit
-                if panel_vmax is None:
-                    panel_vmax = limit
+            if shared_limits is None:
+                panel_vmin = vmin
+                panel_vmax = vmax
+                if center_zero and (panel_vmin is None or panel_vmax is None):
+                    limit = self._symmetric_value_limit(values_by_key[key])
+                    if panel_vmin is None:
+                        panel_vmin = -limit
+                    if panel_vmax is None:
+                        panel_vmax = limit
+            else:
+                panel_vmin, panel_vmax = shared_limits
             panels.append(
                 {
                     "obs_key": key,
                     "kind": "numeric",
-                    "cmap": self.zero_gray_cmap(
+                    "cmap": self._zero_gray_cmap(
                         numeric_cmap,
                         zero_position=self._zero_cmap_position(
                             vmin=panel_vmin,
@@ -609,9 +906,10 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
                     "vmax": panel_vmax,
                 }
             )
-        self.plot_umap_panel(
-            adata,
-            panels=panels,
+        resolved_panels = resolve_umap_panel_specs(adata, panels)
+        self._render_umap_panel_grid(
+            adata=adata,
+            panels=resolved_panels,
             filename=filename,
             basis=basis,
             ncols=ncols,
@@ -621,15 +919,117 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             row_hspace=row_hspace,
             col_wspace=0.35,
             colorbar_style=colorbar_style,
+            numeric_values=values_by_key,
+            shared_colorbar=shared_colorbar,
+            cbar_title=(
+                "Within-column z-score"
+                if standardization == "zscore" and cbar_title is None
+                else cbar_title
+            ),
+            cbar_extend=cbar_extend,
         )
 
     @staticmethod
-    def _symmetric_obs_limit(adata: Any, obs_key: str) -> float:
-        """Return a non-zero symmetric limit for one numeric obs column."""
-        values = pd.to_numeric(
-            adata.obs[obs_key],
-            errors="coerce",
-        ).to_numpy(dtype=float, copy=False)
+    def _numeric_obs_values(
+        adata: Any,
+        obs_key: str,
+        *,
+        standardization: Literal["none", "zscore"],
+    ) -> np.ndarray:
+        """Return finite-preserving numeric values for one UMAP panel."""
+        values = pd.to_numeric(adata.obs[obs_key], errors="coerce").to_numpy(
+            dtype=float,
+            copy=False,
+        )
+        if standardization == "none":
+            return values
+
+        finite_mask = np.isfinite(values)
+        finite_values = values[finite_mask]
+        standardized = np.full(values.shape, np.nan, dtype=float)
+        if finite_values.size == 0:
+            logger.warning(
+                "[plot] %s has no finite values for z-score UMAP", obs_key
+            )
+            return standardized
+
+        standard_deviation = float(finite_values.std(ddof=0))
+        if standard_deviation == 0.0:
+            logger.warning(
+                "[plot] %s is constant; z-score UMAP renders it as unavailable",
+                obs_key,
+            )
+            return standardized
+        if not np.isfinite(standard_deviation):
+            logger.warning(
+                "[plot] %s has a non-finite standard deviation; z-score "
+                "UMAP renders it as unavailable",
+                obs_key,
+            )
+            return standardized
+
+        standardized[finite_mask] = (
+            finite_values - float(finite_values.mean())
+        ) / standard_deviation
+        return standardized
+
+    @staticmethod
+    def _shared_obs_color_limits(
+        values_by_key: dict[str, np.ndarray],
+        *,
+        vmin: float | None,
+        vmax: float | None,
+        center_zero: bool,
+    ) -> tuple[float, float]:
+        """Resolve one finite color range across numeric UMAP panels."""
+        finite_minimum: float | None = None
+        finite_maximum: float | None = None
+        for values in values_by_key.values():
+            finite = values[np.isfinite(values)]
+            if not finite.size:
+                continue
+            candidate_minimum = float(finite.min())
+            candidate_maximum = float(finite.max())
+            finite_minimum = (
+                candidate_minimum
+                if finite_minimum is None
+                else min(finite_minimum, candidate_minimum)
+            )
+            finite_maximum = (
+                candidate_maximum
+                if finite_maximum is None
+                else max(finite_maximum, candidate_maximum)
+            )
+
+        if finite_minimum is None or finite_maximum is None:
+            if vmin is None or vmax is None:
+                raise ValueError(
+                    "shared color limits require finite values or explicit "
+                    "vmin and vmax"
+                )
+            resolved_vmin = float(vmin)
+            resolved_vmax = float(vmax)
+        elif center_zero:
+            limit = max(abs(finite_minimum), abs(finite_maximum))
+            resolved_vmin = -limit if vmin is None else float(vmin)
+            resolved_vmax = limit if vmax is None else float(vmax)
+        else:
+            resolved_vmin = finite_minimum if vmin is None else float(vmin)
+            resolved_vmax = finite_maximum if vmax is None else float(vmax)
+        if (
+            not np.isfinite(resolved_vmin)
+            or not np.isfinite(resolved_vmax)
+            or resolved_vmin >= resolved_vmax
+        ):
+            raise ValueError(
+                "shared color limits must be finite with vmin < vmax; "
+                f"received vmin={resolved_vmin}, vmax={resolved_vmax}"
+            )
+        return resolved_vmin, resolved_vmax
+
+    @staticmethod
+    def _symmetric_value_limit(values: np.ndarray) -> float:
+        """Return a non-zero symmetric limit for numeric panel values."""
         finite = np.abs(values[np.isfinite(values)])
         if finite.size == 0:
             return 1.0
@@ -668,11 +1068,11 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
                 None,
             )
             if cmap_key is None:
-                resolved_kwargs["color_map"] = self.umap_expression_cmap(
+                resolved_kwargs["color_map"] = self._umap_expression_cmap(
                     "viridis"
                 )
             else:
-                resolved_kwargs[cmap_key] = self.zero_gray_cmap(
+                resolved_kwargs[cmap_key] = self._zero_gray_cmap(
                     resolved_kwargs[cmap_key]
                 )
 
@@ -699,7 +1099,11 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
         basis: str,
         size: float,
         colorbar_style: ColorbarStyle,
-    ) -> None:
+        values: np.ndarray | None,
+        add_colorbar: bool,
+        cbar_title: str | None,
+        cbar_extend: Literal["neither", "both", "min", "max"],
+    ) -> PathCollection | None:
         """Plot one obs-colored UMAP panel onto an existing axis."""
         obs_key = panel.obs_key
         kind = panel.kind
@@ -746,22 +1150,34 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
                 loc=panel.legend_loc,
                 ncol=panel.legend_ncol,
             )
-            return
+            return None
 
         if kind == "numeric":
-            values = pd.to_numeric(adata.obs[obs_key], errors="coerce")
-            cmap = self.zero_gray_cmap(
+            numeric_values = (
+                pd.to_numeric(adata.obs[obs_key], errors="coerce").to_numpy(
+                    dtype=float,
+                    copy=False,
+                )
+                if values is None
+                else np.asarray(values, dtype=float)
+            )
+            if numeric_values.shape != (xy.shape[0],):
+                raise ValueError(
+                    f"numeric values for {obs_key!r} must have shape "
+                    f"({xy.shape[0]},); received {numeric_values.shape}"
+                )
+            cmap = self._zero_gray_cmap(
                 panel.cmap,
                 zero_position=self._zero_cmap_position(
                     vmin=panel.vmin,
                     vmax=panel.vmax,
-                    values=values.to_numpy(),
+                    values=numeric_values,
                 ),
             )
             collection = ax.scatter(
                 xy[:, 0],
                 xy[:, 1],
-                c=values.to_numpy(),
+                c=numeric_values,
                 s=size,
                 cmap=cmap,
                 vmin=panel.vmin,
@@ -770,14 +1186,27 @@ class _UmapPlotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
                 rasterized=True,
             )
             self._style_umap_panel_axis(ax, panel)
-            self._add_embedding_colorbar(
-                fig=ax.figure,
-                ax=ax,
-                mappable=collection,
-                colorbar_style=colorbar_style,
-                ticks=panel.cbar_ticks,
-            )
-            return
+            if not np.isfinite(numeric_values).any():
+                ax.text(
+                    0.5,
+                    0.5,
+                    "Unavailable",
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="center",
+                    color="#666666",
+                )
+            if add_colorbar:
+                self._add_embedding_colorbar(
+                    fig=ax.figure,
+                    ax=ax,
+                    mappable=collection,
+                    colorbar_style=colorbar_style,
+                    ticks=panel.cbar_ticks,
+                    title=cbar_title,
+                    extend=cbar_extend,
+                )
+            return collection
 
         raise ValueError(f"Unsupported obs UMAP panel kind: {kind!r}")
 

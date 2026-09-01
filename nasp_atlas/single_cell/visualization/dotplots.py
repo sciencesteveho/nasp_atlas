@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import anndata as ad  # type: ignore[import]
@@ -25,7 +26,8 @@ from scipy.cluster.hierarchy import (  # type: ignore[import]
 from nasp_atlas.single_cell.visualization.gene_resolution import (
     _VisualizationGeneMixin,
 )
-from nasp_atlas.single_cell.visualization.style import _VisualizationStyleMixin
+from nasp_atlas.single_cell.visualization.style import _PlotterBase
+from nasp_atlas.visualization import set_matplotlib_publication_parameters
 
 
 logger = logging.getLogger(__name__)
@@ -40,20 +42,51 @@ class _DotplotStats:
     categories: list[str]
 
 
-class _DotplotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
-    """Marker and ranked-gene dotplots."""
+class DotplotPlotter(_VisualizationGeneMixin, _PlotterBase):
+    """Render marker and ranked-gene dotplots.
 
-    legend_w: float
-    size_legend_h: float
-    cbar_w: float
-    cbar_h: float
-    legend_inner_gap: float
-    bar_h: float
-    bar_gap: float
-    left_margin: float
-    bottom_margin: float
-    annotation_height: float
-    annotation_gap: float
+    Example Usage:
+      >>> plotter = DotplotPlotter(output_dir="path/to/output")
+      >>> plotter.plot_marker_dotplot(
+      ...     adata,
+      ...     groupby="cell_type",
+      ...     marker_groups={"Sensors": ["CGAS", "STING1"]},
+      ...     filename="sensor_markers",
+      ... )
+    """
+
+    legend_w: float = 0.52
+    size_legend_h: float = 0.40
+    cbar_w: float = 0.38
+    cbar_h: float = 0.065
+    legend_inner_gap: float = 0.08
+    bar_h: float = 0.035
+    bar_gap: float = 0.020
+    left_margin: float = 0.18
+    bottom_margin: float = 0.18
+    annotation_height: float = 0.34
+    annotation_gap: float = 0.02
+
+    def __init__(
+        self,
+        output_dir: str | Path,
+        *,
+        dpi: int = 450,
+        dotplot_cmap: Colormap | None = None,
+    ) -> None:
+        """Initialize dotplot rendering dependencies.
+
+        Args:
+          output_dir: Directory where figures are written.
+          dpi: Saved PNG resolution.
+          dotplot_cmap: Optional dotplot colormap override.
+        """
+        super().__init__(output_dir, dpi=dpi)
+        self.dotplot_cmap = (
+            dotplot_cmap
+            if dotplot_cmap is not None
+            else self._pastelize_cmap("Blues", blend=0.35)
+        )
 
     @staticmethod
     def _compute_dotplot_stats(
@@ -393,7 +426,7 @@ class _DotplotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
         cbar_bottom = legend_bottom - 0.05
         size_bottom = cbar_bottom + cbar_h + legend_inner_gap
 
-        size_ax = _DotplotMixin._add_axes(
+        size_ax = DotplotPlotter._add_axes(
             fig=fig,
             fig_w=fig_w,
             fig_h=fig_h,
@@ -402,7 +435,7 @@ class _DotplotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             w=legend_w,
             h=size_legend_h,
         )
-        _DotplotMixin._draw_dotplot_size_legend(
+        DotplotPlotter._draw_dotplot_size_legend(
             sax=size_ax,
             largest_dot=largest_dot,
             size_exponent=size_exponent,
@@ -410,7 +443,7 @@ class _DotplotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             dot_edge_lw=dot_edge_lw,
         )
 
-        cbar_ax = _DotplotMixin._add_axes(
+        cbar_ax = DotplotPlotter._add_axes(
             fig=fig,
             fig_w=fig_w,
             fig_h=fig_h,
@@ -419,7 +452,7 @@ class _DotplotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
             w=cbar_w,
             h=cbar_h,
         )
-        _DotplotMixin._draw_dotplot_colorbar(scat=scat, cax=cbar_ax)
+        DotplotPlotter._draw_dotplot_colorbar(scat=scat, cax=cbar_ax)
 
     @staticmethod
     def _extract_rank_genes_grouped(
@@ -566,14 +599,14 @@ class _DotplotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
         group order.
 
         Example Usage:
-          >>> viz.plot_marker_dotplot(
+          >>> plotter.plot_marker_dotplot(
           ...     adata,
           ...     groupby="cell_type",
           ...     marker_groups={"T cells": ["CD3D", "CD3E"]},
           ...     filename="marker_dotplot",
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
         cmap = cmap if cmap is not None else self.dotplot_cmap
         out = self.output_dir / filename
 
@@ -725,14 +758,14 @@ class _DotplotMixin(_VisualizationGeneMixin, _VisualizationStyleMixin):
         """Save a scaled mean expression ranked-genes dot plot.
 
         Example Usage:
-          >>> viz.plot_rank_genes_dotplot(
+          >>> plotter.plot_rank_genes_dotplot(
           ...     adata,
           ...     groupby="cell_type",
           ...     rank_key="rank_genes_groups",
           ...     filename="ranked_marker_dotplot",
           ... )
         """
-        self._set_matplotlib_publication_parameters()
+        set_matplotlib_publication_parameters()
         out = self.output_dir / filename
 
         categories_order = self._get_dendrogram_order(

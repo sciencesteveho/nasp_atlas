@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field
+from math import isfinite
+from numbers import Real
 from pathlib import Path
 from typing import cast
 
@@ -15,11 +19,20 @@ from nasp_compendium import GeneModules  # type: ignore[import]
 
 from nasp_atlas.analysis.tabula_sapiens import associations
 from nasp_atlas.analysis.tabula_sapiens import scoring
+from nasp_atlas.analysis.tabula_sapiens.mixed_models import (
+    TabulaMixedModelResults,
+)
+from nasp_atlas.analysis.tabula_sapiens.mixed_models import (
+    tabula_sapiens_mixed_model_inference,
+)
 from nasp_atlas.analysis.tabula_sapiens.visualizations import (
     plot_nasp_association_visualizations,
 )
 from nasp_atlas.analysis.tabula_sapiens.visualizations import (
     plot_tabula_sapiens_metadata_umaps,
+)
+from nasp_atlas.analysis.tabula_sapiens.visualizations import (
+    plot_tabula_sapiens_mixed_model_inference,
 )
 from nasp_atlas.single_cell.associations import Aggregation
 from nasp_atlas.single_cell.associations import EqtlMergeMode
@@ -49,8 +62,11 @@ from nasp_atlas.single_cell.module_scoring import score_aucell_modules
 from nasp_atlas.single_cell.module_scoring import score_scanpy_modules
 from nasp_atlas.single_cell.scprocessor import SCProcessor
 from nasp_atlas.single_cell.umap import UmapPanelSpec
+from nasp_atlas.single_cell.visualization import AssociationPlotter
 from nasp_atlas.single_cell.visualization import GroupedGeneExpression
-from nasp_atlas.single_cell.visualization import SCVisualizer
+from nasp_atlas.single_cell.visualization import HeatmapPlotter
+from nasp_atlas.single_cell.visualization import SummaryPlotter
+from nasp_atlas.single_cell.visualization import UmapPlotter
 
 
 logger = logging.getLogger(__name__)
@@ -87,6 +103,99 @@ class _AssociationWorkflowState:
     group_summary_tables: list[pd.DataFrame] = field(default_factory=list)
     eqtl_annotation_tables: list[pd.DataFrame] = field(default_factory=list)
 
+    def regression_results(self) -> pd.DataFrame:
+        """Return retained regression results with their stable schema."""
+        return _ensure_declared_columns(
+            associations._concat_or_empty(self.regression_tables),
+            declared=(
+                "feature_type",
+                "feature_id",
+                "feature_label",
+                "predictor",
+                "statistical_unit",
+                "aggregation",
+                "stratify_key",
+                "stratum",
+                "analysis_role",
+                "n_units",
+                "fdr_method",
+                "n",
+                "pearson_r",
+                "pearson_pvalue",
+                "spearman_r",
+                "spearman_pvalue",
+                "slope",
+                "intercept",
+                "ols_pvalue",
+                "skipped",
+                "skip_reason",
+                "pearson_pvalue_fdr",
+                "spearman_pvalue_fdr",
+                "ols_pvalue_fdr",
+                "analysis_scope",
+                "response_estimand",
+                "eqtl_fdr_family",
+                "eqtl_source_schema",
+                "eqtl_count_unit",
+                "eqtl_predictor_transform",
+                "eqtl_table_path",
+            ),
+        )
+
+    def eqtl_annotations(self) -> pd.DataFrame:
+        """Return retained eQTL annotations with their stable schema."""
+        return _ensure_declared_columns(
+            associations._concat_or_empty(self.eqtl_annotation_tables),
+            declared=(
+                "feature_type",
+                "feature_id",
+                "feature_label",
+                "feature_value",
+                "statistical_unit",
+                "aggregation",
+                "unit_id",
+                "n_cells",
+                "n_cells_total",
+                "eqtl_matched",
+                "eqtl_merge_mode",
+                "eqtl_source_schema",
+                "eqtl_count_unit",
+                "eqtl_predictor_transform",
+                "eqtl_table_path",
+            ),
+        )
+
+    def plot_manifest(self) -> pd.DataFrame:
+        """Return produced plot records with their stable public schema."""
+        return pd.DataFrame(
+            self.manifest,
+            columns=(
+                "kind",
+                "feature_id",
+                "predictor",
+                "statistical_unit",
+                "aggregation",
+                "stratum",
+                "analysis_scope",
+                "path",
+            ),
+        )
+
+
+@dataclass(frozen=True, kw_only=True, slots=True)
+class _AssociationPlan:
+    """Metadata schema and inferential policy shared by association stages."""
+
+    obs_schema: ObsSchema
+    statistical_unit: StatisticalUnit
+    aggregation: Aggregation
+    detection_threshold: float
+    condition_reference: str | None
+    mixed_model_min_cells: int
+    mixed_model_min_donors: int
+    mixed_model_min_studies: int
+    mixed_model_min_repeated_contexts: int
+
 
 def association_analysis(
     *,
@@ -103,6 +212,9 @@ def association_analysis(
     assay_key: str = "assay",
     development_stage_key: str = "development_stage",
     age_key: str = "age_years",
+    condition_key: str = "disease",
+    study_key: str = "dataset_id",
+    condition_reference: str | None = "normal",
     module_ids: Sequence[str] | None = None,
     sensor_group: str | None = "nucleic_acid_sensors",
     gene_symbols: Sequence[str] | None = None,
@@ -114,6 +226,10 @@ def association_analysis(
     run_cell_level_descriptive_plots: bool = False,
     run_donor_aware_tests: bool = True,
     detection_threshold: float = 0.0,
+    mixed_model_min_cells: int = 10,
+    mixed_model_min_donors: int = 3,
+    mixed_model_min_studies: int = 3,
+    mixed_model_min_repeated_contexts: int = 3,
     max_plots: int | None = 200,
     plot_nasp_visualizations: bool = True,
 ) -> None:
@@ -128,10 +244,17 @@ def association_analysis(
         aggregation=aggregation,
         scorer=scorer,
         eqtl_merge_mode=eqtl_merge_mode,
+        detection_threshold=detection_threshold,
+        condition_reference=condition_reference,
+        mixed_model_min_cells=mixed_model_min_cells,
+        mixed_model_min_donors=mixed_model_min_donors,
+        mixed_model_min_studies=mixed_model_min_studies,
+        mixed_model_min_repeated_contexts=mixed_model_min_repeated_contexts,
     )
 
     output_path = Path(output_dir)
     layout = associations._association_output_dirs(output_path)
+    _reconcile_association_outputs(layout)
     schema = ObsSchema(
         donor_key=donor_key,
         tissue_key=tissue_key,
@@ -140,6 +263,19 @@ def association_analysis(
         assay_key=assay_key,
         development_stage_key=development_stage_key,
         age_key=age_key,
+        condition_key=condition_key,
+        study_key=study_key,
+    )
+    association_plan = _AssociationPlan(
+        obs_schema=schema,
+        statistical_unit=cast(StatisticalUnit, statistical_unit),
+        aggregation=cast(Aggregation, aggregation),
+        detection_threshold=detection_threshold,
+        condition_reference=condition_reference,
+        mixed_model_min_cells=mixed_model_min_cells,
+        mixed_model_min_donors=mixed_model_min_donors,
+        mixed_model_min_studies=mixed_model_min_studies,
+        mixed_model_min_repeated_contexts=mixed_model_min_repeated_contexts,
     )
     adata, scores = _load_association_inputs(
         h5ad_path=h5ad_path,
@@ -147,12 +283,11 @@ def association_analysis(
         schema=schema,
         expression_layer=expression_layer,
         expression_use_raw=expression_use_raw,
-        age_key=age_key,
     )
     feature_specs = _resolve_association_features(
         adata,
         scores,
-        layout=layout,
+        tables_dir=layout.tables_dir,
         module_ids=module_ids,
         sensor_group=sensor_group,
         gene_symbols=gene_symbols,
@@ -160,33 +295,52 @@ def association_analysis(
         gene_symbol_column=gene_symbol_column,
         expression_use_raw=expression_use_raw,
     )
+    provenance = _association_provenance(
+        h5ad_path=h5ad_path,
+        score_csv_path=score_csv_path,
+        eqtl_table_path=eqtl_table_path,
+        scores=scores,
+        feature_specs=feature_specs,
+        module_ids=module_ids,
+        gene_symbols=gene_symbols,
+        sensor_group=sensor_group,
+        scorer=scorer or associations._detect_scorer_from_scores(scores),
+        gene_symbol_column=gene_symbol_column,
+        expression_layer=expression_layer,
+        expression_use_raw=expression_use_raw,
+        eqtl_merge_mode=eqtl_merge_mode,
+        run_cell_level_descriptive_plots=run_cell_level_descriptive_plots,
+        run_donor_aware_tests=run_donor_aware_tests,
+        max_plots=max_plots,
+        plot_nasp_visualizations=plot_nasp_visualizations,
+        association_plan=association_plan,
+    )
+    associations._write_association_table(
+        provenance,
+        layout.tables_dir / "association_provenance.csv",
+    )
     if not feature_specs:
-        _write_empty_association_tables(layout)
+        _write_empty_association_tables(layout.tables_dir)
         return
 
     cell_frame = build_cell_feature_frame(
         adata,
         scores,
         feature_specs,
-        schema=schema,
+        schema=association_plan.obs_schema,
         expression_layer=expression_layer,
         use_raw=expression_use_raw,
     )
     unit_frame = aggregate_feature_frame(
         cell_frame,
-        statistical_unit=cast(StatisticalUnit, statistical_unit),
-        aggregation=cast(Aggregation, aggregation),
-        schema=schema,
-        detection_threshold=detection_threshold,
+        statistical_unit=association_plan.statistical_unit,
+        aggregation=association_plan.aggregation,
+        schema=association_plan.obs_schema,
+        detection_threshold=association_plan.detection_threshold,
     )
     nasp_results = _build_nasp_profile_results(
         cell_frame,
-        schema=schema,
-        aggregation=cast(Aggregation, aggregation),
-        detection_threshold=detection_threshold,
-        donor_key=donor_key,
-        tissue_key=tissue_key,
-        cell_type_key=cell_type_key,
+        association_plan=association_plan,
     )
     for filename, table in (
         ("nasp_evidence_profiles.csv", nasp_results.profiles),
@@ -205,41 +359,24 @@ def association_analysis(
     ):
         associations._write_association_table(
             table,
-            layout["tables"] / filename,
+            layout.tables_dir / filename,
         )
 
     workflow_state = _AssociationWorkflowState()
-    if run_donor_aware_tests and age_key in unit_frame.columns:
-        _run_age_associations(
-            cell_frame,
-            unit_frame,
-            nasp_results.profile_unit_frame,
-            workflow_state=workflow_state,
-            layout=layout,
-            schema=schema,
-            statistical_unit=statistical_unit,
-            aggregation=cast(Aggregation, aggregation),
-            detection_threshold=detection_threshold,
-            donor_key=donor_key,
-            tissue_key=tissue_key,
-            cell_type_key=cell_type_key,
-            sex_key=sex_key,
-            age_key=age_key,
-            max_plots=max_plots,
-        )
+    mixed_model_results: TabulaMixedModelResults | None = None
     if run_donor_aware_tests:
-        _run_group_associations(
+        mixed_model_results = tabula_sapiens_mixed_model_inference(
             cell_frame,
-            unit_frame,
-            workflow_state=workflow_state,
-            layout=layout,
-            schema=schema,
-            statistical_unit=statistical_unit,
-            aggregation=aggregation,
-            tissue_key=tissue_key,
-            cell_type_key=cell_type_key,
-            sex_key=sex_key,
-            max_plots=max_plots,
+            schema=association_plan.obs_schema,
+            aggregation=association_plan.aggregation,
+            detection_threshold=association_plan.detection_threshold,
+            condition_reference=association_plan.condition_reference,
+            minimum_cells=association_plan.mixed_model_min_cells,
+            minimum_donors=association_plan.mixed_model_min_donors,
+            minimum_studies=association_plan.mixed_model_min_studies,
+            minimum_repeated_contexts=(
+                association_plan.mixed_model_min_repeated_contexts
+            ),
         )
     if eqtl_table_path is not None:
         eqtl_unit_frame = unit_frame
@@ -247,25 +384,30 @@ def association_analysis(
             eqtl_unit_frame = aggregate_feature_frame(
                 cell_frame,
                 statistical_unit="donor_tissue",
-                aggregation=cast(Aggregation, aggregation),
-                schema=schema,
-                detection_threshold=detection_threshold,
+                aggregation=association_plan.aggregation,
+                schema=association_plan.obs_schema,
+                detection_threshold=association_plan.detection_threshold,
             )
         associations._run_eqtl_associations(
             eqtl_unit_frame,
             eqtl_table_path=eqtl_table_path,
             eqtl_merge_mode=cast(EqtlMergeMode, eqtl_merge_mode),
-            schema=schema,
+            schema=association_plan.obs_schema,
             regression_tables=workflow_state.regression_tables,
             annotation_tables=workflow_state.eqtl_annotation_tables,
         )
-    if run_cell_level_descriptive_plots and age_key in cell_frame.columns:
+    if (
+        run_cell_level_descriptive_plots
+        and association_plan.obs_schema.age_key in cell_frame.columns
+    ):
         workflow_state.plot_count = (
             associations._run_cell_level_descriptive_plots(
                 cell_frame,
-                predictor_key=age_key,
-                visualizer=SCVisualizer(output_dir=str(layout["regressions"])),
-                aggregation=aggregation,
+                predictor_key=association_plan.obs_schema.age_key,
+                plotter=AssociationPlotter(
+                    output_dir=str(layout.regression_plots_dir)
+                ),
+                aggregation=association_plan.aggregation,
                 manifest=workflow_state.manifest,
                 plot_count=workflow_state.plot_count,
                 max_plots=max_plots,
@@ -275,10 +417,10 @@ def association_analysis(
     _write_association_results(
         workflow_state,
         nasp_results=nasp_results,
+        mixed_model_results=mixed_model_results,
         layout=layout,
+        association_plan=association_plan,
         plot_nasp_visualizations=plot_nasp_visualizations,
-        tissue_key=tissue_key,
-        cell_type_key=cell_type_key,
     )
     logger.info(
         "[tabula_sapiens] association analysis complete -> %s",
@@ -292,6 +434,12 @@ def _validate_association_options(
     aggregation: str,
     scorer: str | None,
     eqtl_merge_mode: str,
+    detection_threshold: float,
+    condition_reference: str | None,
+    mixed_model_min_cells: int,
+    mixed_model_min_donors: int,
+    mixed_model_min_studies: int,
+    mixed_model_min_repeated_contexts: int,
 ) -> None:
     """Reject unsupported workflow options before reading large inputs."""
     valid_units = {
@@ -324,6 +472,234 @@ def _validate_association_options(
         "donor",
     ):
         raise ValueError(f"unsupported eqtl_merge_mode: {eqtl_merge_mode}")
+    _validate_detection_threshold(detection_threshold)
+    if condition_reference is not None and not condition_reference.strip():
+        raise ValueError("condition_reference must not be empty")
+    if mixed_model_min_cells < 1:
+        raise ValueError("mixed_model_min_cells must be at least 1")
+    if mixed_model_min_donors < 3:
+        raise ValueError("mixed_model_min_donors must be at least 3")
+    if mixed_model_min_studies < 3:
+        raise ValueError("mixed_model_min_studies must be at least 3")
+    if mixed_model_min_repeated_contexts < 3:
+        raise ValueError("mixed_model_min_repeated_contexts must be at least 3")
+
+
+def _validate_detection_threshold(detection_threshold: float) -> None:
+    """Reject thresholds that cannot define a finite expression boundary."""
+    if (
+        isinstance(detection_threshold, bool)
+        or not isinstance(detection_threshold, Real)
+        or not isfinite(detection_threshold)
+    ):
+        raise ValueError("detection_threshold must be a finite real number")
+
+
+def _association_provenance(
+    *,
+    h5ad_path: str | Path,
+    score_csv_path: str | Path,
+    eqtl_table_path: str | Path | None,
+    scores: pd.DataFrame,
+    feature_specs: Sequence[FeatureSpec],
+    module_ids: Sequence[str] | None,
+    gene_symbols: Sequence[str] | None,
+    sensor_group: str | None,
+    scorer: str,
+    gene_symbol_column: str,
+    expression_layer: str | None,
+    expression_use_raw: bool,
+    eqtl_merge_mode: str,
+    run_cell_level_descriptive_plots: bool,
+    run_donor_aware_tests: bool,
+    max_plots: int | None,
+    plot_nasp_visualizations: bool,
+    association_plan: _AssociationPlan,
+) -> pd.DataFrame:
+    """Return one record tying results to inputs and feature sources."""
+    h5ad_identity = _file_identity("h5ad", h5ad_path)
+    score_identity = _file_identity("score_csv", score_csv_path)
+    eqtl_identity = _optional_file_identity("eqtl", eqtl_table_path)
+    marker_path = GeneModules.default_panel_path().resolve()
+    marker_hash = hashlib.sha256(marker_path.read_bytes()).hexdigest()
+    modules = [
+        spec for spec in feature_specs if spec.feature_type == "module_score"
+    ]
+    genes = [
+        spec for spec in feature_specs if spec.feature_type == "gene_expression"
+    ]
+    record: dict[str, object] = {
+        **h5ad_identity,
+        **score_identity,
+        **eqtl_identity,
+        "scorer": scorer,
+        "gene_symbol_column": gene_symbol_column,
+        "expression_source": (
+            "raw" if expression_use_raw else expression_layer or "X"
+        ),
+        "expression_use_raw": expression_use_raw,
+        "sensor_group": sensor_group,
+        "requested_module_ids": _json_sequence(module_ids),
+        "requested_gene_symbols": _json_sequence(gene_symbols),
+        "resolved_module_feature_ids": _json_sequence(
+            [spec.feature_id for spec in modules]
+        ),
+        "resolved_module_labels": _json_sequence(
+            [spec.feature_label for spec in modules]
+        ),
+        "resolved_gene_feature_ids": _json_sequence(
+            [spec.feature_id for spec in genes]
+        ),
+        "resolved_gene_labels": _json_sequence(
+            [spec.feature_label for spec in genes]
+        ),
+        "compendium_marker_panel_path": str(marker_path),
+        "compendium_marker_panel_sha256": marker_hash,
+        "statistical_unit": association_plan.statistical_unit,
+        "aggregation": association_plan.aggregation,
+        "detection_threshold": association_plan.detection_threshold,
+        "condition_key": association_plan.obs_schema.condition_key,
+        "configured_condition_reference": (
+            association_plan.condition_reference
+        ),
+        "study_key": association_plan.obs_schema.study_key,
+        "mixed_model_min_cells": association_plan.mixed_model_min_cells,
+        "mixed_model_min_donors": association_plan.mixed_model_min_donors,
+        "mixed_model_min_studies": association_plan.mixed_model_min_studies,
+        "mixed_model_min_repeated_contexts": (
+            association_plan.mixed_model_min_repeated_contexts
+        ),
+        "eqtl_merge_mode": eqtl_merge_mode,
+        "run_cell_level_descriptive_plots": (run_cell_level_descriptive_plots),
+        "run_donor_aware_tests": run_donor_aware_tests,
+        "max_plots": max_plots,
+        "plot_nasp_visualizations": plot_nasp_visualizations,
+    }
+    score_provenance = _constant_score_provenance(scores)
+    record |= score_provenance
+    scoring_hash = score_provenance.get("scoring_marker_panel_sha256")
+    record["marker_panel_matches_score"] = (
+        str(scoring_hash) == marker_hash
+        if isinstance(scoring_hash, str) and scoring_hash
+        else pd.NA
+    )
+    return pd.DataFrame.from_records([record])
+
+
+def _file_identity(prefix: str, path: str | Path) -> dict[str, object]:
+    """Return stable path, size, and modification identity for one input."""
+    resolved = Path(path).resolve()
+    stat = resolved.stat()
+    return {
+        f"{prefix}_path": str(resolved),
+        f"{prefix}_size_bytes": stat.st_size,
+        f"{prefix}_mtime_ns": stat.st_mtime_ns,
+    }
+
+
+def _optional_file_identity(
+    prefix: str,
+    path: str | Path | None,
+) -> dict[str, object]:
+    """Return nullable file identity fields for an optional source."""
+    if path is None:
+        return {
+            f"{prefix}_path": pd.NA,
+            f"{prefix}_size_bytes": pd.NA,
+            f"{prefix}_mtime_ns": pd.NA,
+        }
+    return _file_identity(prefix, path)
+
+
+def _constant_score_provenance(scores: pd.DataFrame) -> dict[str, object]:
+    """Extract constant score-table provenance without hiding conflicts."""
+    record: dict[str, object] = {}
+    for column in (
+        "scoring_scorers",
+        "scoring_requested_scorers",
+        "scoring_expression_source",
+        "scoring_subset_fraction",
+        "scoring_random_state",
+        "scoring_module_ids",
+        "scoring_n_modules",
+        "scoring_aucell_chunk_size",
+        "scoring_aucell_num_workers",
+        "scoring_marker_panel_sha256",
+    ):
+        if column not in scores:
+            record[column] = pd.NA
+            continue
+        values = scores[column].dropna().drop_duplicates()
+        if len(values) > 1:
+            raise ValueError(
+                f"score-table provenance column {column!r} is inconsistent"
+            )
+        record[column] = values.iloc[0] if len(values) == 1 else pd.NA
+    return record
+
+
+def _json_sequence(values: Sequence[str] | None) -> str:
+    """Serialize an optional ordered selection without delimiter ambiguity."""
+    return json.dumps(list(values or ()), separators=(",", ":"))
+
+
+def _reconcile_association_outputs(
+    layout: associations._AssociationOutputLayout,
+) -> None:
+    """Remove workflow-owned stale artifacts before a deterministic rerun."""
+    for filename in (
+        "association_age_stability.csv",
+        "association_partial_correlation_age.csv",
+        "association_group_test_results.csv",
+        "association_group_summary.csv",
+        "association_provenance.csv",
+        "association_skipped_features.csv",
+        "association_mixed_model_contrasts.csv",
+        "association_mixed_model_fixed_effects.csv",
+        "association_mixed_model_term_tests.csv",
+        "association_mixed_model_variance_components.csv",
+        "association_mixed_model_diagnostics.csv",
+        "association_mixed_model_availability.csv",
+        "association_regression_results.csv",
+        "association_eqtl_annotations.csv",
+        "association_plot_manifest.csv",
+        "nasp_evidence_profiles.csv",
+        "nasp_context_summary.csv",
+        "nasp_hypothesis_priorities.csv",
+        "nasp_mechanistic_edges.csv",
+        "nasp_module_context_ranking.csv",
+        "nasp_module_coupling.csv",
+        "nasp_sensor_output_coupling.csv",
+    ):
+        (layout.tables_dir / filename).unlink(missing_ok=True)
+    for directory in (
+        layout.regression_plots_dir,
+        layout.boxplots_dir,
+        layout.barplots_dir,
+    ):
+        for path in directory.glob("*.png"):
+            path.unlink()
+    for stem in (
+        "nasp_mixed_adjusted_cell_type_effects",
+        "nasp_mixed_condition_effects_by_cell_type",
+        "nasp_mixed_age_slopes_by_cell_type",
+        "nasp_mixed_paired_tissue_effects",
+        "nasp_mixed_assay_batch_effects",
+        "nasp_mixed_variance_decomposition",
+    ):
+        (layout.mixed_model_plots_dir / f"{stem}.png").unlink(missing_ok=True)
+    for stem in (
+        "nasp_module_coupling_heatmap",
+        "nasp_competence_output_state_map",
+        "nasp_ranked_hypotheses",
+        "nasp_sensor_output_mismatch",
+        "nasp_mechanistic_edge_network",
+        "nasp_age_effects_by_cell_type",
+        "nasp_sensor_age_effects_by_cell_type",
+        "nasp_age_effect_consistency_across_cell_types",
+        "nasp_sensor_age_effect_consistency_across_cell_types",
+    ):
+        (layout.nasp_plots_dir / f"{stem}.png").unlink(missing_ok=True)
 
 
 def _load_association_inputs(
@@ -333,7 +709,6 @@ def _load_association_inputs(
     schema: ObsSchema,
     expression_layer: str | None,
     expression_use_raw: bool,
-    age_key: str,
 ) -> tuple[ad.AnnData, pd.DataFrame]:
     """Load only scored observations and the expression sources they require."""
     scores = pd.read_csv(score_csv_path, index_col="obs_name")
@@ -362,12 +737,12 @@ def _load_association_inputs(
     if associations._required_score_metadata_present(
         scores,
         adata,
-        [age_key],
+        [schema.age_key],
     ):
         logger.warning(
             "[tabula_sapiens] age column %r absent from scores and obs; "
             "age-based association will be skipped",
-            age_key,
+            schema.age_key,
         )
 
     return adata, scores
@@ -377,7 +752,7 @@ def _resolve_association_features(
     adata: ad.AnnData,
     scores: pd.DataFrame,
     *,
-    layout: dict[str, Path],
+    tables_dir: Path,
     module_ids: Sequence[str] | None,
     sensor_group: str | None,
     gene_symbols: Sequence[str] | None,
@@ -418,7 +793,7 @@ def _resolve_association_features(
             skipped,
             columns=["feature_type", "requested", "skip_reason"],
         ),
-        layout["tables"] / "association_skipped_features.csv",
+        tables_dir / "association_skipped_features.csv",
     )
     if not feature_specs:
         logger.warning(
@@ -429,8 +804,9 @@ def _resolve_association_features(
     return feature_specs
 
 
-def _write_empty_association_tables(layout: dict[str, Path]) -> None:
+def _write_empty_association_tables(tables_dir: Path) -> None:
     """Write stable empty outputs when no requested feature can be analyzed."""
+    empty_state = _AssociationWorkflowState()
     for filename in (
         "nasp_evidence_profiles.csv",
         "nasp_context_summary.csv",
@@ -439,30 +815,48 @@ def _write_empty_association_tables(layout: dict[str, Path]) -> None:
         "nasp_module_context_ranking.csv",
         "nasp_module_coupling.csv",
         "nasp_sensor_output_coupling.csv",
-        "association_age_stability.csv",
-        "association_regression_results.csv",
-        "association_group_test_results.csv",
-        "association_group_summary.csv",
-        "association_eqtl_annotations.csv",
-        "association_plot_manifest.csv",
     ):
         associations._write_association_table(
             pd.DataFrame(),
-            layout["tables"] / filename,
+            tables_dir / filename,
         )
+    associations._write_association_table(
+        empty_state.regression_results(),
+        tables_dir / "association_regression_results.csv",
+    )
+    associations._write_association_table(
+        empty_state.eqtl_annotations(),
+        tables_dir / "association_eqtl_annotations.csv",
+    )
+    associations._write_association_table(
+        empty_state.plot_manifest(),
+        tables_dir / "association_plot_manifest.csv",
+    )
+    empty = TabulaMixedModelResults.empty()
+    for filename, table in (
+        ("association_mixed_model_contrasts.csv", empty.contrasts),
+        ("association_mixed_model_fixed_effects.csv", empty.fixed_effects),
+        ("association_mixed_model_term_tests.csv", empty.term_tests),
+        (
+            "association_mixed_model_variance_components.csv",
+            empty.variance_components,
+        ),
+        ("association_mixed_model_diagnostics.csv", empty.diagnostics),
+        ("association_mixed_model_availability.csv", empty.availability),
+    ):
+        associations._write_association_table(table, tables_dir / filename)
 
 
 def _build_nasp_profile_results(
     cell_frame: pd.DataFrame,
     *,
-    schema: ObsSchema,
-    aggregation: Aggregation,
-    detection_threshold: float,
-    donor_key: str,
-    tissue_key: str,
-    cell_type_key: str,
+    association_plan: _AssociationPlan,
 ) -> _NaspProfileResults:
     """Build donor-context profile, coupling, and prioritization results."""
+    schema = association_plan.obs_schema
+    donor_key = schema.donor_key
+    tissue_key = schema.tissue_key
+    cell_type_key = schema.cell_type_key
     profile_keys = [donor_key, tissue_key, cell_type_key]
     if any(key not in cell_frame.columns for key in profile_keys):
         missing = [key for key in profile_keys if key not in cell_frame]
@@ -484,9 +878,9 @@ def _build_nasp_profile_results(
     profile_unit_frame = aggregate_feature_frame(
         cell_frame,
         statistical_unit="donor_tissue_cell_type",
-        aggregation=aggregation,
+        aggregation=association_plan.aggregation,
         schema=schema,
-        detection_threshold=detection_threshold,
+        detection_threshold=association_plan.detection_threshold,
     )
     profiles, context_summary, module_coupling = (
         associations._nasp_profile_tables(
@@ -507,12 +901,95 @@ def _build_nasp_profile_results(
         unit_columns=profile_keys,
         donor_column=donor_key,
     )
+    edge_specs = (
+        (
+            "NASP_DNA_SENSING",
+            "SIGNALING_CONTEXT_TBK1_IRF",
+            "dna_sensing_to_proximal_signaling",
+        ),
+        (
+            "NASP_RNA_SENSING",
+            "SIGNALING_CONTEXT_TBK1_IRF",
+            "rna_sensing_to_proximal_signaling",
+        ),
+        (
+            "NASP_DNA_SENSING",
+            "IFN_I_OUTPUT",
+            "dna_sensing_to_ifn_output",
+        ),
+        (
+            "NASP_RNA_SENSING",
+            "IFN_I_OUTPUT",
+            "rna_sensing_to_ifn_output",
+        ),
+        (
+            "NASP_DNA_SENSING",
+            "NFKB_CYTOKINE_OUTPUT",
+            "dna_sensing_to_nfkb_output",
+        ),
+        (
+            "NASP_RNA_SENSING",
+            "NFKB_CYTOKINE_OUTPUT",
+            "rna_sensing_to_nfkb_output",
+        ),
+        (
+            "SIGNALING_CONTEXT_TBK1_IRF",
+            "IFN_I_OUTPUT",
+            "proximal_signaling_to_ifn_output",
+        ),
+        (
+            "SIGNALING_CONTEXT_TLR",
+            "NFKB_CYTOKINE_OUTPUT",
+            "tlr_context_to_nfkb_output",
+        ),
+        (
+            "SIGNALING_CONTEXT_NFKB",
+            "NFKB_CYTOKINE_OUTPUT",
+            "nfkb_context_to_nfkb_output",
+        ),
+        (
+            "SIGNALING_CONTEXT_IFN_JAK_STAT",
+            "IFN_I_OUTPUT",
+            "ifn_response_context_to_ifn_output",
+        ),
+        ("NASP_RNA_SENSING", "ISR", "rna_sensing_to_isr"),
+        (
+            "NASP_DNA_SENSING",
+            "INFLAMMASOME",
+            "dna_sensing_to_inflammasome",
+        ),
+        (
+            "MITOCHONDRIAL_NA_SENSING",
+            "NASP_DNA_SENSING",
+            "mitochondrial_na_to_dna_sensing",
+        ),
+        (
+            "MITOCHONDRIAL_NA_SENSING",
+            "INFLAMMASOME",
+            "mitochondrial_na_to_inflammasome",
+        ),
+        ("TE_DEREPRESSION", "NASP_DNA_SENSING", "te_to_dna_sensing"),
+        ("TE_DEREPRESSION", "NASP_RNA_SENSING", "te_to_rna_sensing"),
+        (
+            "CGAMP_TRANSPORT",
+            "IFN_I_OUTPUT",
+            "cgamp_transport_to_ifn_output",
+        ),
+        ("IFN_I_OUTPUT", "NASP_FEEDBACK", "ifn_output_to_feedback"),
+        (
+            "NFKB_CYTOKINE_OUTPUT",
+            "NASP_FEEDBACK",
+            "nfkb_output_to_feedback",
+        ),
+        ("IFN_I_OUTPUT", "INFLAMMAGING", "ifn_output_to_inflammaging"),
+        ("NFKB_CYTOKINE_OUTPUT", "SASP", "nfkb_output_to_sasp"),
+    )
     mechanistic_edges = (
         pd.DataFrame()
         if module_coupling.empty
         else expected_module_coupling_report(
             module_coupling,
-            edge_specs=associations._EXPECTED_NASP_EDGES,
+            edge_specs=edge_specs,
         )
     )
     hypothesis_priorities = (
@@ -542,32 +1019,29 @@ def _run_age_associations(
     profile_unit_frame: pd.DataFrame | None,
     *,
     workflow_state: _AssociationWorkflowState,
-    layout: dict[str, Path],
-    schema: ObsSchema,
-    statistical_unit: str,
-    aggregation: Aggregation,
-    detection_threshold: float,
-    donor_key: str,
-    tissue_key: str,
-    cell_type_key: str,
-    sex_key: str,
-    age_key: str,
+    layout: associations._AssociationOutputLayout,
+    association_plan: _AssociationPlan,
     max_plots: int | None,
 ) -> None:
     """Run global and context-specific donor-aware age analyses."""
-    visualizer = SCVisualizer(output_dir=str(layout["regressions"]))
+    schema = association_plan.obs_schema
+    donor_key = schema.donor_key
+    tissue_key = schema.tissue_key
+    cell_type_key = schema.cell_type_key
+    sex_key = schema.sex_key
+    age_key = schema.age_key
+    plotter = AssociationPlotter(output_dir=str(layout.regression_plots_dir))
     scope = (
         "global_donor"
-        if statistical_unit == "donor"
-        else f"pooled_{statistical_unit}"
+        if association_plan.statistical_unit == "donor"
+        else f"pooled_{association_plan.statistical_unit}"
     )
     workflow_state.plot_count = associations._run_continuous_associations(
         unit_frame,
         predictor_key=age_key,
-        visualizer=visualizer,
-        layout=layout,
-        statistical_unit=statistical_unit,
-        aggregation=aggregation,
+        plotter=plotter,
+        statistical_unit=association_plan.statistical_unit,
+        aggregation=association_plan.aggregation,
         manifest=workflow_state.manifest,
         regression_tables=workflow_state.regression_tables,
         plot_count=workflow_state.plot_count,
@@ -583,25 +1057,24 @@ def _run_age_associations(
         workflow_state.plot_count = associations._run_continuous_associations(
             unit_frame,
             predictor_key=age_key,
-            visualizer=visualizer,
-            layout=layout,
-            statistical_unit=statistical_unit,
-            aggregation=aggregation,
+            plotter=plotter,
+            statistical_unit=association_plan.statistical_unit,
+            aggregation=association_plan.aggregation,
             manifest=workflow_state.manifest,
             regression_tables=workflow_state.regression_tables,
             plot_count=workflow_state.plot_count,
             max_plots=max_plots,
             stratify_key=sex_key,
-            analysis_scope=f"within_sex_{statistical_unit}",
+            analysis_scope=f"within_sex_{association_plan.statistical_unit}",
         )
 
     if donor_key in cell_frame.columns and tissue_key in cell_frame.columns:
         donor_tissue_frame = aggregate_feature_frame(
             cell_frame,
             statistical_unit="donor_tissue",
-            aggregation=aggregation,
+            aggregation=association_plan.aggregation,
             schema=schema,
-            detection_threshold=detection_threshold,
+            detection_threshold=association_plan.detection_threshold,
         )
         age_by_tissue = regress_features_on_continuous(
             donor_tissue_frame,
@@ -638,7 +1111,7 @@ def _run_age_associations(
         )
         associations._write_association_table(
             partial,
-            layout["tables"] / "association_partial_correlation_age.csv",
+            layout.tables_dir / "association_partial_correlation_age.csv",
         )
 
 
@@ -647,16 +1120,15 @@ def _run_group_associations(
     unit_frame: pd.DataFrame,
     *,
     workflow_state: _AssociationWorkflowState,
-    layout: dict[str, Path],
-    schema: ObsSchema,
-    statistical_unit: str,
-    aggregation: str,
-    tissue_key: str,
-    cell_type_key: str,
-    sex_key: str,
+    layout: associations._AssociationOutputLayout,
+    association_plan: _AssociationPlan,
     max_plots: int | None,
 ) -> None:
     """Run categorical tests supported by the selected statistical unit."""
+    schema = association_plan.obs_schema
+    tissue_key = schema.tissue_key
+    cell_type_key = schema.cell_type_key
+    sex_key = schema.sex_key
     if (
         cell_type_key in unit_frame.columns
         and unit_frame[cell_type_key].dropna().nunique() < 2
@@ -667,7 +1139,7 @@ def _run_group_associations(
             "[tabula_sapiens] skipping cell-type tests because %s "
             "does not preserve cell type; use "
             "statistical_unit='donor_tissue_cell_type'",
-            statistical_unit,
+            association_plan.statistical_unit,
         )
 
     group_keys = [
@@ -688,10 +1160,12 @@ def _run_group_associations(
             unit_frame,
             group_key=group_key,
             schema=schema,
-            visualizer=SCVisualizer(output_dir=str(layout["boxplots"])),
-            barplot_visualizer=SCVisualizer(output_dir=str(layout["barplots"])),
-            statistical_unit=statistical_unit,
-            aggregation=aggregation,
+            plotter=AssociationPlotter(output_dir=str(layout.boxplots_dir)),
+            barplot_plotter=AssociationPlotter(
+                output_dir=str(layout.barplots_dir)
+            ),
+            statistical_unit=association_plan.statistical_unit,
+            aggregation=association_plan.aggregation,
             tissue_key=tissue_key,
             stratify_key=stratify_key,
             stratify_colors=(
@@ -732,58 +1206,179 @@ def _write_association_results(
     workflow_state: _AssociationWorkflowState,
     *,
     nasp_results: _NaspProfileResults,
-    layout: dict[str, Path],
+    mixed_model_results: TabulaMixedModelResults | None,
+    layout: associations._AssociationOutputLayout,
+    association_plan: _AssociationPlan,
     plot_nasp_visualizations: bool,
-    tissue_key: str,
-    cell_type_key: str,
 ) -> None:
-    """Finalize inferential tables, NASP figures, and the plot manifest."""
-    regression_results = associations._concat_or_empty(
-        workflow_state.regression_tables
+    """Finalize mixed-model tables, retained analyses, and figures."""
+    schema = association_plan.obs_schema
+    regression_results = workflow_state.regression_results()
+    eqtl_annotations = workflow_state.eqtl_annotations()
+    empty_mixed = TabulaMixedModelResults.empty()
+    mixed_tables = (
+        {
+            "association_mixed_model_contrasts.csv": (
+                mixed_model_results.contrasts
+            ),
+            "association_mixed_model_fixed_effects.csv": (
+                mixed_model_results.fixed_effects
+            ),
+            "association_mixed_model_term_tests.csv": (
+                mixed_model_results.term_tests
+            ),
+            "association_mixed_model_variance_components.csv": (
+                mixed_model_results.variance_components
+            ),
+            "association_mixed_model_diagnostics.csv": (
+                mixed_model_results.diagnostics
+            ),
+            "association_mixed_model_availability.csv": (
+                mixed_model_results.availability
+            ),
+        }
+        if mixed_model_results is not None
+        else {
+            "association_mixed_model_contrasts.csv": empty_mixed.contrasts,
+            "association_mixed_model_fixed_effects.csv": (
+                empty_mixed.fixed_effects
+            ),
+            "association_mixed_model_term_tests.csv": empty_mixed.term_tests,
+            "association_mixed_model_variance_components.csv": (
+                empty_mixed.variance_components
+            ),
+            "association_mixed_model_diagnostics.csv": (
+                empty_mixed.diagnostics
+            ),
+            "association_mixed_model_availability.csv": (
+                empty_mixed.availability
+            ),
+        }
     )
-    age_stability = _age_stability_table(regression_results)
 
     for filename, table in (
         ("association_regression_results.csv", regression_results),
-        ("association_age_stability.csv", age_stability),
-        (
-            "association_group_test_results.csv",
-            associations._concat_or_empty(workflow_state.group_test_tables),
-        ),
-        (
-            "association_group_summary.csv",
-            associations._concat_or_empty(workflow_state.group_summary_tables),
-        ),
         (
             "association_eqtl_annotations.csv",
-            associations._concat_or_empty(
-                workflow_state.eqtl_annotation_tables
-            ),
+            eqtl_annotations,
         ),
     ):
         associations._write_association_table(
             table,
-            layout["tables"] / filename,
+            layout.tables_dir / filename,
+        )
+    for filename, table in mixed_tables.items():
+        associations._write_association_table(
+            table,
+            layout.tables_dir / filename,
         )
 
     if plot_nasp_visualizations:
         plot_nasp_association_visualizations(
-            output_dir=layout["nasp"],
+            output_dir=layout.nasp_plots_dir,
             module_coupling=nasp_results.module_coupling,
             context_summary=nasp_results.context_summary,
             hypothesis_priorities=nasp_results.hypothesis_priorities,
             sensor_output_coupling=nasp_results.sensor_output_coupling,
-            regression_results=regression_results,
-            age_stability=age_stability,
+            regression_results=pd.DataFrame(),
+            age_stability=pd.DataFrame(),
             mechanistic_edges=nasp_results.mechanistic_edges,
-            tissue_key=tissue_key,
-            cell_type_key=cell_type_key,
+            tissue_key=schema.tissue_key,
+            cell_type_key=schema.cell_type_key,
         )
+        workflow_state.manifest.extend(
+            {
+                "kind": "nasp_summary",
+                "feature_id": None,
+                "predictor": None,
+                "statistical_unit": "donor_tissue_cell_type",
+                "aggregation": association_plan.aggregation,
+                "stratum": None,
+                "analysis_scope": path.stem,
+                "path": str(path),
+            }
+            for path in sorted(layout.nasp_plots_dir.glob("*.png"))
+        )
+        if mixed_model_results is not None:
+            mixed_paths = plot_tabula_sapiens_mixed_model_inference(
+                output_dir=layout.mixed_model_plots_dir,
+                contrasts=mixed_model_results.contrasts,
+                variance_components=(mixed_model_results.variance_components),
+            )
+            workflow_state.manifest.extend(
+                {
+                    "kind": "mixed_model_inference",
+                    "feature_id": None,
+                    "predictor": None,
+                    "statistical_unit": _mixed_model_observational_unit(
+                        mixed_model_results
+                    ),
+                    "aggregation": _mixed_model_aggregation(
+                        mixed_model_results
+                    ),
+                    "stratum": None,
+                    "analysis_scope": path.stem,
+                    "path": str(path),
+                }
+                for path in mixed_paths
+            )
 
     associations._write_association_table(
-        pd.DataFrame(workflow_state.manifest),
-        layout["tables"] / "association_plot_manifest.csv",
+        workflow_state.plot_manifest(),
+        layout.tables_dir / "association_plot_manifest.csv",
     )
+
+
+def _ensure_declared_columns(
+    table: pd.DataFrame,
+    *,
+    declared: Sequence[str],
+) -> pd.DataFrame:
+    """Return a stable base schema while preserving analysis-specific fields."""
+    normalized = table.copy()
+    for column in declared:
+        if column not in normalized:
+            normalized[column] = pd.Series(index=normalized.index, dtype=object)
+    extras = [column for column in normalized if column not in declared]
+    return normalized.reindex(columns=[*declared, *extras])
+
+
+def _mixed_model_aggregation(results: TabulaMixedModelResults) -> str:
+    """Return the recorded aggregation used by mixed-model outputs."""
+    for table in (
+        results.contrasts,
+        results.variance_components,
+        results.availability,
+    ):
+        if "aggregation" not in table:
+            continue
+        if (
+            values := table["aggregation"]
+            .dropna()
+            .astype(str)
+            .unique()
+            .tolist()
+        ):
+            return values[0]
+    return ""
+
+
+def _mixed_model_observational_unit(
+    results: TabulaMixedModelResults,
+) -> str:
+    """Return the recorded observational unit used by mixed models."""
+    for table in (
+        results.contrasts,
+        results.variance_components,
+        results.availability,
+    ):
+        if "observational_unit" not in table:
+            continue
+        if values := (
+            table["observational_unit"].dropna().astype(str).unique().tolist()
+        ):
+            return values[0]
+    return ""
 
 
 def tabula_sapiens_tissue_analysis(
@@ -802,6 +1397,9 @@ def tabula_sapiens_tissue_analysis(
     development_stage_key: str = "development_stage",
     assay_key: str = "assay",
     age_key: str = "age_years",
+    condition_key: str = "disease",
+    study_key: str = "dataset_id",
+    condition_reference: str | None = "normal",
     donor_key: str = "donor_id",
     gene_symbol_column: str = "feature_name",
     expression_layer: str | None = None,
@@ -814,6 +1412,11 @@ def tabula_sapiens_tissue_analysis(
     single_tissue_use_rep: str | None = "X_scvi",
     statistical_unit: StatisticalUnit = "donor",
     aggregation: Aggregation = "mean",
+    detection_threshold: float = 0.0,
+    mixed_model_min_cells: int = 10,
+    mixed_model_min_donors: int = 3,
+    mixed_model_min_studies: int = 3,
+    mixed_model_min_repeated_contexts: int = 3,
     max_plots: int | None = 200,
     plot_nasp_visualizations: bool = True,
 ) -> dict[str, Path]:
@@ -844,6 +1447,9 @@ def tabula_sapiens_tissue_analysis(
       development_stage_key: Obs column identifying development stage.
       assay_key: Obs column identifying assay.
       age_key: Obs column containing or receiving numeric age.
+      condition_key: Obs column identifying biological condition.
+      study_key: Obs column identifying source studies in combined inputs.
+      condition_reference: Reference condition for within-cell-type effects.
       donor_key: Obs column identifying donors.
       gene_symbol_column: Var column containing gene symbols.
       expression_layer: Expression layer used for scoring and associations.
@@ -856,6 +1462,14 @@ def tabula_sapiens_tissue_analysis(
       single_tissue_use_rep: Representation for tissue UMAP recomputation.
       statistical_unit: Primary association statistical unit.
       aggregation: Cell-to-unit score aggregation.
+      detection_threshold: Finite per-cell floor used by expressing-fraction
+        aggregations.
+      mixed_model_min_cells: Minimum cells supporting each modeled aggregate.
+      mixed_model_min_donors: Minimum donors supporting a modeled level.
+      mixed_model_min_studies: Minimum studies supporting a study random
+        intercept.
+      mixed_model_min_repeated_contexts: Minimum repeated assay contexts
+        supporting a context variance component.
       max_plots: Maximum association plots written per scorer.
       plot_nasp_visualizations: Whether to render mechanistic NASP summaries.
 
@@ -867,6 +1481,7 @@ def tabula_sapiens_tissue_analysis(
       FileNotFoundError: If the input h5ad or completed score table is absent.
       ValueError: If no scorer or an unsupported scorer is requested.
     """
+    _validate_detection_threshold(detection_threshold)
     input_path = Path(h5ad_path)
     if not input_path.is_file():
         raise FileNotFoundError(f"input h5ad does not exist: {input_path}")
@@ -879,6 +1494,17 @@ def tabula_sapiens_tissue_analysis(
         invalid_text = ", ".join(sorted(invalid_scorers))
         raise ValueError(f"unsupported scorers: {invalid_text}")
 
+    schema = ObsSchema(
+        donor_key=donor_key,
+        tissue_key=tissue_key,
+        cell_type_key=cell_type_key,
+        sex_key=sex_key,
+        assay_key=assay_key,
+        development_stage_key=development_stage_key,
+        age_key=age_key,
+        condition_key=condition_key,
+        study_key=study_key,
+    )
     output_name = run_name or tissue_label or input_path.stem
     run_dir = Path(output_dir) / scoring.safe_filename_token(output_name)
     scoring_dir = run_dir / "scoring"
@@ -897,13 +1523,13 @@ def tabula_sapiens_tissue_analysis(
             output_dir=scoring_dir,
             subset_fraction=subset_fraction,
             random_state=random_state,
-            tissue_key=tissue_key,
-            cell_type_key=cell_type_key,
-            sex_key=sex_key,
-            development_stage_key=development_stage_key,
-            assay_key=assay_key,
-            age_key=age_key,
-            donor_key=donor_key,
+            tissue_key=schema.tissue_key,
+            cell_type_key=schema.cell_type_key,
+            sex_key=schema.sex_key,
+            development_stage_key=schema.development_stage_key,
+            assay_key=schema.assay_key,
+            age_key=schema.age_key,
+            donor_key=schema.donor_key,
             gene_symbol_column=gene_symbol_column,
             expression_layer=expression_layer,
             module_ids=module_ids,
@@ -914,7 +1540,7 @@ def tabula_sapiens_tissue_analysis(
             aucell_chunk_size=aucell_chunk_size,
             aucell_num_workers=aucell_num_workers,
             score_table_filename=score_table_filename,
-            heatmap_groupby=cell_type_key,
+            heatmap_groupby=schema.cell_type_key,
             single_tissue=tissue_label,
             single_tissue_use_rep=single_tissue_use_rep,
         )
@@ -935,18 +1561,28 @@ def tabula_sapiens_tissue_analysis(
             output_dir=association_dir,
             gene_symbol_column=gene_symbol_column,
             expression_layer=expression_layer,
-            donor_key=donor_key,
-            tissue_key=tissue_key,
-            cell_type_key=cell_type_key,
-            sex_key=sex_key,
-            assay_key=assay_key,
-            development_stage_key=development_stage_key,
-            age_key=age_key,
+            donor_key=schema.donor_key,
+            tissue_key=schema.tissue_key,
+            cell_type_key=schema.cell_type_key,
+            sex_key=schema.sex_key,
+            assay_key=schema.assay_key,
+            development_stage_key=schema.development_stage_key,
+            age_key=schema.age_key,
+            condition_key=schema.condition_key,
+            study_key=schema.study_key,
+            condition_reference=condition_reference,
             module_ids=module_ids,
             sensor_group=sensor_group,
             statistical_unit=statistical_unit,
             aggregation=aggregation,
+            detection_threshold=detection_threshold,
             scorer=scorer_name,
+            mixed_model_min_cells=mixed_model_min_cells,
+            mixed_model_min_donors=mixed_model_min_donors,
+            mixed_model_min_studies=mixed_model_min_studies,
+            mixed_model_min_repeated_contexts=(
+                mixed_model_min_repeated_contexts
+            ),
             max_plots=max_plots,
             plot_nasp_visualizations=plot_nasp_visualizations,
         )
@@ -1031,10 +1667,12 @@ def tabula_sapiens_scoring_analysis(
         single_tissue=single_tissue,
         single_tissue_use_rep=single_tissue_use_rep,
     )
-    viz = SCVisualizer(output_dir=output_dir)
+    umap_plotter = UmapPlotter(output_dir=output_dir)
+    heatmap_plotter = HeatmapPlotter(output_dir=output_dir)
+    summary_plotter = SummaryPlotter(output_dir=output_dir)
     plot_tabula_sapiens_metadata_umaps(
         adata,
-        viz=viz,
+        plotter=umap_plotter,
         tissue_key=tissue_key,
         sex_key=sex_key,
         development_stage_key=development_stage_key,
@@ -1091,7 +1729,7 @@ def tabula_sapiens_scoring_analysis(
                 groupby_key,
             )
             grouped_expression_by_obs[groupby_key] = (
-                viz.summarize_gene_expression_by_obs(
+                heatmap_plotter.summarize_gene_expression_by_obs(
                     adata,
                     heatmap_genes,
                     groupby=groupby_key,
@@ -1100,19 +1738,20 @@ def tabula_sapiens_scoring_analysis(
                 )
             )
 
-    viz.plot_multi_gene_umap_panel(
+    umap_plotter.plot_multi_gene_umap_panel(
         adata=adata,
         genes=sensors,
         filename="NA_SENSORS_gene_expression_umaps",
         gene_symbol_column=gene_symbol_column,
         expression_layer=expression_layer,
         ncols=6,
+        shared_colorbar=True,
         size=point_size,
     )
     scoring.plot_gene_expression_heatmaps_by_obs(
         adata=adata,
         genes=sensors,
-        viz=viz,
+        plotter=heatmap_plotter,
         filename_prefix="NA_SENSORS",
         groupby_keys=heatmap_groupby_keys,
         gene_symbol_column=gene_symbol_column,
@@ -1124,7 +1763,7 @@ def tabula_sapiens_scoring_analysis(
         _plot_module_gene_umaps(
             adata=adata,
             module_genes_by_id=module_genes_by_id,
-            viz=viz,
+            plotter=umap_plotter,
             gene_symbol_column=gene_symbol_column,
             expression_layer=expression_layer,
             ncols=6,
@@ -1133,7 +1772,7 @@ def tabula_sapiens_scoring_analysis(
         _plot_module_gene_heatmaps_by_obs(
             adata=adata,
             module_genes_by_id=module_genes_by_id,
-            viz=viz,
+            plotter=heatmap_plotter,
             groupby_keys=heatmap_groupby_keys,
             gene_symbol_column=gene_symbol_column,
             expression_layer=expression_layer,
@@ -1143,7 +1782,9 @@ def tabula_sapiens_scoring_analysis(
     scoring.module_scoring_outputs(
         adata,
         selected_module_ids,
-        viz=viz,
+        umap_plotter=umap_plotter,
+        heatmap_plotter=heatmap_plotter,
+        summary_plotter=summary_plotter,
         output_dir=output_dir,
         score_table_filename=score_table_filename,
         score_scanpy=score_scanpy,
@@ -1265,7 +1906,7 @@ def _plot_module_gene_umaps(
     adata: ad.AnnData,
     module_genes_by_id: Mapping[str, Sequence[str]],
     *,
-    viz: SCVisualizer,
+    plotter: UmapPlotter,
     gene_symbol_column: str = "feature_name",
     expression_layer: str | None = None,
     ncols: int = 6,
@@ -1282,13 +1923,14 @@ def _plot_module_gene_umaps(
             module_id,
             len(module_genes),
         )
-        viz.plot_multi_gene_umap_panel(
+        plotter.plot_multi_gene_umap_panel(
             adata=adata,
             genes=list(module_genes),
             filename=f"{module_id}_gene_expression_umaps",
             gene_symbol_column=gene_symbol_column,
             expression_layer=expression_layer,
             ncols=ncols,
+            shared_colorbar=True,
             size=point_size,
         )
 
@@ -1297,7 +1939,7 @@ def _plot_module_gene_heatmaps_by_obs(
     *,
     adata: ad.AnnData,
     module_genes_by_id: Mapping[str, Sequence[str]],
-    viz: SCVisualizer,
+    plotter: HeatmapPlotter,
     groupby_keys: Sequence[str],
     gene_symbol_column: str,
     expression_layer: str | None,
@@ -1317,7 +1959,7 @@ def _plot_module_gene_heatmaps_by_obs(
         scoring.plot_gene_expression_heatmaps_by_obs(
             adata=adata,
             genes=module_genes,
-            viz=viz,
+            plotter=plotter,
             filename_prefix=module_id,
             groupby_keys=groupby_keys,
             gene_symbol_column=gene_symbol_column,

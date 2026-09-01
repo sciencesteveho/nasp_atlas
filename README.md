@@ -43,9 +43,11 @@ plot their expression via UMAP:
 ```python
 from nasp_compendium import GeneModules
 from nasp_atlas.single_cell import SCUtils
+from nasp_atlas.single_cell.visualization import UmapPlotter
 
 single_cell = SCUtils(output_dir="results")
 adata = single_cell.load_h5ad("atlas_subset.h5ad")
+umap_plotter = UmapPlotter(output_dir="results")
 
 gene_modules = GeneModules()
 nucleic_acid_sensors = gene_modules.sensors(
@@ -55,7 +57,7 @@ nucleic_acid_sensors = gene_modules.sensors(
     output="symbols",
 )
 
-single_cell.viz.plot_multi_gene_umap_panel(
+umap_plotter.plot_multi_gene_umap_panel(
     adata,
     genes=nucleic_acid_sensors,
     filename="nucleic_acid_sensors",
@@ -70,7 +72,7 @@ single_cell.viz.plot_multi_gene_umap_panel(
 | Module | Purpose | Documentation |
 | --- | --- | --- |
 | `nasp_atlas.single_cell` | Processing, module scoring, associations, and reusable utilities | [SCProcessor](docs/scprocessor.md) |
-| `nasp_atlas.single_cell.visualization` | Embeddings, heatmaps, dot plots, association plots, and NASP summaries | [SCVisualizer](docs/scvisualizer.md) |
+| `nasp_atlas.single_cell.visualization` | Focused plotters for embeddings, heatmaps, associations, inference, and NASP summaries | [Visualization plotters](docs/visualization.md) |
 | `nasp_atlas.cellxgene` | CELLxGENE Census metadata querying, categorization, filtering, and plots | [CELLxGENE](nasp_atlas/cellxgene/README.md) |
 | `nasp_atlas.analysis` | Tabula Sapiens workflows, donor-aware inference, and atlas summaries | [Outputs and interpretation](docs/analysis_outputs.md) |
 

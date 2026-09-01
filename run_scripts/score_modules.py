@@ -130,6 +130,51 @@ def _parse_arguments() -> argparse.Namespace:
         default="mean",
     )
     parser.add_argument(
+        "--detection-threshold",
+        type=float,
+        default=0.0,
+        help="Finite expression floor for fraction/percent aggregations.",
+    )
+    parser.add_argument(
+        "--condition-key",
+        default="disease",
+        help="Obs column used for condition-by-cell-type mixed models.",
+    )
+    parser.add_argument(
+        "--condition-reference",
+        default="normal",
+        help="Reference condition for within-cell-type contrasts.",
+    )
+    parser.add_argument(
+        "--study-key",
+        default="dataset_id",
+        help="Obs column identifying studies in combined-atlas models.",
+    )
+    parser.add_argument(
+        "--mixed-model-min-cells",
+        type=int,
+        default=10,
+        help="Minimum finite cell values in each donor-context-assay row.",
+    )
+    parser.add_argument(
+        "--mixed-model-min-donors",
+        type=int,
+        default=3,
+        help="Minimum independent donors supporting a modeled level.",
+    )
+    parser.add_argument(
+        "--mixed-model-min-studies",
+        type=int,
+        default=3,
+        help="Minimum studies required for a study random intercept.",
+    )
+    parser.add_argument(
+        "--mixed-model-min-repeated-contexts",
+        type=int,
+        default=3,
+        help="Minimum repeated assay contexts for a context random effect.",
+    )
+    parser.add_argument(
         "--max-plots",
         type=int,
         default=200,
@@ -140,8 +185,8 @@ def _parse_arguments() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Render dynamically sized NASP summaries, faceted by tissue for "
-            "complete-atlas inputs."
+            "Render fixed mixed-model inference and NASP summary figures, "
+            "faceted by tissue where applicable."
         ),
     )
     parser.add_argument(
@@ -178,6 +223,16 @@ def main() -> None:
         single_tissue_use_rep=args.single_tissue_use_rep,
         statistical_unit=args.statistical_unit,
         aggregation=args.aggregation,
+        detection_threshold=args.detection_threshold,
+        condition_key=args.condition_key,
+        condition_reference=args.condition_reference,
+        study_key=args.study_key,
+        mixed_model_min_cells=args.mixed_model_min_cells,
+        mixed_model_min_donors=args.mixed_model_min_donors,
+        mixed_model_min_studies=args.mixed_model_min_studies,
+        mixed_model_min_repeated_contexts=(
+            args.mixed_model_min_repeated_contexts
+        ),
         max_plots=args.max_plots,
         plot_nasp_visualizations=args.nasp_visualizations,
     )

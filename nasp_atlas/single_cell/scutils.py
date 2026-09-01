@@ -15,7 +15,6 @@ import scanpy as sc  # type: ignore[import]
 
 from nasp_atlas.single_cell.config import EmbeddingConfig
 from nasp_atlas.single_cell.scprocessor import SCProcessor
-from nasp_atlas.single_cell.visualization import SCVisualizer
 
 
 logger = logging.getLogger(__name__)
@@ -33,7 +32,6 @@ class SCUtils:
       config: EmbeddingConfig driving the run (if provided)
       random_seed: Seed used throughout
       processor: SCProcessor instance
-      viz: SCVisualizer instance
 
     Example Usage:
       >>> from nasp_atlas.single_cell import EmbeddingConfig
@@ -77,8 +75,6 @@ class SCUtils:
             output_dir=self.output_dir,
             random_seed=self.random_seed,
         )
-        self.viz = SCVisualizer(output_dir=self.output_dir)
-
         if config is not None:
             self._dump_config(config)
 

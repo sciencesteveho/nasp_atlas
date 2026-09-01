@@ -10,6 +10,9 @@ from __future__ import annotations
 from nasp_atlas.single_cell.associations.aggregation import (
     aggregate_feature_frame,
 )
+from nasp_atlas.single_cell.associations.aggregation import (
+    aggregate_feature_frame_by_keys,
+)
 from nasp_atlas.single_cell.associations.categorical import (
     summarize_feature_groups,
 )
@@ -41,6 +44,14 @@ from nasp_atlas.single_cell.associations.features import (
     build_cell_feature_frame,
 )
 from nasp_atlas.single_cell.associations.features import resolve_feature_specs
+from nasp_atlas.single_cell.associations.mixed_models import MixedModelContrast
+from nasp_atlas.single_cell.associations.mixed_models import (
+    MixedModelInferenceResult,
+)
+from nasp_atlas.single_cell.associations.mixed_models import MixedModelSpec
+from nasp_atlas.single_cell.associations.mixed_models import (
+    mixed_model_inference,
+)
 from nasp_atlas.single_cell.associations.stability import (
     summarize_continuous_association_stability,
 )
@@ -51,15 +62,20 @@ __all__ = [
     "EqtlMergeMode",
     "FeatureSpec",
     "FeatureType",
+    "MixedModelContrast",
+    "MixedModelInferenceResult",
+    "MixedModelSpec",
     "ObsSchema",
     "StatisticalUnit",
     "aggregate_feature_frame",
+    "aggregate_feature_frame_by_keys",
     "associate_features_with_eqtl_counts",
     "benjamini_hochberg",
     "build_cell_feature_frame",
     "build_eqtl_association_frames",
     "merge_eqtl_counts",
     "metadata_columns",
+    "mixed_model_inference",
     "partial_correlation_controlling_tissue",
     "prepare_eqtl_table",
     "regress_features_on_continuous",

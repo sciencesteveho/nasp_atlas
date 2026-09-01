@@ -15,7 +15,7 @@ from nasp_atlas.analysis import plot_nasp_association_visualizations
 from nasp_atlas.analysis.tabula_sapiens import (
     visualizations as tabula_visualizations,
 )
-from nasp_atlas.single_cell.visualization import SCVisualizer
+from nasp_atlas.single_cell.visualization import NaspPlotter
 
 
 def _visualization_tables() -> dict[str, pd.DataFrame]:
@@ -219,12 +219,12 @@ def _visualization_tables() -> dict[str, pd.DataFrame]:
     }
 
 
-def test_visualizer_writes_module_coupling_heatmap(tmp_path: Path) -> None:
+def test_plotter_writes_module_coupling_heatmap(tmp_path: Path) -> None:
     """A supported coupling table produces a symmetric heatmap."""
     tables = _visualization_tables()
-    visualizer = SCVisualizer(tmp_path)
+    plotter = NaspPlotter(tmp_path)
 
-    visualizer.plot_module_coupling_heatmap(
+    plotter.plot_module_coupling_heatmap(
         tables["module_coupling"],
         filename="coupling",
         facet_column="tissue",
@@ -233,12 +233,34 @@ def test_visualizer_writes_module_coupling_heatmap(tmp_path: Path) -> None:
     assert (tmp_path / "coupling.png").stat().st_size > 0
 
 
-def test_visualizer_writes_competence_output_state_map(tmp_path: Path) -> None:
+def test_module_coupling_heatmap_uses_requested_title(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A caller title replaces the automatic analysis-qualified title."""
+    figures = []
+    close_figure = plt.close
+    monkeypatch.setattr(plt, "close", figures.append)
+
+    try:
+        NaspPlotter(tmp_path).plot_module_coupling_heatmap(
+            _visualization_tables()["module_coupling"],
+            filename="titled_coupling",
+            title="Module coupling",
+        )
+
+        assert figures[0].axes[0].get_title() == "Module coupling"
+    finally:
+        for figure in figures:
+            close_figure(figure)
+
+
+def test_plotter_writes_competence_output_state_map(tmp_path: Path) -> None:
     """Supported contexts produce a donor-scaled competence/output map."""
     tables = _visualization_tables()
-    visualizer = SCVisualizer(tmp_path)
+    plotter = NaspPlotter(tmp_path)
 
-    visualizer.plot_competence_output_state_map(
+    plotter.plot_competence_output_state_map(
         tables["context_summary"],
         filename="states",
         label_columns=["cell_type"],
@@ -246,6 +268,32 @@ def test_visualizer_writes_competence_output_state_map(tmp_path: Path) -> None:
     )
 
     assert (tmp_path / "states.png").stat().st_size > 0
+
+
+def test_competence_state_map_can_title_panels_by_tissue_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Suppressing the shared title leaves each tissue facet as its title."""
+    figures = []
+    close_figure = plt.close
+    monkeypatch.setattr(plt, "close", figures.append)
+
+    try:
+        NaspPlotter(tmp_path).plot_competence_output_state_map(
+            _visualization_tables()["context_summary"],
+            filename="tissue_titled_states",
+            label_columns=["cell_type"],
+            facet_column="tissue",
+            title=None,
+            adjust_labels=False,
+        )
+
+        titles = [axis.get_title() for axis in figures[0].axes[:2]]
+        assert titles == ["liver", "lung"]
+    finally:
+        for figure in figures:
+            close_figure(figure)
 
 
 def test_competence_state_map_scales_context_panels_and_tissue_facets(
@@ -274,14 +322,14 @@ def test_competence_state_map_scales_context_panels_and_tissue_facets(
         )
 
     try:
-        SCVisualizer(tmp_path).plot_competence_output_state_map(
+        NaspPlotter(tmp_path).plot_competence_output_state_map(
             contexts(("liver",), 24),
             filename="single_tissue_states",
             label_columns=["cell_type"],
             facet_column="tissue",
             adjust_labels=False,
         )
-        SCVisualizer(tmp_path).plot_competence_output_state_map(
+        NaspPlotter(tmp_path).plot_competence_output_state_map(
             contexts(("liver", "lung"), 30),
             filename="multi_tissue_states",
             label_columns=["cell_type"],
@@ -311,7 +359,7 @@ def test_competence_state_map_scales_support_to_requested_size_range(
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        SCVisualizer(tmp_path).plot_competence_output_state_map(
+        NaspPlotter(tmp_path).plot_competence_output_state_map(
             tables["context_summary"],
             filename="states_with_sizes",
             label_columns=["cell_type"],
@@ -338,7 +386,7 @@ def test_competence_state_map_forwards_label_adjustment_controls(
 
     monkeypatch.setattr(nasp_visualization, "adjust_text", capture_adjustment)
 
-    SCVisualizer(tmp_path).plot_competence_output_state_map(
+    NaspPlotter(tmp_path).plot_competence_output_state_map(
         _visualization_tables()["context_summary"],
         filename="states_with_adjustment",
         label_columns=["cell_type"],
@@ -356,19 +404,19 @@ def test_competence_state_map_forwards_label_adjustment_controls(
     assert adjustment["max_move"] == (4, 6)
 
 
-def test_visualizer_writes_ranked_hypothesis_panels(
+def test_plotter_writes_ranked_hypothesis_panels(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     """Ranked panels retain scientific titles and show scoring formulas."""
     tables = _visualization_tables()
-    visualizer = SCVisualizer(tmp_path)
+    plotter = NaspPlotter(tmp_path)
     figures = []
     close_figure = plt.close
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        visualizer.plot_ranked_nasp_hypotheses(
+        plotter.plot_ranked_nasp_hypotheses(
             tables["hypothesis_priorities"],
             filename="hypotheses",
             label_columns=["tissue", "cell_type"],
@@ -395,12 +443,42 @@ def test_visualizer_writes_ranked_hypothesis_panels(
             close_figure(figure)
 
 
-def test_visualizer_writes_sensor_output_mismatch_map(tmp_path: Path) -> None:
+def test_ranked_hypothesis_panel_uses_custom_priority_basis(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A caller-defined hypothesis labels its plotted priority quantity."""
+    priorities = pd.DataFrame(
+        {
+            "context": ["macrophage"],
+            "hypothesis": ["custom_response"],
+            "priority_score": [0.6],
+            "priority_basis": ["caller-defined priority"],
+        }
+    )
+    figures = []
+    close_figure = plt.close
+    monkeypatch.setattr(plt, "close", figures.append)
+
+    try:
+        NaspPlotter(tmp_path).plot_ranked_nasp_hypotheses(
+            priorities,
+            filename="custom_hypothesis",
+            label_columns=["context"],
+        )
+
+        assert figures[0].axes[0].get_xlabel() == "caller-defined priority"
+    finally:
+        for figure in figures:
+            close_figure(figure)
+
+
+def test_plotter_writes_sensor_output_mismatch_map(tmp_path: Path) -> None:
     """Sensor/output coupling produces an FDR-sized dot matrix."""
     tables = _visualization_tables()
-    visualizer = SCVisualizer(tmp_path)
+    plotter = NaspPlotter(tmp_path)
 
-    visualizer.plot_sensor_output_mismatch(
+    plotter.plot_sensor_output_mismatch(
         tables["sensor_output_coupling"],
         filename="sensor_output",
         facet_column="tissue",
@@ -419,13 +497,13 @@ def test_sensor_output_mismatch_scales_requested_axis_spacing(
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        SCVisualizer(tmp_path).plot_sensor_output_mismatch(
+        NaspPlotter(tmp_path).plot_sensor_output_mismatch(
             _visualization_tables()["sensor_output_coupling"],
             filename="default_sensor_output",
             column_spacing=1.0,
             row_spacing=1.0,
         )
-        SCVisualizer(tmp_path).plot_sensor_output_mismatch(
+        NaspPlotter(tmp_path).plot_sensor_output_mismatch(
             _visualization_tables()["sensor_output_coupling"],
             filename="aligned_sensor_output",
             column_spacing=0.5,
@@ -479,7 +557,7 @@ def test_sensor_output_mismatch_honors_requested_maximum_dot_size(
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        SCVisualizer(tmp_path).plot_sensor_output_mismatch(
+        NaspPlotter(tmp_path).plot_sensor_output_mismatch(
             coupling,
             filename="sized_sensor_output",
             max_dot_size=20.0,
@@ -492,29 +570,29 @@ def test_sensor_output_mismatch_honors_requested_maximum_dot_size(
             close_figure(figure)
 
 
-def test_visualizer_writes_age_effect_figures(tmp_path: Path) -> None:
+def test_plotter_writes_age_effect_figures(tmp_path: Path) -> None:
     """Age regressions and stability produce dot and range figures."""
     tables = _visualization_tables()
-    visualizer = SCVisualizer(tmp_path)
+    plotter = NaspPlotter(tmp_path)
 
-    visualizer.plot_age_effect_dotplot(
+    plotter.plot_age_effect_dotplot(
         tables["regression_results"],
         filename="module_age_dots",
         feature_type="module_score",
     )
-    visualizer.plot_age_effect_dotplot(
+    plotter.plot_age_effect_dotplot(
         tables["regression_results"],
         filename="sensor_age_dots",
         feature_type="gene_expression",
         feature_labels=["CGAS", "IFIH1"],
     )
-    visualizer.plot_age_effect_consistency(
+    plotter.plot_age_effect_consistency(
         tables["age_stability"],
         filename="module_age_consistency",
         analysis_scope="within_tissue_cell_type",
         feature_type="module_score",
     )
-    visualizer.plot_age_effect_consistency(
+    plotter.plot_age_effect_consistency(
         tables["age_stability"],
         filename="sensor_age_consistency",
         analysis_scope="within_tissue_cell_type",
@@ -555,7 +633,7 @@ def test_age_effect_dotplot_default_size_scales_with_matrix_shape(
 
     try:
         for size in (10, 20):
-            SCVisualizer(tmp_path).plot_age_effect_dotplot(
+            NaspPlotter(tmp_path).plot_age_effect_dotplot(
                 regression_grid(size),
                 filename=f"age_effects_{size}",
             )
@@ -577,14 +655,14 @@ def test_age_effect_dotplot_scales_requested_axis_spacing(
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        SCVisualizer(tmp_path).plot_age_effect_dotplot(
+        NaspPlotter(tmp_path).plot_age_effect_dotplot(
             _visualization_tables()["regression_results"],
             filename="default_age_effect_spacing",
             column_spacing=1.0,
             row_spacing=1.0,
             figsize=(4.0, 4.0),
         )
-        SCVisualizer(tmp_path).plot_age_effect_dotplot(
+        NaspPlotter(tmp_path).plot_age_effect_dotplot(
             _visualization_tables()["regression_results"],
             filename="compact_age_effect_spacing",
             column_spacing=0.5,
@@ -638,7 +716,7 @@ def test_age_effect_dotplot_applies_requested_maximum_dot_size(
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        SCVisualizer(tmp_path).plot_age_effect_dotplot(
+        NaspPlotter(tmp_path).plot_age_effect_dotplot(
             regressions,
             filename="sized_age_effects",
             max_dot_size=20.0,
@@ -665,7 +743,7 @@ def test_age_effect_dotplot_resizes_colorbar(
             ("small", "30%", "4%"),
             ("large", "70%", "10%"),
         ):
-            SCVisualizer(tmp_path).plot_age_effect_dotplot(
+            NaspPlotter(tmp_path).plot_age_effect_dotplot(
                 _visualization_tables()["regression_results"],
                 filename=f"{label}_age_effect_colorbar",
                 cbar_height=height,
@@ -701,7 +779,7 @@ def test_age_effect_dotplot_rejects_invalid_sizing_controls(
 ) -> None:
     """Age-effect sizing controls reject nonpositive or undersized values."""
     with pytest.raises(ValueError, match=message):
-        SCVisualizer(tmp_path).plot_age_effect_dotplot(
+        NaspPlotter(tmp_path).plot_age_effect_dotplot(
             _visualization_tables()["regression_results"],
             filename="invalid_age_effect_sizing",
             **{parameter: value},
@@ -746,7 +824,7 @@ def test_age_effect_dotplot_alphabetizes_displayed_features(
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        SCVisualizer(tmp_path).plot_age_effect_dotplot(
+        NaspPlotter(tmp_path).plot_age_effect_dotplot(
             regressions,
             filename=f"alphabetical_{feature_type}_age_effects",
             feature_type=feature_type,
@@ -801,7 +879,7 @@ def test_age_effect_consistency_orders_by_signed_median_slope(
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        SCVisualizer(tmp_path).plot_age_effect_consistency(
+        NaspPlotter(tmp_path).plot_age_effect_consistency(
             stability,
             filename=f"ordered_{feature_type}_age_consistency",
             feature_type=feature_type,
@@ -818,9 +896,9 @@ def test_age_effect_consistency_orders_by_signed_median_slope(
             close_figure(figure)
 
 
-def test_visualizer_writes_mechanistic_edge_barplot(tmp_path: Path) -> None:
+def test_plotter_writes_mechanistic_edge_barplot(tmp_path: Path) -> None:
     """Curated edges produce a saved Spearman-correlation barplot."""
-    SCVisualizer(tmp_path).plot_mechanistic_edge_barplot(
+    NaspPlotter(tmp_path).plot_mechanistic_edge_barplot(
         _visualization_tables()["mechanistic_edges"],
         filename="mechanistic_edge_bars",
     )
@@ -857,7 +935,7 @@ def test_mechanistic_edge_barplot_maps_correlations_to_edge_labels(
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        SCVisualizer(tmp_path).plot_mechanistic_edge_barplot(
+        NaspPlotter(tmp_path).plot_mechanistic_edge_barplot(
             edges,
             filename="mechanistic_edge_bars",
         )
@@ -911,7 +989,7 @@ def test_mechanistic_edge_barplot_retains_unestimable_edges(
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        SCVisualizer(tmp_path).plot_mechanistic_edge_barplot(
+        NaspPlotter(tmp_path).plot_mechanistic_edge_barplot(
             edges,
             filename="mechanistic_edge_missing",
         )
@@ -936,7 +1014,7 @@ def test_mechanistic_edge_barplot_honors_requested_figure_size(
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        SCVisualizer(tmp_path).plot_mechanistic_edge_barplot(
+        NaspPlotter(tmp_path).plot_mechanistic_edge_barplot(
             _visualization_tables()["mechanistic_edges"],
             filename="sized_mechanistic_edge_bars",
             figsize=requested_figsize,
@@ -977,7 +1055,7 @@ def test_mechanistic_edge_barplot_rejects_invalid_geometry(
 ) -> None:
     """Invalid bar geometry fails with an actionable parameter name."""
     with pytest.raises(ValueError, match=message):
-        SCVisualizer(tmp_path).plot_mechanistic_edge_barplot(
+        NaspPlotter(tmp_path).plot_mechanistic_edge_barplot(
             _visualization_tables()["mechanistic_edges"],
             filename="invalid_mechanistic_edge_bars",
             **geometry,
@@ -992,18 +1070,18 @@ def test_mechanistic_edge_barplot_rejects_invalid_correlations(
     edges["spearman_r"] = 1.2
 
     with pytest.raises(ValueError, match="between -1 and 1"):
-        SCVisualizer(tmp_path).plot_mechanistic_edge_barplot(
+        NaspPlotter(tmp_path).plot_mechanistic_edge_barplot(
             edges,
             filename="invalid_mechanistic_edge_correlations",
         )
 
 
-def test_visualizer_writes_mechanistic_edge_network(tmp_path: Path) -> None:
+def test_plotter_writes_mechanistic_edge_network(tmp_path: Path) -> None:
     """Expected edge annotations produce a correlation-overlay network."""
     tables = _visualization_tables()
-    visualizer = SCVisualizer(tmp_path)
+    plotter = NaspPlotter(tmp_path)
 
-    visualizer.plot_mechanistic_edge_network(
+    plotter.plot_mechanistic_edge_network(
         tables["mechanistic_edges"],
         filename="network",
         facet_column="tissue",
@@ -1055,7 +1133,7 @@ def test_mechanistic_edge_network_defaults_render_full_topology(
             )
         ]
     )
-    SCVisualizer(tmp_path).plot_mechanistic_edge_network(
+    NaspPlotter(tmp_path).plot_mechanistic_edge_network(
         edges,
         filename="default_full_network",
     )
@@ -1074,7 +1152,7 @@ def test_mechanistic_edge_network_honors_requested_figure_size(
     monkeypatch.setattr(plt, "close", figures.append)
 
     try:
-        SCVisualizer(tmp_path).plot_mechanistic_edge_network(
+        NaspPlotter(tmp_path).plot_mechanistic_edge_network(
             _visualization_tables()["mechanistic_edges"],
             filename="compact_network",
             figsize=requested_figsize,
@@ -1113,7 +1191,7 @@ def test_mechanistic_edge_network_reports_layer_span_filtering(
     )
 
     with pytest.warns(UserWarning) as caught:
-        SCVisualizer(tmp_path).plot_mechanistic_edge_network(
+        NaspPlotter(tmp_path).plot_mechanistic_edge_network(
             edges,
             filename="adjacent_layer_network",
             max_layer_span=1,
@@ -1157,7 +1235,7 @@ def test_mechanistic_edge_network_rejects_invalid_geometry(
 ) -> None:
     """Invalid network geometry fails with an actionable parameter name."""
     with pytest.raises(ValueError, match=message):
-        SCVisualizer(tmp_path).plot_mechanistic_edge_network(
+        NaspPlotter(tmp_path).plot_mechanistic_edge_network(
             _visualization_tables()["mechanistic_edges"],
             filename="invalid_network_geometry",
             **geometry,
@@ -1189,7 +1267,7 @@ def test_mechanistic_edge_network_rejects_boxes_that_clip_labels(
     )
 
     with pytest.raises(ValueError) as caught:
-        SCVisualizer(tmp_path).plot_mechanistic_edge_network(
+        NaspPlotter(tmp_path).plot_mechanistic_edge_network(
             edges,
             filename="undersized_nodes",
             node_size=(0.265, 0.05),
@@ -1266,7 +1344,7 @@ def test_association_visualizations_facet_complete_atlas_by_tissue(
     """The score-modules call path recognizes and facets multi-tissue input."""
     captured: dict[str, object] = {}
 
-    class CaptureVisualizer:
+    class CapturePlotter:
         def __init__(self, *, output_dir: str | Path) -> None:
             captured["output_dir"] = output_dir
 
@@ -1280,8 +1358,8 @@ def test_association_visualizations_facet_complete_atlas_by_tissue(
 
     monkeypatch.setattr(
         tabula_visualizations,
-        "SCVisualizer",
-        CaptureVisualizer,
+        "NaspPlotter",
+        CapturePlotter,
     )
     empty = pd.DataFrame()
     plot_nasp_association_visualizations(
