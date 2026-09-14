@@ -19,11 +19,22 @@ from nasp_compendium import GeneModules  # type: ignore[import]
 
 from nasp_atlas.analysis.tabula_sapiens import associations
 from nasp_atlas.analysis.tabula_sapiens import scoring
+from nasp_atlas.analysis.tabula_sapiens.mechanisms import mechanism_analysis
+from nasp_atlas.analysis.tabula_sapiens.mixed_model_scopes import (
+    mixed_model_scope_analysis,
+)
+from nasp_atlas.analysis.tabula_sapiens.mixed_model_scopes import (
+    write_mixed_model_tables,
+)
 from nasp_atlas.analysis.tabula_sapiens.mixed_models import (
     TabulaMixedModelResults,
 )
-from nasp_atlas.analysis.tabula_sapiens.mixed_models import (
-    tabula_sapiens_mixed_model_inference,
+from nasp_atlas.analysis.tabula_sapiens.robustness import robustness_analysis
+from nasp_atlas.analysis.tabula_sapiens.score_checkpoint import (
+    score_checkpoint_matches,
+)
+from nasp_atlas.analysis.tabula_sapiens.score_checkpoint import (
+    write_score_checkpoint,
 )
 from nasp_atlas.analysis.tabula_sapiens.visualizations import (
     plot_nasp_association_visualizations,
@@ -60,6 +71,7 @@ from nasp_atlas.single_cell.io import read_h5ad_rows
 from nasp_atlas.single_cell.module_scoring import ScorerName
 from nasp_atlas.single_cell.module_scoring import score_aucell_modules
 from nasp_atlas.single_cell.module_scoring import score_scanpy_modules
+from nasp_atlas.single_cell.reference_sets import reference_bundle_hash
 from nasp_atlas.single_cell.scprocessor import SCProcessor
 from nasp_atlas.single_cell.umap import UmapPanelSpec
 from nasp_atlas.single_cell.visualization import AssociationPlotter
@@ -232,12 +244,27 @@ def association_analysis(
     mixed_model_min_repeated_contexts: int = 3,
     max_plots: int | None = 200,
     plot_nasp_visualizations: bool = True,
+    mixed_models_combined: bool = True,
+    mixed_models_per_tissue: bool = False,
+    run_donor_sensitivity: bool = False,
+    run_gene_diagnostics: bool = False,
+    run_gene_removal_sensitivity: bool = False,
+    sensitivity_dominant_genes: int = 1,
+    run_mechanism_diagnostics: bool = False,
+    include_reference_sets: bool = False,
 ) -> None:
     """Run donor-aware NASP associations over precomputed module scores.
 
     Module scores come only from score_csv_path; gene features come from the
     aligned AnnData expression source. Cell-level plots remain descriptive.
     Donor-aware regression stages state their independent unit explicitly.
+    `mixed_models_combined` fits all scored cells together; independently,
+    `mixed_models_per_tissue` fits every tissue using the same saved scores.
+    `run_donor_aware_tests=False` disables both mixed-model scopes. The three
+    `run_*sensitivity`/`run_gene_diagnostics` switches enable descriptive donor
+    deletion, donor/assay gene diagnostics, and actual gene-removal rescoring.
+    `sensitivity_dominant_genes` selects the number of driver genes removed
+    separately per module; gene removal also produces its gene diagnostics.
     """
     _validate_association_options(
         statistical_unit=statistical_unit,
@@ -284,6 +311,12 @@ def association_analysis(
         expression_layer=expression_layer,
         expression_use_raw=expression_use_raw,
     )
+    if module_ids is None and "scoring_reference_bundle_sha256" in scores:
+        module_ids = [
+            identifier
+            for identifier in GeneModules().module_ids()
+            if f"{identifier}_score" in scores or f"{identifier}_auc" in scores
+        ]
     feature_specs = _resolve_association_features(
         adata,
         scores,
@@ -314,6 +347,14 @@ def association_analysis(
         max_plots=max_plots,
         plot_nasp_visualizations=plot_nasp_visualizations,
         association_plan=association_plan,
+    )
+    provenance = provenance.assign(
+        mixed_models_combined=mixed_models_combined,
+        mixed_models_per_tissue=mixed_models_per_tissue,
+        run_donor_sensitivity=run_donor_sensitivity,
+        run_gene_diagnostics=run_gene_diagnostics,
+        run_gene_removal_sensitivity=run_gene_removal_sensitivity,
+        sensitivity_dominant_genes=sensitivity_dominant_genes,
     )
     associations._write_association_table(
         provenance,
@@ -363,21 +404,88 @@ def association_analysis(
         )
 
     workflow_state = _AssociationWorkflowState()
-    mixed_model_results: TabulaMixedModelResults | None = None
-    if run_donor_aware_tests:
-        mixed_model_results = tabula_sapiens_mixed_model_inference(
-            cell_frame,
-            schema=association_plan.obs_schema,
-            aggregation=association_plan.aggregation,
-            detection_threshold=association_plan.detection_threshold,
-            condition_reference=association_plan.condition_reference,
-            minimum_cells=association_plan.mixed_model_min_cells,
-            minimum_donors=association_plan.mixed_model_min_donors,
-            minimum_studies=association_plan.mixed_model_min_studies,
-            minimum_repeated_contexts=(
-                association_plan.mixed_model_min_repeated_contexts
-            ),
+    mixed_model_results = mixed_model_scope_analysis(
+        cell_frame,
+        output_dir=output_path,
+        provenance=provenance,
+        combined=run_donor_aware_tests and mixed_models_combined,
+        per_tissue=run_donor_aware_tests and mixed_models_per_tissue,
+        plot_visualizations=plot_nasp_visualizations,
+        schema=association_plan.obs_schema,
+        aggregation=association_plan.aggregation,
+        detection_threshold=association_plan.detection_threshold,
+        condition_reference=association_plan.condition_reference,
+        minimum_cells=association_plan.mixed_model_min_cells,
+        minimum_donors=association_plan.mixed_model_min_donors,
+        minimum_studies=association_plan.mixed_model_min_studies,
+        minimum_repeated_contexts=(
+            association_plan.mixed_model_min_repeated_contexts
+        ),
+    )
+    selected_modules = list(
+        dict.fromkeys(
+            spec.feature_label
+            for spec in feature_specs
+            if spec.feature_type == "module_score"
         )
+    )
+    pairs = list(
+        dict.fromkeys(
+            (str(row.module_a), str(row.module_b))
+            for row in nasp_results.mechanistic_edges.itertuples()
+            if row.module_a in selected_modules
+            and row.module_b in selected_modules
+        )
+    )
+    diagnostics = robustness_analysis(
+        adata,
+        scores,
+        cell_frame,
+        output_dir=output_path / "robustness",
+        provenance=provenance,
+        module_ids=selected_modules,
+        module_pairs=pairs,
+        schema=schema,
+        scorer=cast(
+            ScorerName,
+            scorer or associations._detect_scorer_from_scores(scores),
+        ),
+        run_donor_sensitivity=run_donor_sensitivity,
+        run_gene_diagnostics=run_gene_diagnostics,
+        run_gene_removal_sensitivity=run_gene_removal_sensitivity,
+        plot_visualizations=plot_nasp_visualizations,
+        dominant_genes=sensitivity_dominant_genes,
+        gene_symbol_column=gene_symbol_column,
+        expression_layer=expression_layer,
+        use_raw=expression_use_raw,
+        minimum_cells=mixed_model_min_cells,
+        minimum_donors=mixed_model_min_donors,
+        detection_threshold=detection_threshold,
+    )
+    mechanism_analysis(
+        adata,
+        scores,
+        output_dir=output_path / "mechanisms",
+        provenance=provenance,
+        module_ids=selected_modules,
+        schema=schema,
+        scorer=(
+            "aucell"
+            if (scorer or associations._detect_scorer_from_scores(scores))
+            == "aucell"
+            else "scanpy"
+        ),
+        diagnostics=diagnostics,
+        run_mechanism_diagnostics=run_mechanism_diagnostics,
+        include_reference_sets=include_reference_sets,
+        plot_visualizations=plot_nasp_visualizations,
+        gene_symbol_column=gene_symbol_column,
+        expression_layer=expression_layer,
+        use_raw=expression_use_raw,
+        minimum_cells=mixed_model_min_cells,
+        minimum_donors=mixed_model_min_donors,
+        detection_threshold=detection_threshold,
+    )
     if eqtl_table_path is not None:
         eqtl_unit_frame = unit_frame
         if eqtl_merge_mode in {"gene_tissue", "tissue"}:
@@ -625,6 +733,7 @@ def _constant_score_provenance(scores: pd.DataFrame) -> dict[str, object]:
         "scoring_aucell_chunk_size",
         "scoring_aucell_num_workers",
         "scoring_marker_panel_sha256",
+        "scoring_reference_bundle_sha256",
     ):
         if column not in scores:
             record[column] = pd.NA
@@ -647,6 +756,9 @@ def _reconcile_association_outputs(
     layout: associations._AssociationOutputLayout,
 ) -> None:
     """Remove workflow-owned stale artifacts before a deterministic rerun."""
+    (
+        layout.tables_dir.parent / "robustness" / "robustness_manifest.csv"
+    ).unlink(missing_ok=True)
     for filename in (
         "association_age_stability.csv",
         "association_partial_correlation_age.csv",
@@ -660,6 +772,7 @@ def _reconcile_association_outputs(
         "association_mixed_model_variance_components.csv",
         "association_mixed_model_diagnostics.csv",
         "association_mixed_model_availability.csv",
+        "association_mixed_model_scopes.csv",
         "association_regression_results.csv",
         "association_eqtl_annotations.csv",
         "association_plot_manifest.csv",
@@ -1215,46 +1328,10 @@ def _write_association_results(
     schema = association_plan.obs_schema
     regression_results = workflow_state.regression_results()
     eqtl_annotations = workflow_state.eqtl_annotations()
-    empty_mixed = TabulaMixedModelResults.empty()
-    mixed_tables = (
-        {
-            "association_mixed_model_contrasts.csv": (
-                mixed_model_results.contrasts
-            ),
-            "association_mixed_model_fixed_effects.csv": (
-                mixed_model_results.fixed_effects
-            ),
-            "association_mixed_model_term_tests.csv": (
-                mixed_model_results.term_tests
-            ),
-            "association_mixed_model_variance_components.csv": (
-                mixed_model_results.variance_components
-            ),
-            "association_mixed_model_diagnostics.csv": (
-                mixed_model_results.diagnostics
-            ),
-            "association_mixed_model_availability.csv": (
-                mixed_model_results.availability
-            ),
-        }
-        if mixed_model_results is not None
-        else {
-            "association_mixed_model_contrasts.csv": empty_mixed.contrasts,
-            "association_mixed_model_fixed_effects.csv": (
-                empty_mixed.fixed_effects
-            ),
-            "association_mixed_model_term_tests.csv": empty_mixed.term_tests,
-            "association_mixed_model_variance_components.csv": (
-                empty_mixed.variance_components
-            ),
-            "association_mixed_model_diagnostics.csv": (
-                empty_mixed.diagnostics
-            ),
-            "association_mixed_model_availability.csv": (
-                empty_mixed.availability
-            ),
-        }
-    )
+    if mixed_model_results is None:
+        write_mixed_model_tables(
+            TabulaMixedModelResults.empty(), layout.tables_dir
+        )
 
     for filename, table in (
         ("association_regression_results.csv", regression_results),
@@ -1263,11 +1340,6 @@ def _write_association_results(
             eqtl_annotations,
         ),
     ):
-        associations._write_association_table(
-            table,
-            layout.tables_dir / filename,
-        )
-    for filename, table in mixed_tables.items():
         associations._write_association_table(
             table,
             layout.tables_dir / filename,
@@ -1419,6 +1491,14 @@ def tabula_sapiens_tissue_analysis(
     mixed_model_min_repeated_contexts: int = 3,
     max_plots: int | None = 200,
     plot_nasp_visualizations: bool = True,
+    mixed_models_combined: bool = True,
+    mixed_models_per_tissue: bool = False,
+    run_donor_sensitivity: bool = False,
+    run_gene_diagnostics: bool = False,
+    run_gene_removal_sensitivity: bool = False,
+    sensitivity_dominant_genes: int = 1,
+    run_mechanism_diagnostics: bool = False,
+    include_reference_sets: bool = False,
 ) -> dict[str, Path]:
     """Score and analyze a complete or tissue-subset h5ad per scorer.
 
@@ -1427,8 +1507,9 @@ def tabula_sapiens_tissue_analysis(
     recomputes its embedding. Scoring is completed first into a shared score
     table, then the donor-aware association workflow runs once per scorer so
     Scanpy and AUCell remain separate sensitivity analyses. Setting
-    `resume_from_scores=True` reuses a score table only when its provenance
-    records every requested scorer.
+    `resume_from_scores=True` reuses a score table only when its completion
+    manifest matches the input, scoring settings, selection and file checksum.
+    Combined and per-tissue models reuse the same scores independently.
 
     Args:
       h5ad_path: Complete-atlas or tissue-specific h5ad input path.
@@ -1472,6 +1553,19 @@ def tabula_sapiens_tissue_analysis(
         supporting a context variance component.
       max_plots: Maximum association plots written per scorer.
       plot_nasp_visualizations: Whether to render mechanistic NASP summaries.
+      mixed_models_combined: Fit every scored cell together (default True).
+      mixed_models_per_tissue: Also fit each tissue separately (default False).
+      run_donor_sensitivity: Write donor scores, deletion ranks and matched
+        cell-type tissue differences, using mean cell-to-donor aggregation.
+      run_gene_diagnostics: Write donor/assay expression and gene-score checks.
+      run_gene_removal_sensitivity: Rescore dominant-gene and overlap-excluded
+        variants; also writes the required gene diagnostics.
+      sensitivity_dominant_genes: Number of candidate driver genes removed
+        separately per module, ranked by the expression diagnostic heuristic.
+      run_mechanism_diagnostics: Compare regulator branches and inspect IFN
+        and OAS/RNase L components with donor-supported figures.
+      include_reference_sets: Add bundled Reactome/Hallmark scores, separate
+        UMAPs and curated-score comparisons; no runtime downloads.
 
     Returns:
       Paths for the run directory, score table, and each scorer's association
@@ -1482,6 +1576,8 @@ def tabula_sapiens_tissue_analysis(
       ValueError: If no scorer or an unsupported scorer is requested.
     """
     _validate_detection_threshold(detection_threshold)
+    if sensitivity_dominant_genes < 1:
+        raise ValueError("sensitivity_dominant_genes must be at least 1")
     input_path = Path(h5ad_path)
     if not input_path.is_file():
         raise FileNotFoundError(f"input h5ad does not exist: {input_path}")
@@ -1509,15 +1605,38 @@ def tabula_sapiens_tissue_analysis(
     run_dir = Path(output_dir) / scoring.safe_filename_token(output_name)
     scoring_dir = run_dir / "scoring"
     score_path = scoring_dir / score_table_filename
-    if resume_from_scores and _score_table_has_scorers(
-        score_path,
-        selected_scorers,
+    score_request = {
+        **_file_identity("h5ad", input_path),
+        "scorers": list(selected_scorers),
+        "tissue_label": tissue_label,
+        "subset_fraction": subset_fraction,
+        "random_state": random_state,
+        "gene_symbol_column": gene_symbol_column,
+        "expression_layer": expression_layer,
+        "module_ids": list(module_ids) if module_ids is not None else None,
+        "marker_panel_sha256": hashlib.sha256(
+            GeneModules.default_panel_path().read_bytes()
+        ).hexdigest(),
+        "aucell_chunk_size": aucell_chunk_size,
+        "aucell_num_workers": aucell_num_workers,
+        "reference_bundle_sha256": reference_bundle_hash()
+        if include_reference_sets
+        else None,
+        "metadata_keys": metadata_columns(schema),
+    }
+    if resume_from_scores and score_checkpoint_matches(
+        score_path, score_request
     ):
         logger.info(
             "[tabula_sapiens] reusing complete score table -> %s",
             score_path,
         )
     else:
+        if resume_from_scores and score_path.exists():
+            logger.warning(
+                "Score checkpoint is absent or incompatible; recomputing %s",
+                score_path,
+            )
         tabula_sapiens_scoring_analysis(
             h5ad_path=input_path,
             output_dir=scoring_dir,
@@ -1543,7 +1662,9 @@ def tabula_sapiens_tissue_analysis(
             heatmap_groupby=schema.cell_type_key,
             single_tissue=tissue_label,
             single_tissue_use_rep=single_tissue_use_rep,
+            include_reference_sets=include_reference_sets,
         )
+        write_score_checkpoint(score_path, score_request)
     if not score_path.is_file():
         raise FileNotFoundError(
             f"scoring completed without the expected score table: {score_path}"
@@ -1585,6 +1706,14 @@ def tabula_sapiens_tissue_analysis(
             ),
             max_plots=max_plots,
             plot_nasp_visualizations=plot_nasp_visualizations,
+            mixed_models_combined=mixed_models_combined,
+            mixed_models_per_tissue=mixed_models_per_tissue,
+            run_donor_sensitivity=run_donor_sensitivity,
+            run_gene_diagnostics=run_gene_diagnostics,
+            run_gene_removal_sensitivity=run_gene_removal_sensitivity,
+            sensitivity_dominant_genes=sensitivity_dominant_genes,
+            run_mechanism_diagnostics=run_mechanism_diagnostics,
+            include_reference_sets=include_reference_sets,
         )
         outputs[f"association_{scorer_name}"] = association_dir
     return outputs
@@ -1619,6 +1748,7 @@ def tabula_sapiens_scoring_analysis(
     score_heatmap_obs_key: str | None = None,
     single_tissue: str | None = None,
     single_tissue_use_rep: str | None = "X_scvi",
+    include_reference_sets: bool = False,
 ) -> None:
     """Run Tabula Sapiens metadata plots and NASP module scoring.
 
@@ -1657,6 +1787,8 @@ def tabula_sapiens_scoring_analysis(
       single_tissue: If set, recompute neighbors/UMAP for one tissue.
       single_tissue_use_rep: Representation used for single-tissue UMAP
         recomputation.
+      include_reference_sets: Score bundled Reactome/Hallmark signatures and
+        generate a separate UMAP for each reference score.
     """
     adata, point_size = _load_scoring_adata(
         h5ad_path=h5ad_path,
@@ -1806,6 +1938,7 @@ def tabula_sapiens_scoring_analysis(
         aucell_chunk_size=aucell_chunk_size,
         aucell_num_workers=aucell_num_workers,
         point_size=point_size,
+        include_reference_sets=include_reference_sets,
     )
 
 
@@ -1857,31 +1990,6 @@ def _load_scoring_adata(
         point_size /= 4
 
     return adata, point_size
-
-
-def _score_table_has_scorers(
-    score_path: Path,
-    scorers: Sequence[ScorerName],
-) -> bool:
-    """Return whether a score table records all requested scorers."""
-    if not score_path.is_file():
-        return False
-    try:
-        provenance = pd.read_csv(
-            score_path,
-            usecols=["scoring_scorers"],
-            nrows=1,
-        )
-    except (OSError, ValueError, pd.errors.EmptyDataError):
-        return False
-    if provenance.empty:
-        return False
-    completed = {
-        scorer.strip()
-        for scorer in str(provenance.iloc[0, 0]).split(",")
-        if scorer.strip()
-    }
-    return set(scorers).issubset(completed)
 
 
 def _module_genes_by_id(

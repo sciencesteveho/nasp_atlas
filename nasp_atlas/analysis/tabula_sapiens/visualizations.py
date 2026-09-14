@@ -39,11 +39,13 @@ def plot_tabula_sapiens_mixed_model_inference(
     """Plot every prespecified Tabula Sapiens mixed-model estimand.
 
     Five forest plots show planned marginal contrasts or simple age slopes
-    with 95% confidence intervals, donor support, references, and FDR. A sixth
-    stacked plot shows conditional study, donor, repeated-context, and residual
-    variance fractions. Analyses without an estimable result are skipped rather
-    than displayed as zero; their reasons remain available in the workflow's
-    availability and diagnostics tables.
+    with 95% confidence intervals, donor support, references, and FDR. The
+    cell-type and age figures use compact row labels because their title, axis,
+    and marker legend already identify the shared comparison and FDR threshold.
+    A sixth stacked plot shows conditional study, donor, repeated-context, and
+    residual variance fractions. Analyses without an estimable result are
+    skipped rather than displayed as zero; their reasons remain available in
+    the workflow's availability and diagnostics tables.
 
     Args:
       output_dir: Directory receiving PNG figures.
@@ -74,33 +76,50 @@ def plot_tabula_sapiens_mixed_model_inference(
             "adjusted_cell_type",
             "nasp_mixed_adjusted_cell_type_effects",
             "Adjusted cell-type effects",
+            True,
+            False,
         ),
         (
             "condition_by_cell_type",
             "condition_by_cell_type",
             "nasp_mixed_condition_effects_by_cell_type",
             "Condition effects by cell type",
+            False,
+            False,
         ),
         (
             "age_by_cell_type",
             "age_by_cell_type",
             "nasp_mixed_age_slopes_by_cell_type",
             "Age slopes by cell type",
+            True,
+            False,
         ),
         (
             "paired_tissue",
             "paired_tissue",
             "nasp_mixed_paired_tissue_effects",
             "Paired tissue effects",
+            False,
+            False,
         ),
         (
             "adjusted_context",
             "assay_batch_effects",
             "nasp_mixed_assay_batch_effects",
             "Assay batch effects",
+            False,
+            False,
         ),
     )
-    for analysis, estimand, filename, title in effect_plots:
+    for (
+        analysis,
+        estimand,
+        filename,
+        title,
+        compact_labels,
+        compact_label_support,
+    ) in effect_plots:
         path = destination / f"{filename}.png"
         path.unlink(missing_ok=True)
         if not _has_estimable_mixed_rows(
@@ -118,6 +137,10 @@ def plot_tabula_sapiens_mixed_model_inference(
             filename=filename,
             title=title,
             max_effects=max_effects,
+            compact_labels=compact_labels,
+            compact_label_support=compact_label_support,
+            row_height=0.0825 if compact_labels else 0.44,
+            label_wrap_width=56 if compact_labels else 42,
         )
         if path.is_file():
             plotted.append(path)

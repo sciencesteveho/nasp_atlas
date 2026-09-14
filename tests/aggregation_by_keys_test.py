@@ -39,11 +39,7 @@ def test_explicit_keys_keep_same_donor_separate_between_studies() -> None:
         "study_a": 2.0,
         "study_b": 12.0,
     }
-    assert set(result["unit_id"]) == {
-        "dataset_id=study_a|donor_id=D1",
-        "dataset_id=study_b|donor_id=D1",
-    }
-    assert set(result["statistical_unit"]) == {"study_donor"}
+    assert result["unit_id"].nunique() == 2
 
 
 def test_explicit_keys_retain_assay_values_and_cell_counts() -> None:

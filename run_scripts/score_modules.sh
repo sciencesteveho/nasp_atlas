@@ -6,7 +6,9 @@
 #PBS -j oe
 #PBS -o /rds/general/user/sho3/projects/lms-scott-raw/live/steve/tabula_sapiens/scripts/job_out/
 
-# Run NASP scoring and donor-aware analysis for one tissue h5ad.
+# Run NASP scoring, combined/per-tissue models and optional robustness checks.
+# Both model scopes and all robustness checks on the complete input:
+# qsub -v H5AD_NAME=all.h5ad,RUN_NAME=all,MIXED_MODELS_COMBINED=1,MIXED_MODELS_PER_TISSUE=1,DONOR_SENSITIVITY=1,GENE_DIAGNOSTICS=1,GENE_REMOVAL_SENSITIVITY=1 score_modules.sh
 #
 # Run scoring on complete atlas
 # qsub -v H5AD_NAME=1c88f927-bcbb-4bb1-9881-281842945a2d.h5ad,RUN_NAME=all_tissues score_modules.sh
@@ -44,6 +46,16 @@ TISSUE_LABEL="${TISSUE_LABEL:-${SINGLE_TISSUE:-}}"
 RUN_NAME="${RUN_NAME:-}"
 SCORERS="${SCORERS:-scanpy:aucell}"
 RESUME="${RESUME:-0}"
+MIXED_MODELS_COMBINED="${MIXED_MODELS_COMBINED:-1}"
+MIXED_MODELS_PER_TISSUE="${MIXED_MODELS_PER_TISSUE:-0}"
+DONOR_SENSITIVITY="${DONOR_SENSITIVITY:-0}"
+GENE_DIAGNOSTICS="${GENE_DIAGNOSTICS:-0}"
+GENE_REMOVAL_SENSITIVITY="${GENE_REMOVAL_SENSITIVITY:-0}"
+MECHANISM_DIAGNOSTICS="${MECHANISM_DIAGNOSTICS:-1}"
+REFERENCE_SETS="${REFERENCE_SETS:-1}"
+SENSITIVITY_DOMINANT_GENES="${SENSITIVITY_DOMINANT_GENES:-1}"
+SUBSET_FRACTION="${SUBSET_FRACTION:-}"
+DRY_RUN="${DRY_RUN:-0}"
 PLOT_MODULES="${PLOT_MODULES:-1}"
 PLOT_NASP_VISUALIZATIONS="${PLOT_NASP_VISUALIZATIONS:-1}"
 EXPRESSION_LAYER="${EXPRESSION_LAYER:-}"
@@ -128,17 +140,26 @@ main() {
   local python_args=()
   local python_path="${REPO_DIR}:${PYTHONPATH:-}"
   local scorer_values=()
+  local option_spec=""
+  local option_name=""
+  local option_flag=""
+  local preview=0
 
   if [[ -z "${H5AD_NAME}" ]]; then
     printf 'ERROR: submit with H5AD_NAME=<tissue.h5ad>\n' >&2
     return 2
   fi
-  if [[ ! -f "${PBS_COMMON}" ]]; then
+  case "${DRY_RUN}" in
+    1|true|TRUE|yes|YES) preview=1 ;;
+    0|false|FALSE|no|NO) ;;
+    *) printf 'ERROR: DRY_RUN must be boolean\n' >&2; return 2 ;;
+  esac
+  if (( ! preview )) && [[ ! -f "${PBS_COMMON}" ]]; then
     printf 'ERROR: PBS helper does not exist: %s\n' "${PBS_COMMON}" >&2
     return 2
   fi
   h5ad_path="$(resolve_h5ad_path "${H5AD_NAME}" "${DATA_DIR}")"
-  if [[ ! -f "${h5ad_path}" ]]; then
+  if (( ! preview )) && [[ ! -f "${h5ad_path}" ]]; then
     printf 'ERROR: h5ad file does not exist: %s\n' "${h5ad_path}" >&2
     return 2
   fi
@@ -161,7 +182,27 @@ main() {
     --mixed-model-min-repeated-contexts \
       "${MIXED_MODEL_MIN_REPEATED_CONTEXTS}"
     --max-plots "${MAX_PLOTS}"
+    --sensitivity-dominant-genes "${SENSITIVITY_DOMINANT_GENES}"
   )
+  for option_spec in \
+    "MIXED_MODELS_COMBINED:mixed-models-combined" \
+    "MIXED_MODELS_PER_TISSUE:mixed-models-per-tissue" \
+    "DONOR_SENSITIVITY:donor-sensitivity" \
+    "GENE_DIAGNOSTICS:gene-diagnostics" \
+    "GENE_REMOVAL_SENSITIVITY:gene-removal-sensitivity" \
+    "MECHANISM_DIAGNOSTICS:mechanism-diagnostics" \
+    "REFERENCE_SETS:reference-sets"; do
+    option_name="${option_spec%%:*}"
+    option_flag="${option_spec#*:}"
+    case "${!option_name}" in
+      1|true|TRUE|yes|YES) python_args+=("--${option_flag}") ;;
+      0|false|FALSE|no|NO) python_args+=("--no-${option_flag}") ;;
+      *) printf 'ERROR: %s must be boolean\n' "${option_name}" >&2; return 2 ;;
+    esac
+  done
+  if [[ -n "${SUBSET_FRACTION}" ]]; then
+    python_args+=(--subset-fraction "${SUBSET_FRACTION}")
+  fi
 
   IFS=':' read -r -a scorer_values <<< "${SCORERS}"
   python_args+=(--scorers "${scorer_values[@]}")
@@ -206,6 +247,13 @@ main() {
       ;;
   esac
 
+  printf 'Worker command: '
+  printf '%q ' python -u "${REPO_DIR}/run_scripts/score_modules.py" "${python_args[@]}"
+  printf '\n'
+  if (( preview )); then
+    return 0
+  fi
+
   mkdir -p "${LOG_DIR}" "${OUT_DIR}"
   source "${PBS_COMMON}"
   pbs::setup_logging "${LIVE_LOG}"
@@ -221,7 +269,9 @@ main() {
   printf 'Input h5ad: %s\n' "${h5ad_path}"
   printf 'Output root: %s\n' "${OUT_DIR}"
   printf 'Run name: %s\n' "${RUN_NAME:-auto}"
-  printf 'Tissue label: %s\n' "${TISSUE_LABEL:-pre-split input}"
+  printf 'Tissue selection: %s\n' "${TISSUE_LABEL:-entire input}"
+  printf 'Cell fraction: %s\n' "${SUBSET_FRACTION:-all cells}"
+  printf 'Combined / per-tissue models: %s / %s\n' "${MIXED_MODELS_COMBINED}" "${MIXED_MODELS_PER_TISSUE}"
   printf 'Scorers: %s\n' "${SCORERS}"
   printf 'Resume: %s\n' "${RESUME}"
 

@@ -391,9 +391,11 @@ plot_mixed_model_effects(
     row_height: float = 0.44,
     minimum_height: float = 1.8,
     point_size: float = 11.0,
-    interval_linewidth: float = 0.7,
+    interval_linewidth: float = 0.25,
     tick_label_pad: float = 1.5,
     label_wrap_width: int = 42,
+    compact_labels: bool = False,
+    compact_label_support: bool = False,
     fdr_threshold: float = 0.05,
     figsize: tuple[float, float] | None = None,
 ) -> None
@@ -423,8 +425,18 @@ plot_mixed_model_variance(
 It filters to the exact requested estimand and optional analysis or feature
 type, omits rows not explicitly estimable, and selects at most `max_effects`
 by FDR then absolute effect size with deterministic tie breaking. Filled
-markers meet `fdr_threshold`; open markers do not. Reference, conditioning
-level, donor support, and exact FDR are retained in the row label.
+markers meet `fdr_threshold`; open markers do not. Confidence intervals are
+black and use the configurable `interval_linewidth`. Reference, conditioning
+level, donor support, and exact FDR are retained in the full row label. Set
+`compact_labels=True` to retain only the feature and focal level; the axis and
+marker-fill legend continue to identify the estimand and FDR threshold. Compact
+labels place this information on one line. Set `compact_label_support=True` to
+append donor support. For adjusted cell-type effects, `n=a/b` means `a` donors
+supporting the focal cell type and `b` donors represented among the supported
+cell types that define the marginal-mean reference. That reference is the
+equally weighted average of the model-predicted scores for cell types meeting
+the donor-support threshold, not a raw average over cells. For
+cell-type-specific age slopes, `n=a` is the number of supporting donors.
 
 ```python
 mixed_model_plotter.plot_mixed_model_effects(
@@ -434,6 +446,9 @@ mixed_model_plotter.plot_mixed_model_effects(
     feature_type="module_score",
     filename="nasp_mixed_age_slopes_by_cell_type",
     max_effects=24,
+    compact_labels=True,
+    compact_label_support=False,
+    row_height=0.0825,
 )
 ```
 
@@ -541,3 +556,63 @@ compact_colorbar = colorbar.with_overrides(
 
 Color limits should be shared across panels intended for comparison. Missing
 or non-estimable values must remain distinct from numeric zero.
+
+## Robustness diagnostics
+
+The Tabula Sapiens orchestration plots enabled robustness analyses when
+`PLOT_NASP_VISUALIZATIONS=1` (the existing default). Outputs go under each
+scorer's `robustness/figures/`; the robustness manifest identifies current
+artifacts. The analysis switches themselves remain opt-in.
+
+These overviews use the shared publication font, 5-point typography, thin
+lines, restrained colors, and a common 3.5-inch width, with height fitted to
+wrapped rows to avoid empty space. Each exports 450-dpi PNG, vector PDF, and
+the displayed rows as CSV. At most 8 rows are
+shown; complete results remain in the analysis tables.
+
+- Donor ranks: largest absolute leave-one-donor-out rank changes. Dots show
+  baseline rank; lines show the estimable deletion range, **not a confidence
+  interval**. Labels report valid/total deletions; unavailable ranges are blank.
+- Paired tissues: matching-cell-type contrasts with the most paired donors.
+  Differences retain module-specific score units; magnitudes across modules
+  are not directly comparable.
+- Gene detection: the largest expression-based driver in each supported
+  module/context/assay, then ordered by donor support. Detection is the median
+  donor fraction, not a score contribution or an independent validation.
+- Gene-removal ranks: largest rank changes, with baseline dots and rescored
+  diamonds. The displayed table records removal mode and partner module.
+- Shared-gene coupling: largest changes in within-context-centered Spearman
+  correlation on the same donor/context observations. No significance or
+  causal interpretation is implied.
+
+Unsupported estimates are omitted rather than converted to zero. Consult the
+complete tables for unavailable results; no figure is exported if no rows are
+estimable. To adjust overview density or dimensions without rerunning scoring:
+
+```python
+from nasp_atlas.single_cell.visualization.robustness import RobustnessPlotter
+
+# tables maps analysis-table stems to loaded DataFrames.
+plotter = RobustnessPlotter("results/robustness/figures")
+plotter.plot_tables(tables, max_rows=8, figsize=(3.5, 3.0), label_width=44)
+```
+## Mechanism and reference figures
+
+The optional mechanism stage exports compact PNG/PDF figures plus displayed
+data under `associations/<scorer>/mechanisms/figures/`. It reuses the shared
+publication typography and palettes, with 3.5-inch overview widths and heights
+fitted to wrapped rows. `MechanismPlotter.plot_tables()` accepts a `figsize`
+override and limits on displayed regulators/contexts.
+
+Regulator/output heatmaps and two exploratory scatterplots show descriptive
+donor-context coupling, not causal direction. IFN and OAS/RNase L dot plots
+separate within-gene expression scaling (color) from donor-median detection
+(area); missing values are crosses, not zeros. Reference/curated agreement
+and overlap are shown separately to expose non-independent agreement.
+
+Each bundled reference score also gets its own small UMAP under `scoring/`.
+These use the existing embedding and plotting style, with native score scales
+and zero-centered Scanpy colors. Reference UMAPs do not alter the curated score
+panel. Gene-expression UMAPs now convert only their selected CSR gene columns
+to CSC before repeated column reads; no cells are dropped and the complete
+expression matrix is not densified for this optimization.

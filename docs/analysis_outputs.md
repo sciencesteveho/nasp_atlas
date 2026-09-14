@@ -4,7 +4,8 @@
 
 `association_analysis` joins a saved module-score table to the matching cells
 in an AnnData file, builds donor-aware analysis units, and writes tabular and
-visual summaries. It does not recompute module scores.
+visual summaries. Baseline module scores are not recomputed. Optional
+gene-removal sensitivity analysis scores derived signatures separately.
 
 ## Run from Python
 
@@ -137,6 +138,76 @@ these facts in `association_mixed_model_availability.csv` instead of inventing
 a comparison or treating missing structure as zero. A tissue-specific input
 similarly makes `paired_tissue` unavailable because only one tissue level is
 present.
+
+### Combined-input and per-tissue scopes
+
+`mixed_models_combined=True` retains the combined-input analysis.
+Independently, `mixed_models_per_tissue=True` fits each observed tissue using
+all its scored cells. Both scopes reuse one set of scores generated over the
+selected input: per-tissue inference does not change the scoring reference.
+Omit tissue and fraction filters to use the full input atlas. These options
+are also exposed by the [PBS wrapper](../run_scripts/README.md).
+
+Combined tables retain their existing locations. Per-tissue results live in
+`mixed_models_by_tissue/<tissue-label>_<hash>/`, with their own association
+tables and plots. `association_tables/association_mixed_model_scopes.csv`
+records cell counts, scope locations, and pending/running/completed/failed or
+disabled status. A completed scope may still contain non-estimable contrasts;
+inspect its diagnostics and availability tables. In particular, a per-tissue
+fit cannot estimate a between-tissue contrast.
+
+FDR is calculated separately within each scope and its existing analysis and
+estimand families, **not jointly across tissues**. Per-tissue findings are
+exploratory; do not pool their adjusted p-values as atlas-wide FDR control.
+Disabled outputs from earlier runs are retained; consult the current manifests
+and provenance before using them.
+
+### Optional donor and gene robustness checks
+
+Each scorer writes these tables under `robustness/`. All are descriptive
+sensitivity checks, not additional causal or significance tests. The
+`robustness_manifest.csv` records enabled stages and their completion;
+`robustness_provenance.csv` records inputs and analysis settings. Gene removal
+automatically enables its prerequisite gene diagnostics.
+
+With `plot_nasp_visualizations=True` (PBS: `PLOT_NASP_VISUALIZATIONS=1`),
+enabled robustness stages also write compact PNG/PDF summaries and displayed
+data under `robustness/figures/`. No separate plotting command is needed.
+The stage manifest lists current figures; unsupported comparisons are not
+plotted as zero. See [visualization guidance](visualization.md#robustness-diagnostics)
+for selection rules and interpretation.
+
+| Option | Main outputs and use |
+| --- | --- |
+| `run_donor_sensitivity` | `nasp_donor_scores.csv`, `nasp_context_ranks.csv`, `nasp_leave_one_donor_out.csv`, `nasp_matched_tissue_differences.csv`: donor-level scores, context rankings, donor-deletion stability, and within-donor tissue differences for matching cell types. |
+| `run_gene_diagnostics` | `nasp_gene_donor_expression.csv`, `nasp_gene_context_diagnostics.csv`: signed module membership, expression and detection per donor/context/assay, support, and gene–score correlations. Missing, ambiguous and undetected genes remain distinct. |
+| `run_gene_removal_sensitivity` | `nasp_gene_removal_variants.csv`, `nasp_gene_removal_donor_scores.csv`, `nasp_gene_removal_context_changes.csv`, `nasp_overlap_removed_coupling.csv`: actual rescoring after individual dominant-gene deletions and shared-gene removal from mechanistic module pairs. |
+
+Rankings use medians of donor mean scores, pooling assays within each donor
+and context. Matching-cell-type ranks compare tissues without mixing cell
+identities. Leave-one-donor-out analysis removes that donor from all contexts
+together; a study-qualified donor identifier is used when available. Too few
+remaining donors yields an unsupported result, not an artificial rank. Tissue
+differences use only donors observed in both tissues and the same cell type.
+
+Gene diagnostics retain assays separately. Driver selection is a heuristic:
+maximum, across supported contexts, of median absolute expression divided by
+the number of genes in that score arm. It is not an exact Scanpy or AUCell
+contribution. Gene–score correlations include a part–whole relationship when
+the gene belongs to the score; they are not independent validation. By default
+the top candidate per module is removed; `sensitivity_dominant_genes` requests
+more candidates, each removed separately.
+
+Derived signatures preserve scoring direction, including inverse arms, and
+never edit the compendium. Losing a signed arm is explicitly unscorable.
+Scanpy reruns its control selection with the original seed and full background;
+AUCell reranks the same expression source. Signed arms are standardized over
+the same scored cells, not separately by tissue. Changes therefore measure
+the complete scoring procedure's sensitivity, not a subtraction from a score.
+Shared-gene coupling comparisons use identical complete donor/context rows,
+both across contexts and after context centering; repeated contexts are not
+independent donors and no p-values are assigned. Lack of shared genes and
+insufficient support are recorded explicitly.
 
 ### Reusable inference API
 
@@ -361,3 +432,40 @@ Retain these with exported results:
 - random seed and relevant software versions;
 - skipped-feature, availability, support, convergence, warning, and
   non-estimable diagnostics.
+## Mechanism and reference companions
+
+Enabled mechanism diagnostics write to `associations/<scorer>/mechanisms/`.
+They use the complete saved scoring population, the same expression source,
+and current compendium definitions. A stage manifest and provenance accompany
+the tables; unsupported results remain missing, not zero.
+
+- `regulator_output_coupling.csv`: individual feedback/restriction genes versus
+  IFN-I, NF-kappa-B/cytokine, ISR, inflammasome and SASP outputs when scored.
+  Cell means are aggregated by study-qualified donor, tissue, cell type and
+  assay. Spearman correlations use context-centered means after minimum-cell
+  and minimum-donor filtering. Whole-donor deletion ranges are sensitivity
+  summaries, not confidence intervals. A regulator present in the output gene
+  set is excluded as circular. These descriptive associations are not adjusted
+  causal effects; age, donor state and other covariates may explain them.
+  Scanpy control-gene subtraction can also introduce coupling; compare the
+  separate AUCell results before prioritizing a mechanism.
+- `regulator_output_points.csv`: supported donor-context points for the two
+  largest absolute non-circular correlations. Selection is exploratory;
+  repeated contexts do not increase the number of independent donors.
+- `mechanism_components.csv`: donor-median expression and detection for IFN
+  ligands (including IFNG separately), IFN-I receptor context, response genes,
+  and ordered OAS1/2/3 plus RNASEL. This is a companion view, not a replacement
+  IFN score. RNA abundance cannot establish ligand secretion, RNase L activity,
+  signaling direction or temporal order; lack of detected ligand is not proof
+  of paracrine signaling. Unmeasured genes and measured-but-undetected genes
+  retain distinct states.
+- `reference_comparisons.csv`: donor/context-centered reference-versus-curated
+  score correlations and signed-arm gene overlap. Nested pathways/shared genes
+  prevent interpreting agreement as independent validation. Reference scores
+  do not enter the curated NASP-state classification or mixed-model feature
+  selection; their purpose is a separate expression-based sensitivity view.
+
+The compact figures in `mechanisms/figures/` export PNG, vector PDF and their
+displayed data. Component overviews prioritize donor-supported contexts and
+use within-gene z-scores across displayed contexts, not cross-gene expression
+comparisons. The complete unscaled values remain in the table.

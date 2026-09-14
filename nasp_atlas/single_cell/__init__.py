@@ -34,6 +34,12 @@ from nasp_atlas.single_cell.associations import test_feature_groups
 from nasp_atlas.single_cell.associations import validate_eqtl_table
 from nasp_atlas.single_cell.config import EmbeddingConfig
 from nasp_atlas.single_cell.context_summary import summarize_module_contexts
+from nasp_atlas.single_cell.donor_sensitivity import DonorSensitivityResults
+from nasp_atlas.single_cell.donor_sensitivity import donor_sensitivity
+from nasp_atlas.single_cell.gene_diagnostics import GeneDiagnosticResults
+from nasp_atlas.single_cell.gene_diagnostics import module_gene_diagnostics
+from nasp_atlas.single_cell.gene_sensitivity import GeneSensitivityResults
+from nasp_atlas.single_cell.gene_sensitivity import gene_removal_sensitivity
 from nasp_atlas.single_cell.hypothesis_priorities import MechanisticEdgeSpec
 from nasp_atlas.single_cell.hypothesis_priorities import (
     expected_module_coupling_report,
@@ -76,11 +82,14 @@ from nasp_atlas.single_cell.utils import split_anndata_by_obs
 
 __all__ = [
     "Aggregation",
+    "DonorSensitivityResults",
     "EmbeddingConfig",
     "EqtlMergeMode",
     "EvidenceRole",
     "FeatureSpec",
     "FeatureType",
+    "GeneDiagnosticResults",
+    "GeneSensitivityResults",
     "MechanisticEdgeSpec",
     "MixedModelContrast",
     "MixedModelInferenceResult",
@@ -104,12 +113,15 @@ __all__ = [
     "compare_module_scorers",
     "cross_scorer_module_correlations",
     "dedupe_stem",
+    "donor_sensitivity",
     "expected_module_coupling_report",
     "expression_matrix",
+    "gene_removal_sensitivity",
     "inverse_module_score_name",
     "merge_eqtl_counts",
     "metadata_columns",
     "mixed_model_inference",
+    "module_gene_diagnostics",
     "module_gene_overlap",
     "module_score_name",
     "normalize_h5ad_string_storage",

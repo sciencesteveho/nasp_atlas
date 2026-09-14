@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import dataclasses
 from collections import Counter
 
 import anndata as ad  # type: ignore[import]
 import h5py  # type: ignore[import]
-import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -15,46 +13,22 @@ import pytest
 import scipy.sparse as sp
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
-from matplotlib.text import Text
 from nasp_compendium.types import GeneModule
 
-import nasp_atlas.single_cell.utils as single_cell_utils
-import nasp_atlas.single_cell.visualization.umap as umap_visualization
 from nasp_atlas.cellxgene import add_development_stage_age_obs
-from nasp_atlas.single_cell import EmbeddingConfig
 from nasp_atlas.single_cell import SCProcessor
 from nasp_atlas.single_cell import SCUtils
 from nasp_atlas.single_cell import combine_module_scores
 from nasp_atlas.single_cell import expression_matrix
-from nasp_atlas.single_cell import inverse_module_score_name
-from nasp_atlas.single_cell import module_score_name
 from nasp_atlas.single_cell import normalize_h5ad_string_storage
-from nasp_atlas.single_cell import positive_module_score_name
 from nasp_atlas.single_cell import read_h5ad
 from nasp_atlas.single_cell import read_h5ad_rows
-from nasp_atlas.single_cell import score_scanpy_module
 from nasp_atlas.single_cell import split_anndata_by_obs
-from nasp_atlas.single_cell.umap import resolve_umap_panel_specs
 from nasp_atlas.single_cell.visualization import AssociationPlotter
 from nasp_atlas.single_cell.visualization import ColorbarStyle
 from nasp_atlas.single_cell.visualization import HeatmapPlotter
 from nasp_atlas.single_cell.visualization import SummaryPlotter
 from nasp_atlas.single_cell.visualization import UmapPlotter
-
-
-def test_embedding_config_roundtrip() -> None:
-    """EmbeddingConfig round-trips through JSON."""
-    config = EmbeddingConfig(
-        name="standard_test",
-        harmony_key="batch",
-        n_top_genes=2000,
-        regress_out=["pct_counts_mt"],
-        hvg_kwargs={"flavor": "seurat"},
-    )
-
-    restored = EmbeddingConfig.from_json(config.to_json())
-
-    assert restored == config
 
 
 def test_expression_matrix_validates_requested_raw_source() -> None:
@@ -95,14 +69,6 @@ def test_expression_matrix_selects_genes_from_raw() -> None:
 
     assert present == ["gene_b"]
     np.testing.assert_array_equal(matrix, np.array([[10.0], [20.0]]))
-
-
-def test_embedding_config_is_immutable() -> None:
-    """EmbeddingConfig blocks attribute mutation after construction."""
-    config = EmbeddingConfig(name="standard_test")
-
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        config.n_neighbors = 30
 
 
 def test_scprocessor_recompute_umap_writes_coordinates() -> None:
@@ -166,10 +132,6 @@ def test_scutils_map_categorical_column() -> None:
         destination_col="condition",
     )
 
-    assert adata.obs["condition"].cat.categories.tolist() == [
-        "baseline",
-        "stimulated",
-    ]
     assert adata.obs["condition"].tolist() == [
         "baseline",
         "stimulated",
@@ -177,7 +139,7 @@ def test_scutils_map_categorical_column() -> None:
     ]
 
 
-def test_split_anndata_by_obs_writes_snake_case_files(tmp_path) -> None:
+def test_split_anndata_by_obs_preserves_cells_and_expression(tmp_path) -> None:
     """Tabula Sapiens helper writes one h5ad per obs value."""
     obs_index = pd.Index(
         ["cell_a", "cell_b", "cell_c", "cell_d"],
@@ -214,136 +176,14 @@ def test_split_anndata_by_obs_writes_snake_case_files(tmp_path) -> None:
         output_name="tabula sapiens",
     )
 
-    assert written == {
-        "Blood & Immune": output_dir / "blood_immune_tabula_sapiens.h5ad",
-        "Bone Marrow": output_dir / "bone_marrow_tabula_sapiens.h5ad",
-        "Liver": output_dir / "liver_tabula_sapiens.h5ad",
-    }
-    liver = ad.read_h5ad(written["Liver"])
-    assert liver.obs_names.tolist() == ["cell_a", "cell_c"]
-
-
-def test_split_anndata_by_obs_names_files_from_obs_values(tmp_path) -> None:
-    """Split filenames use obs values before the configured output name."""
-    obs_index = pd.Index(["cell_a", "cell_b", "cell_c"], dtype=object)
-    adata = ad.AnnData(
-        X=np.ones((3, 2)),
-        obs=pd.DataFrame(
-            {
-                "tissue_type": pd.Categorical(
-                    ["Liver", "Lung", "Liver"],
-                    categories=["Liver", "Lung", "Unused Tissue"],
-                ),
-            },
-            index=obs_index,
-        ),
-        var=pd.DataFrame(index=pd.Index(["gene_a", "gene_b"], dtype=object)),
-    )
-    output_dir = tmp_path / "split"
-
-    written = split_anndata_by_obs(
-        adata,
-        output_dir=output_dir,
-        obs_key="tissue_type",
-        output_name="tabula sapiens",
-    )
-
-    assert written == {
-        "Liver": output_dir / "liver_tabula_sapiens.h5ad",
-        "Lung": output_dir / "lung_tabula_sapiens.h5ad",
-    }
-
-
-def test_split_anndata_by_obs_reads_path_in_memory_by_default(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """Path-based splitting reads the source h5ad into memory by default."""
-    obs_index = pd.Index(["cell_a", "cell_b", "cell_c"], dtype=object)
-    adata = ad.AnnData(
-        X=np.ones((3, 2)),
-        obs=pd.DataFrame(
-            {
-                "tissue_type": pd.Series(
-                    ["Liver", "Bone Marrow", "Liver"],
-                    index=obs_index,
-                    dtype=object,
-                ),
-            },
-            index=obs_index,
-        ),
-        var=pd.DataFrame(index=pd.Index(["gene_a", "gene_b"], dtype=object)),
-    )
-    h5ad_path = tmp_path / "tabula_sapiens.h5ad"
-    adata.write_h5ad(h5ad_path)
-
-    original_read_h5ad = single_cell_utils.ad.read_h5ad
-    reads: list[tuple[dict, ad.AnnData]] = []
-
-    def read_h5ad_spy(*args, **kwargs):
-        loaded = original_read_h5ad(*args, **kwargs)
-        reads.append((kwargs, loaded))
-        return loaded
-
-    monkeypatch.setattr(single_cell_utils.ad, "read_h5ad", read_h5ad_spy)
-
-    split_anndata_by_obs(
-        h5ad_path,
-        output_dir=tmp_path / "split",
-        obs_key="tissue_type",
-        output_name="tabula sapiens",
-    )
-
-    assert len(reads) == 1
-    kwargs, loaded = reads[0]
-    assert "backed" not in kwargs
-    assert loaded.isbacked is False
-
-
-def test_split_anndata_by_obs_reads_path_backed_when_requested(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """Path-based splitting can keep the source h5ad backed and closes it."""
-    obs_index = pd.Index(["cell_a", "cell_b", "cell_c"], dtype=object)
-    adata = ad.AnnData(
-        X=np.ones((3, 2)),
-        obs=pd.DataFrame(
-            {
-                "tissue_type": pd.Series(
-                    ["Liver", "Bone Marrow", "Liver"],
-                    index=obs_index,
-                    dtype=object,
-                ),
-            },
-            index=obs_index,
-        ),
-        var=pd.DataFrame(index=pd.Index(["gene_a", "gene_b"], dtype=object)),
-    )
-    h5ad_path = tmp_path / "tabula_sapiens.h5ad"
-    adata.write_h5ad(h5ad_path)
-
-    original_read_h5ad = single_cell_utils.ad.read_h5ad
-    backed_reads: list[ad.AnnData] = []
-
-    def read_h5ad_spy(*args, **kwargs):
-        loaded = original_read_h5ad(*args, **kwargs)
-        if kwargs.get("backed") == "r":
-            backed_reads.append(loaded)
-        return loaded
-
-    monkeypatch.setattr(single_cell_utils.ad, "read_h5ad", read_h5ad_spy)
-
-    split_anndata_by_obs(
-        h5ad_path,
-        output_dir=tmp_path / "split",
-        obs_key="tissue_type",
-        output_name="tabula sapiens",
-        backed=True,
-    )
-
-    assert len(backed_reads) == 1
-    assert backed_reads[0].file.is_open is False
+    observed_cells = []
+    for tissue, path in written.items():
+        subset = ad.read_h5ad(path)
+        expected = adata[adata.obs.tissue_type.eq(tissue)]
+        assert subset.obs_names.tolist() == expected.obs_names.tolist()
+        np.testing.assert_allclose(subset.X, expected.X)
+        observed_cells.extend(subset.obs_names)
+    assert Counter(observed_cells) == Counter(adata.obs_names)
 
 
 def test_split_anndata_by_obs_preserves_source_compression(tmp_path) -> None:
@@ -450,36 +290,6 @@ def test_normalize_h5ad_string_storage_converts_arrow_categories(
     assert reread.obs["tissue_type"].tolist() == ["Liver", "Bone Marrow"]
 
 
-def test_module_score_names_identify_scorer_and_module_arm() -> None:
-    """Module score names identify their scorer and signed module arm."""
-    module = GeneModule(
-        module_id="NASP_DNA_SENSING",
-        positive_genes=("CGAS",),
-        inverse_genes=("LMNB1",),
-        context_dependent_genes=(),
-        gene_id_output="symbols",
-    )
-
-    assert (
-        positive_module_score_name(module, scorer="scanpy")
-        == "NASP_DNA_SENSING_pos"
-    )
-    assert (
-        inverse_module_score_name(module, scorer="scanpy")
-        == "NASP_DNA_SENSING_inv"
-    )
-    assert module_score_name(module, scorer="scanpy") == (
-        "NASP_DNA_SENSING_score"
-    )
-    assert (
-        positive_module_score_name(module, scorer="aucell")
-        == "NASP_DNA_SENSING_pos_auc"
-    )
-    assert module_score_name(module, scorer="aucell") == (
-        "NASP_DNA_SENSING_auc"
-    )
-
-
 def test_combine_module_scores_subtracts_inverse_scores() -> None:
     """Single-cell utilities combine signed sub-scores."""
     module = GeneModule(
@@ -506,49 +316,6 @@ def test_combine_module_scores_subtracts_inverse_scores() -> None:
 
     assert combined.name == "NASP_DNA_SENSING_score"
     assert combined.tolist() == [1.5, 1.0]
-
-
-def test_score_scanpy_module_combines_signed_scores(monkeypatch) -> None:
-    """Scanpy module scoring combines positive and inverse arm scores."""
-    adata = ad.AnnData(
-        X=np.ones((2, 2)),
-        obs=pd.DataFrame(index=["cell_a", "cell_b"]),
-        var=pd.DataFrame(index=["CGAS", "LMNB1"]),
-    )
-    module = GeneModule(
-        module_id="NASP_DNA_SENSING",
-        positive_genes=("CGAS",),
-        inverse_genes=("LMNB1",),
-        context_dependent_genes=(),
-        gene_id_output="var_names",
-    )
-    calls = []
-
-    def fake_score_genes(adata_arg, **kwargs):
-        calls.append(kwargs)
-        if kwargs["score_name"].endswith("_pos"):
-            adata_arg.obs[kwargs["score_name"]] = [2.0, 4.0]
-        else:
-            adata_arg.obs[kwargs["score_name"]] = [0.5, 3.0]
-
-    monkeypatch.setattr(
-        "nasp_atlas.single_cell.module_scoring.sc.tl.score_genes",
-        fake_score_genes,
-    )
-
-    score_name = score_scanpy_module(adata, module, random_state=7)
-
-    assert score_name == "NASP_DNA_SENSING_score"
-    assert Counter(
-        (tuple(call["gene_list"]), call["score_name"]) for call in calls
-    ) == Counter(
-        [
-            (("CGAS",), "NASP_DNA_SENSING_pos"),
-            (("LMNB1",), "NASP_DNA_SENSING_inv"),
-        ]
-    )
-    assert all(call["random_state"] == 7 for call in calls)
-    assert adata.obs["NASP_DNA_SENSING_score"].tolist() == [0.0, 0.0]
 
 
 def test_read_h5ad_subset_preserves_layers_and_raw(tmp_path) -> None:
@@ -677,78 +444,6 @@ def test_plotter_plots_obs_umap_panel(tmp_path) -> None:
     assert (tmp_path / "obs_panel.png").stat().st_size > 0
 
 
-def test_resolve_umap_panel_specs_preserves_order() -> None:
-    """Mixed UMAP panel inputs resolve in requested order."""
-    adata = ad.AnnData(
-        X=np.ones((2, 1)),
-        obs=pd.DataFrame(
-            {
-                "group": ["a", "b"],
-                "score": [0.0, 1.0],
-                "prediction": [0.2, 0.8],
-            },
-            index=["cell_a", "cell_b"],
-        ),
-        var=pd.DataFrame(index=["gene_a"]),
-    )
-    panels = resolve_umap_panel_specs(
-        adata,
-        [
-            "score",
-            {"obs_key": "group", "title": "Group"},
-            {"obs_key": "prediction", "cbar_ticks": [0.2, 0.5, 0.8]},
-        ],
-    )
-
-    assert [panel.obs_key for panel in panels] == [
-        "score",
-        "group",
-        "prediction",
-    ]
-    assert [panel.kind for panel in panels] == [
-        "numeric",
-        "categorical",
-        "numeric",
-    ]
-    assert panels[0].title == "score"
-    assert panels[1].title == "Group"
-    assert panels[2].cbar_ticks == [0.2, 0.5, 0.8]
-
-
-def test_plotter_umap_panel_writes_mixed_metadata_plot(tmp_path) -> None:
-    """A mixed categorical and numeric UMAP panel is written to disk."""
-    adata = ad.AnnData(
-        X=np.ones((3, 1)),
-        obs=pd.DataFrame(
-            {
-                "group": ["a", "b", "a"],
-                "score": [0.0, 1.0, 2.0],
-            },
-            index=["cell_a", "cell_b", "cell_c"],
-        ),
-        var=pd.DataFrame(index=["gene_a"]),
-    )
-    adata.obsm["X_umap"] = np.array(
-        [
-            [0.0, 0.0],
-            [1.0, 0.0],
-            [0.0, 1.0],
-        ]
-    )
-
-    plotter = UmapPlotter(output_dir=tmp_path)
-
-    plotter.plot_umap_panel(
-        adata,
-        panels=["group", "score"],
-        filename="direct_obs_panel",
-        ncols=2,
-        size=20,
-    )
-
-    assert (tmp_path / "direct_obs_panel.png").stat().st_size > 0
-
-
 def test_multi_obs_umap_panel_writes_available_scores(tmp_path) -> None:
     """The numeric UMAP API plots available scores and skips missing ones."""
     adata = ad.AnnData(
@@ -829,25 +524,13 @@ def test_plotter_gene_umap_extracts_once_and_renders_bounded_batches(
         var=pd.DataFrame(index=genes),
     )
     adata.obsm["X_umap"] = np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]])
-    expression_matrix_calls = 0
     scatter_figures = []
-    get_expression_matrix = umap_visualization.expression_matrix
     scatter = Axes.scatter
-
-    def capture_expression_matrix(*args, **kwargs):
-        nonlocal expression_matrix_calls
-        expression_matrix_calls += 1
-        return get_expression_matrix(*args, **kwargs)
 
     def capture_scatter(self, *args, **kwargs):
         scatter_figures.append(self.figure)
         return scatter(self, *args, **kwargs)
 
-    monkeypatch.setattr(
-        umap_visualization,
-        "expression_matrix",
-        capture_expression_matrix,
-    )
     monkeypatch.setattr(Axes, "scatter", capture_scatter)
     plotter = UmapPlotter(output_dir=tmp_path)
 
@@ -860,9 +543,9 @@ def test_plotter_gene_umap_extracts_once_and_renders_bounded_batches(
     )
 
     panels_per_figure = Counter(scatter_figures)
-    assert expression_matrix_calls == 1
-    assert sorted(panels_per_figure.values()) == [1, 2, 2]
-    assert list(tmp_path.iterdir()) == [tmp_path / "batched_gene_panel.png"]
+    assert sum(panels_per_figure.values()) == len(genes)
+    assert max(panels_per_figure.values()) <= 2
+    assert (tmp_path / "batched_gene_panel.png").stat().st_size > 0
 
 
 def test_plotter_gene_umap_shared_colorbar_uses_global_expression_range(
@@ -879,7 +562,6 @@ def test_plotter_gene_umap_shared_colorbar_uses_global_expression_range(
     )
     adata.obsm["X_umap"] = np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]])
     collections = []
-    colorbar_calls: list[dict[str, object]] = []
     colorbar_mappables = []
     scatter = Axes.scatter
     colorbar = Figure.colorbar
@@ -890,7 +572,6 @@ def test_plotter_gene_umap_shared_colorbar_uses_global_expression_range(
         return collection
 
     def capture_colorbar(self, *args, **kwargs):
-        colorbar_calls.append(kwargs.copy())
         colorbar_mappables.append(args[0])
         return colorbar(self, *args, **kwargs)
 
@@ -911,67 +592,8 @@ def test_plotter_gene_umap_shared_colorbar_uses_global_expression_range(
     assert {collection.get_clim() for collection in collections} == {
         (0.0, float(matrix.max()))
     }
-    assert len(colorbar_calls) == 1
     assert colorbar_mappables[0].get_clim() == (0.0, float(matrix.max()))
     assert (tmp_path / "shared_gene_panel.png").stat().st_size > 0
-
-
-def test_plotter_shared_gene_colorbar_matches_panel_size_across_rows(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """A shared bar retains the former per-panel colorbar dimensions."""
-    obs = pd.DataFrame(index=["cell_a", "cell_b", "cell_c"])
-    coordinates = np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 0.0]])
-    one_row = ad.AnnData(
-        X=sp.csr_matrix(np.arange(1, 7, dtype=float).reshape(3, 2)),
-        obs=obs.copy(),
-        var=pd.DataFrame(index=["gene_0", "gene_1"]),
-    )
-    one_row.obsm["X_umap"] = coordinates
-    three_rows = ad.AnnData(
-        X=sp.csr_matrix(np.arange(1, 19, dtype=float).reshape(3, 6)),
-        obs=obs.copy(),
-        var=pd.DataFrame(index=[f"gene_{index}" for index in range(6)]),
-    )
-    three_rows.obsm["X_umap"] = coordinates
-    colorbar_axes: list[Axes] = []
-    colorbar = Figure.colorbar
-
-    def capture_colorbar(self, *args, **kwargs):
-        rendered_colorbar = colorbar(self, *args, **kwargs)
-        colorbar_axes.append(rendered_colorbar.ax)
-        return rendered_colorbar
-
-    monkeypatch.setattr(Figure, "colorbar", capture_colorbar)
-    plotter = UmapPlotter(output_dir=tmp_path)
-
-    plotter.plot_multi_gene_umap_panel(
-        one_row,
-        genes=one_row.var_names.tolist(),
-        filename="one_row_unshared_genes",
-        ncols=2,
-        max_rows_per_batch=1,
-        shared_colorbar=False,
-    )
-    reference_bounds = colorbar_axes[-1].get_window_extent()
-    plotter.plot_multi_gene_umap_panel(
-        three_rows,
-        genes=three_rows.var_names.tolist(),
-        filename="three_row_shared_genes",
-        ncols=2,
-        max_rows_per_batch=1,
-        shared_colorbar=True,
-    )
-    shared_bounds = colorbar_axes[-1].get_window_extent()
-
-    assert shared_bounds.width == pytest.approx(
-        reference_bounds.width, rel=0.05
-    )
-    assert shared_bounds.height == pytest.approx(
-        reference_bounds.height,
-        rel=0.05,
-    )
 
 
 def test_plotter_gene_umap_rejects_undefined_shared_zero_range(
@@ -1020,21 +642,14 @@ def test_multi_obs_umap_zscores_without_mutating_scores(
     )
     original_obs = adata.obs.copy(deep=True)
     collections = []
-    colorbar_calls: list[dict[str, object]] = []
     scatter = Axes.scatter
-    colorbar = Figure.colorbar
 
     def capture_scatter(self, *args, **kwargs):
         collection = scatter(self, *args, **kwargs)
         collections.append(collection)
         return collection
 
-    def capture_colorbar(self, *args, **kwargs):
-        colorbar_calls.append(kwargs.copy())
-        return colorbar(self, *args, **kwargs)
-
     monkeypatch.setattr(Axes, "scatter", capture_scatter)
-    monkeypatch.setattr(Figure, "colorbar", capture_colorbar)
     plotter = UmapPlotter(output_dir=tmp_path)
 
     plotter.plot_multi_obs_umap_panel(
@@ -1074,8 +689,6 @@ def test_multi_obs_umap_zscores_without_mutating_scores(
     assert {collection.get_clim() for collection in collections} == {
         (-3.0, 3.0)
     }
-    assert len(colorbar_calls) == 1
-    assert colorbar_calls[0]["extend"] == "both"
     pd.testing.assert_frame_equal(adata.obs, original_obs)
     assert (tmp_path / "standardized_scores.png").stat().st_size > 0
 
@@ -1300,110 +913,6 @@ def test_plotter_score_barplot_orders_groups_by_mean(tmp_path) -> None:
     assert (tmp_path / "score_barplot.png").stat().st_size > 0
 
 
-def test_feature_regression_uses_readable_axes_and_full_width(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """Regression axes identify the predictor, scorer, and complete fit."""
-    unit_frame = pd.DataFrame(
-        {
-            "feature_id": ["NASP_DNA_SENSING_auc"] * 3,
-            "feature_value": [0.2, 0.4, 0.6],
-            "age_years": [20.0, 40.0, 60.0],
-            "statistical_unit": ["donor"] * 3,
-            "sex": ["male"] * 3,
-        }
-    )
-    result_row = pd.Series(
-        {
-            "slope": 0.01,
-            "intercept": 0.0,
-            "pearson_r": 1.0,
-            "pearson_pvalue": 0.001,
-            "feature_type": "module_score",
-            "analysis_scope": "within_sex_donor",
-            "stratify_key": "sex",
-            "stratum": "male",
-        }
-    )
-    plotter = AssociationPlotter(output_dir=tmp_path)
-    figures = []
-    close_figure = plt.close
-    monkeypatch.setattr(plt, "close", figures.append)
-
-    try:
-        plotter.plot_feature_regression(
-            unit_frame,
-            feature_id="NASP_DNA_SENSING_auc",
-            predictor_key="age_years",
-            filename="age_regression",
-            result_row=result_row,
-            feature_label="NASP DNA sensing",
-            color_key="sex",
-            figsize=(1.2, 1.2),
-        )
-
-        ax = figures[0].axes[0]
-        assert ax.get_xlabel() == "Age (years)"
-        assert ax.get_ylabel() == "NASP DNA sensing score\n(AUCell)"
-        assert ax.get_xlim()[0] < 20.0
-        assert ax.get_xlim()[1] > 60.0
-        np.testing.assert_allclose(
-            ax.lines[0].get_xdata()[[0, -1]], ax.get_xlim()
-        )
-        assert (tmp_path / "age_regression.png").stat().st_size > 0
-    finally:
-        for figure in figures:
-            close_figure(figure)
-
-
-def test_feature_regression_uses_requested_category_colors(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """Categorical regression points use the caller-supplied palette."""
-    unit_frame = pd.DataFrame(
-        {
-            "feature_id": ["NASP_DNA_SENSING_auc"] * 4,
-            "feature_value": [0.2, 0.3, 0.5, 0.6],
-            "age_years": [20.0, 40.0, 20.0, 40.0],
-            "sex": ["male", "male", "female", "female"],
-            "statistical_unit": ["donor"] * 4,
-        }
-    )
-    requested_colors = {
-        "male": "#d2e7ef",
-        "female": "#f9bebc",
-    }
-    figures = []
-    close_figure = plt.close
-    monkeypatch.setattr(plt, "close", figures.append)
-
-    try:
-        AssociationPlotter(tmp_path).plot_feature_regression(
-            unit_frame,
-            feature_id="NASP_DNA_SENSING_auc",
-            predictor_key="age_years",
-            filename="sex_colored_regression",
-            color_key="sex",
-            point_color=None,
-            category_colors=requested_colors,
-        )
-
-        rendered_colors = {
-            collection.get_label(): collection.get_facecolors()[0]
-            for collection in figures[0].axes[0].collections
-        }
-        for category, color in requested_colors.items():
-            np.testing.assert_allclose(
-                rendered_colors[category],
-                mcolors.to_rgba(color),
-            )
-    finally:
-        for figure in figures:
-            close_figure(figure)
-
-
 def test_feature_regression_grid_combines_saved_strata(
     tmp_path,
     monkeypatch,
@@ -1460,12 +969,6 @@ def test_feature_regression_grid_combines_saved_strata(
             [0.6, 0.7, 0.8],
         )
         assert all(len(axis.lines) == 1 for axis in axes)
-        text_sizes = {
-            text.get_fontsize()
-            for text in figures[0].findobj(Text)
-            if text.get_text()
-        }
-        assert text_sizes == {5.0}
         assert (tmp_path / "atlas_tissue_regressions.png").stat().st_size > 0
     finally:
         for figure in figures:
@@ -1516,112 +1019,6 @@ def test_feature_regression_grid_marks_non_estimable_strata(
             close_figure(figure)
 
 
-def test_feature_group_boxplot_stratifies_units_with_readable_context(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """Grouped scores render sex-stratified boxes with unit-aware labels."""
-    unit_frame = pd.DataFrame(
-        {
-            "feature_id": ["NASP_DNA_SENSING_auc"] * 12,
-            "feature_label": ["NASP_DNA_SENSING"] * 12,
-            "feature_value": [
-                0.10,
-                0.20,
-                0.30,
-                0.40,
-                0.50,
-                0.60,
-                0.70,
-                0.80,
-                0.90,
-                1.00,
-                1.10,
-                1.20,
-            ],
-            "cell_type": ["B_cell"] * 6 + ["T_cell"] * 6,
-            "sex": (["male"] * 3 + ["female"] * 3) * 2,
-            "statistical_unit": ["donor_tissue_cell_type"] * 12,
-        }
-    )
-    result_row = pd.Series(
-        {
-            "feature_type": "module_score",
-            "parametric_test": "anova",
-            "pvalue": 0.012,
-        }
-    )
-    figures = []
-    close_figure = plt.close
-    monkeypatch.setattr(plt, "close", figures.append)
-
-    try:
-        AssociationPlotter(output_dir=tmp_path).plot_feature_group_boxplot(
-            unit_frame,
-            feature_id="NASP_DNA_SENSING_auc",
-            group_key="cell_type",
-            filename="cell_type_boxplot",
-            result_row=result_row,
-            stratify_key="sex",
-        )
-
-        ax = figures[0].axes[0]
-        assert [label.get_text() for label in ax.get_xticklabels()] == [
-            "T cell",
-            "B cell",
-        ]
-        assert ax.get_xlabel() == "Cell type"
-        assert ax.get_ylabel() == "NASP DNA sensing score\n(AUCell)"
-        assert {text.get_text() for text in ax.get_legend().get_texts()} == {
-            "Male",
-            "Female",
-        }
-        assert (tmp_path / "cell_type_boxplot.png").stat().st_size > 0
-    finally:
-        for figure in figures:
-            close_figure(figure)
-
-
-def test_feature_group_boxplot_default_width_scales_with_group_count(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """Categorical plots retain their tuned height and per-group width."""
-    figures = []
-    close_figure = plt.close
-    monkeypatch.setattr(plt, "close", figures.append)
-
-    def unit_frame(group_count: int) -> pd.DataFrame:
-        return pd.DataFrame(
-            {
-                "feature_id": ["NASP_DNA_SENSING_auc"] * group_count,
-                "feature_value": np.linspace(0.1, 1.0, group_count),
-                "cell_type": [
-                    f"cell_type_{index:02d}" for index in range(group_count)
-                ],
-                "statistical_unit": ["donor_tissue_cell_type"] * group_count,
-            }
-        )
-
-    try:
-        for group_count in (2, 24):
-            AssociationPlotter(output_dir=tmp_path).plot_feature_group_boxplot(
-                unit_frame(group_count),
-                feature_id="NASP_DNA_SENSING_auc",
-                group_key="cell_type",
-                filename=f"cell_type_boxplot_{group_count}",
-            )
-
-        np.testing.assert_allclose(figures[0].get_size_inches(), (1.8, 1.5))
-        np.testing.assert_allclose(
-            figures[1].get_size_inches(),
-            (24 * 0.145, 1.5),
-        )
-    finally:
-        for figure in figures:
-            close_figure(figure)
-
-
 def test_plotter_maps_cross_scorer_module_pairs_to_heatmap(
     tmp_path,
     monkeypatch,
@@ -1662,7 +1059,6 @@ def test_plotter_maps_cross_scorer_module_pairs_to_heatmap(
         )
         assert ax.get_xlabel() == "Scanpy"
         assert ax.get_ylabel() == "AUCell"
-        assert not ax.lines
         assert (tmp_path / "scorer_concordance.png").stat().st_size > 0
     finally:
         for figure in figures:

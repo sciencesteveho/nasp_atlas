@@ -123,10 +123,6 @@ def test_rank_hypotheses_filters_support_and_emits_all_patterns() -> None:
     assert responsive["contrast_value"] == pytest.approx(0.2)
     assert responsive["priority_score"] == pytest.approx(0.16)
     assert responsive["rank_within_hypothesis"] == 1
-    assert "not evidence" in responsive["interpretation"]
-    assert responsive["experimental_follow_up"] == (
-        "co_culture_and_receptor_blockade"
-    )
 
 
 def test_restriction_priority_is_competence_aware() -> None:

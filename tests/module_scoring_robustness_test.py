@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 
 import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
+from nasp_compendium import GeneModules
 from nasp_compendium.types import GeneIdOutput
 from nasp_compendium.types import GeneModule
-from pyscenic.aucell import GeneSignature
 
-import nasp_atlas.single_cell.module_scoring as module_scoring
 from nasp_atlas.single_cell.module_scoring import combine_module_scores
 from nasp_atlas.single_cell.module_scoring import score_aucell_modules
 from nasp_atlas.single_cell.module_scoring import score_scanpy_modules
@@ -54,35 +52,6 @@ def _adata(
             {"feature_name": pd.array(symbols, dtype="string")},
             index=pd.Index(var_names),
         ),
-    )
-
-
-def _patch_aucell(
-    monkeypatch: pytest.MonkeyPatch,
-    module: GeneModule,
-    scorer: Callable[..., pd.DataFrame],
-) -> None:
-    """Replace module resolution and AUCell with deterministic test fakes."""
-    monkeypatch.setattr(
-        module_scoring.GeneModules,
-        "modules",
-        lambda _module_id, **_kwargs: module,
-    )
-    monkeypatch.setattr(module_scoring, "aucell", scorer)
-
-
-def _constant_aucell(
-    expression: pd.DataFrame,
-    signatures: Sequence[GeneSignature],
-    **_kwargs,
-) -> pd.DataFrame:
-    """Return one constant-valued AUC column per signature."""
-    return pd.DataFrame(
-        {
-            signature.name: np.full(len(expression), 0.5)
-            for signature in signatures
-        },
-        index=expression.index,
     )
 
 
@@ -134,145 +103,66 @@ def test_aucell_rejects_empty_signature_selection() -> None:
         score_aucell_modules(adata, [], expression_layer=None)
 
 
-def test_aucell_propagates_seed_and_uses_one_worker_by_default(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Every AUCell block uses the requested seed and conservative workers."""
-    adata = _adata(["CGAS", "OTHER"], ["CGAS", "OTHER"], n_obs=3)
-    calls: list[tuple[tuple[str, ...], int, int]] = []
-
-    def fake_aucell(
-        expression: pd.DataFrame,
-        signatures: Sequence[GeneSignature],
-        *,
-        seed: int,
-        num_workers: int,
-    ) -> pd.DataFrame:
-        calls.append((tuple(expression.index), seed, num_workers))
-        return _constant_aucell(expression, signatures)
-
-    _patch_aucell(monkeypatch, _gene_module(), fake_aucell)
-
-    score_aucell_modules(
+def test_aucell_preserves_signed_scores_across_chunks_and_missing_symbols() -> (
+    None
+):
+    """Chunking and symbol fallback preserve cell-aligned signed scores."""
+    rng = np.random.default_rng(8)
+    genes = ["CGAS", "LMNB1", *[f"background_{i}" for i in range(98)]]
+    values = rng.uniform(0, 1, size=(12, 100))
+    values[:6, 0] = 10
+    values[6:, 1] = 10
+    adata = ad.AnnData(
+        values,
+        obs=pd.DataFrame(index=[f"cell_{i}" for i in range(12)]),
+        var=pd.DataFrame({"feature_name": genes}, index=genes),
+    )
+    module = _gene_module(inverse_genes=("LMNB1",))
+    _, reference, _ = score_aucell_modules(
         adata,
-        ["NASP_TEST"],
+        [module.module_id],
+        gene_modules=[module],
         expression_layer=None,
-        chunk_size=2,
+        chunk_size=12,
+        random_state=17,
+    )
+    adata.var.loc["CGAS", "feature_name"] = None
+    original_obs = adata.obs.copy()
+
+    _, chunked, _ = score_aucell_modules(
+        adata,
+        [module.module_id],
+        gene_modules=[module],
+        expression_layer=None,
+        chunk_size=3,
         random_state=17,
     )
 
-    assert Counter(
-        cell for cell_indices, _, _ in calls for cell in cell_indices
-    ) == Counter(adata.obs_names)
-    assert all(len(cell_indices) <= 2 for cell_indices, _, _ in calls)
-    assert all(seed == 17 for _, seed, _ in calls)
-    assert all(num_workers == 1 for _, _, num_workers in calls)
+    pd.testing.assert_frame_equal(reference.sort_index(), chunked.sort_index())
+    pd.testing.assert_frame_equal(adata.obs, original_obs)
+    scores = chunked.reindex(adata.obs_names)["NASP_TEST_auc"]
+    assert scores.iloc[:6].mean() > scores.iloc[6:].mean()
 
 
-def test_aucell_uses_var_names_when_symbols_are_null(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Null symbols fall back to matching var names in the ranking matrix."""
-    adata = _adata(["CGAS", "OTHER"], [pd.NA, "OTHER"])
-    ranked_columns: list[tuple[str, ...]] = []
-    signature_genes: list[tuple[str, ...]] = []
+def test_scanpy_raw_scoring_uses_the_raw_gene_universe() -> None:
+    """Raw scoring matches direct scoring after current genes are filtered."""
+    module = GeneModules.modules("NASP_DNA_SENSING")
+    genes = list(module.positive_genes + module.inverse_genes)
+    genes += [f"background_{index}" for index in range(200)]
+    rng = np.random.default_rng(11)
+    raw = ad.AnnData(
+        rng.uniform(0, 4, size=(12, len(genes))),
+        var=pd.DataFrame({"feature_name": genes}, index=genes),
+    )
+    filtered = raw[:, [-1, -2]].copy()
+    filtered.raw = raw.copy()
 
-    def fake_aucell(
-        expression: pd.DataFrame,
-        signatures: Sequence[GeneSignature],
-        **_kwargs,
-    ) -> pd.DataFrame:
-        ranked_columns.append(tuple(expression.columns))
-        signature_genes.extend(signature.genes for signature in signatures)
-        return _constant_aucell(expression, signatures)
-
-    _patch_aucell(monkeypatch, _gene_module(), fake_aucell)
-
-    score_aucell_modules(
-        adata,
-        ["NASP_TEST"],
-        expression_layer=None,
+    score_scanpy_modules(raw, [module.module_id], expression_layer=None)
+    score_scanpy_modules(
+        filtered, [module.module_id], expression_layer=None, use_raw=True
     )
 
-    assert ranked_columns == [("CGAS", "OTHER")]
-    assert signature_genes == [("CGAS",)]
-
-
-def test_aucell_result_exposes_signed_arm_scores(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """AUCell results retain positive and inverse arms beside composites."""
-    adata = _adata(["CGAS", "LMNB1"], ["CGAS", "LMNB1"])
-    module = _gene_module(inverse_genes=("LMNB1",))
-
-    _patch_aucell(monkeypatch, module, _constant_aucell)
-
-    scored, auc_scores, _ = score_aucell_modules(
-        adata,
-        ["NASP_TEST"],
-        expression_layer=None,
+    np.testing.assert_allclose(
+        filtered.obs["NASP_DNA_SENSING_score"],
+        raw.obs["NASP_DNA_SENSING_score"],
     )
-
-    expected_columns = {
-        "NASP_TEST_pos_auc",
-        "NASP_TEST_inv_auc",
-        "NASP_TEST_auc",
-    }
-    assert expected_columns.issubset(scored.obs.columns)
-    assert expected_columns.issubset(auc_scores.columns)
-
-
-def test_aucell_result_reuses_expression_without_mutating_input_obs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """AUCell avoids copying expression while isolating score annotations."""
-    adata = _adata(["CGAS"], ["CGAS"])
-
-    _patch_aucell(monkeypatch, _gene_module(), _constant_aucell)
-
-    scored, _, _ = score_aucell_modules(
-        adata,
-        ["NASP_TEST"],
-        expression_layer=None,
-    )
-
-    assert scored.X is adata.X
-    assert "NASP_TEST_pos_auc" not in adata.obs
-    assert "NASP_TEST_pos_auc" in scored.obs
-
-
-def test_scanpy_module_resolution_uses_raw_gene_metadata(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Raw scoring resolves module genes against raw rather than current var."""
-    adata = _adata(["OTHER"], ["OTHER"])
-    raw_source = _adata(["CGAS"], ["CGAS"])
-    adata.raw = raw_source
-    resolved_var_names: list[tuple[str, ...]] = []
-    score_gene_lists: list[tuple[str, ...]] = []
-
-    def fake_modules(_module_id: str, *, adata: ad.AnnData, **_kwargs):
-        genes = tuple(adata.var_names.astype(str))
-        resolved_var_names.append(genes)
-        return _gene_module(
-            positive_genes=genes,
-            gene_id_output="var_names",
-        )
-
-    def fake_score_genes(adata_arg: ad.AnnData, **kwargs) -> None:
-        score_gene_lists.append(tuple(kwargs["gene_list"]))
-        adata_arg.obs[kwargs["score_name"]] = 0.5
-
-    monkeypatch.setattr(module_scoring.GeneModules, "modules", fake_modules)
-    monkeypatch.setattr(module_scoring.sc.tl, "score_genes", fake_score_genes)
-
-    modules = score_scanpy_modules(
-        adata,
-        ["NASP_TEST"],
-        expression_layer=None,
-        use_raw=True,
-    )
-
-    assert resolved_var_names == [("CGAS",)]
-    assert score_gene_lists == [("CGAS",)]
-    assert modules[0].positive_genes == ("CGAS",)

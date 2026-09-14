@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Literal, TypeAlias, cast
 
 import anndata as ad  # type: ignore[import]
@@ -174,8 +175,9 @@ def score_scanpy_modules(
     random_state: int = 42,
     expression_layer: str | None = "log1p",
     use_raw: bool = False,
+    gene_modules: Sequence[GeneModule] | None = None,
 ) -> list[GeneModule]:
-    """Score signed NASP modules with scanpy score_genes."""
+    """Score compendium or explicitly supplied symbol-space signatures."""
     if adata.n_obs == 0:
         raise ValueError("Scanpy module scoring requires at least one cell.")
 
@@ -188,14 +190,44 @@ def score_scanpy_modules(
             var=adata.raw.var,
         )
 
+    if gene_modules is not None and [m.module_id for m in gene_modules] != list(
+        module_ids
+    ):
+        raise ValueError("gene_modules IDs must match module_ids in order")
+
+    supplied = {module.module_id: module for module in gene_modules or ()}
+    mapping: dict[str, str] = {}
+    ambiguous: set[str] = set()
+    if supplied:
+        symbols = (
+            module_source.var[gene_symbol_column]
+            .astype(object)
+            .fillna(
+                pd.Series(
+                    module_source.var_names, index=module_source.var_names
+                )
+            )
+            .astype(str)
+            .str.strip()
+        )
+        mapping = dict(zip(symbols, module_source.var_names, strict=True))
+        ambiguous = set(symbols[symbols.duplicated(keep=False)])
+
     modules: list[GeneModule] = []
     for module_id in module_ids:
-        module = GeneModules.modules(
-            module_id,
-            adata=module_source,  # type: ignore[arg-type]  # protocol mismatch
-            gene_symbol_column=gene_symbol_column,
-            output="var_names",
-        )
+        if module_id in supplied:
+            module = _resolve_supplied_module(
+                supplied[module_id],
+                mapping,
+                ambiguous,
+            )
+        else:
+            module = GeneModules.modules(
+                module_id,
+                adata=module_source,  # type: ignore[arg-type]
+                gene_symbol_column=gene_symbol_column,
+                output="var_names",
+            )
         modules.append(module)
 
         logger.info(
@@ -226,11 +258,14 @@ def score_aucell_modules(
     chunk_size: int = 1_000,
     random_state: int = 42,
     num_workers: int = 1,
+    gene_modules: Sequence[GeneModule] | None = None,
 ) -> tuple[ad.AnnData, pd.DataFrame, list[GeneModule]]:
     """Score signed NASP modules with AUCell.
 
     The expression matrix is densified one cell-block at a time to manage
-    runtime memory.
+    runtime memory. `gene_modules` optionally supplies explicitly derived
+    symbol-space signatures (for sensitivity analyses); their IDs must match
+    `module_ids` in order. Compendium resolution remains the default.
     """
     if adata.isbacked:
         raise ValueError(
@@ -284,15 +319,23 @@ def score_aucell_modules(
     kept_gene_ids = gene_ids[keep].to_numpy()
     obs_names = adata.obs_names.astype(str)
 
-    modules = [
-        GeneModules.modules(
-            module_id,
-            adata=source_adata,  # type: ignore[arg-type]
-            gene_symbol_column=gene_symbol_column,
-            output="symbols",
-        )
-        for module_id in module_ids
-    ]
+    modules = (
+        list(gene_modules)
+        if gene_modules is not None
+        else [
+            GeneModules.modules(
+                module_id,
+                adata=source_adata,  # type: ignore[arg-type]
+                gene_symbol_column=gene_symbol_column,
+                output="symbols",
+            )
+            for module_id in module_ids
+        ]
+    )
+    if [module.module_id for module in modules] != list(module_ids):
+        raise ValueError("gene_modules IDs must match module_ids in order")
+    if any(module.gene_id_output != "symbols" for module in modules):
+        raise ValueError("AUCell gene_modules must use symbols")
 
     signatures = []
     for module in modules:
@@ -386,3 +429,34 @@ def score_aucell_modules(
         adata_auc.obs[score_column] = auc_df[score_column]
 
     return adata_auc, auc_df, modules
+
+
+def _resolve_supplied_module(
+    definition: GeneModule,
+    mapping: dict[str, str],
+    ambiguous: set[str],
+) -> GeneModule:
+    """Resolve supplied signature arms, retaining missing-gene diagnostics."""
+    if definition.gene_id_output != "symbols":
+        raise ValueError("Supplied modules must use symbols")
+    if ambiguous.intersection(
+        definition.positive_genes + definition.inverse_genes
+    ):
+        raise ValueError(f"Ambiguous gene symbols in {definition.module_id}")
+
+    return replace(
+        definition,
+        positive_genes=tuple(
+            mapping[g] for g in definition.positive_genes if g in mapping
+        ),
+        inverse_genes=tuple(
+            mapping[g] for g in definition.inverse_genes if g in mapping
+        ),
+        gene_id_output="var_names",
+        missing_positive_genes=tuple(
+            g for g in definition.positive_genes if g not in mapping
+        ),
+        missing_inverse_genes=tuple(
+            g for g in definition.inverse_genes if g not in mapping
+        ),
+    )

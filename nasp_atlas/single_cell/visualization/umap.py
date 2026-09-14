@@ -414,6 +414,10 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
                 f"source: {missing}"
             )
 
+        # Only selected plotting genes are converted; repeated column reads
+        # otherwise scan CSR row pointers once per gene on atlas-scale inputs.
+        if isinstance(source_matrix, (sp.csr_matrix, sp.csr_array)):
+            source_matrix = source_matrix.tocsc()
         gene_means = pd.Series(
             _expression_column_means(source_matrix),
             index=source_var_names,

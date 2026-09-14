@@ -1,5 +1,8 @@
 """Tabula Sapiens NASP analysis workflows."""
 
+from nasp_atlas.analysis.tabula_sapiens.mixed_model_scopes import (
+    mixed_model_scope_analysis,
+)
 from nasp_atlas.analysis.tabula_sapiens.mixed_models import (
     TabulaMixedModelResults,
 )
@@ -27,6 +30,7 @@ from nasp_atlas.analysis.tabula_sapiens.workflows import (
 __all__ = [
     "TabulaMixedModelResults",
     "association_analysis",
+    "mixed_model_scope_analysis",
     "plot_global_nasp_visualizations",
     "plot_nasp_association_visualizations",
     "plot_tabula_sapiens_mixed_model_inference",

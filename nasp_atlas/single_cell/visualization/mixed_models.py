@@ -48,9 +48,11 @@ class MixedModelPlotter(_PlotterBase):
         row_height: float = 0.44,
         minimum_height: float = 1.8,
         point_size: float = 11.0,
-        interval_linewidth: float = 0.7,
+        interval_linewidth: float = 0.25,
         tick_label_pad: float = 1.5,
         label_wrap_width: int = 42,
+        compact_labels: bool = False,
+        compact_label_support: bool = False,
         fdr_threshold: float = 0.05,
         figsize: tuple[float, float] | None = None,
     ) -> None:
@@ -59,9 +61,12 @@ class MixedModelPlotter(_PlotterBase):
         Only rows explicitly marked estimable with a plot-worthy status are
         rendered. Rows are selected by strongest FDR evidence, then absolute
         effect size, with stable label-based tie breaking. The displayed order
-        groups the retained rows by feature and contrast. Row labels preserve
-        the contrast reference, conditioning level, best available
-        independent-unit support, and exact FDR value. Filled markers meet
+        groups the retained rows by feature and contrast. Full row labels
+        preserve the contrast reference, conditioning level, best available
+        independent-unit support, and exact FDR value. Compact labels retain
+        the feature and focal level while relying on the axis and marker-fill
+        legend for the shared estimand and FDR threshold. Independent-unit
+        support can be added to compact labels explicitly. Filled markers meet
         `fdr_threshold`; open markers do not.
 
         Args:
@@ -83,6 +88,10 @@ class MixedModelPlotter(_PlotterBase):
           interval_linewidth: Confidence-interval line width in points.
           tick_label_pad: Gap in points between row labels and the axis.
           label_wrap_width: Target character width for wrapped contrast labels.
+          compact_labels: Whether to omit redundant contrast, reference, and
+            exact-FDR prose from row labels while retaining the focal level.
+          compact_label_support: Whether compact labels include the best
+            available independent-unit support. Has no effect on full labels.
           fdr_threshold: Adjusted p-value threshold encoded by marker fill.
           figsize: Optional exact figure width and height in inches, overriding
             adaptive dimensions.
@@ -207,6 +216,8 @@ class MixedModelPlotter(_PlotterBase):
             lambda row: self._effect_row_label(
                 row,
                 wrap_width=label_wrap_width,
+                compact=compact_labels,
+                compact_support=compact_label_support,
             ),
             axis="columns",
         )
@@ -244,7 +255,7 @@ class MixedModelPlotter(_PlotterBase):
             y_positions,
             ci_low,
             ci_high,
-            color="#777777",
+            color="black",
             linewidth=interval_linewidth,
             zorder=1,
         )
@@ -652,9 +663,18 @@ class MixedModelPlotter(_PlotterBase):
         row: pd.Series,
         *,
         wrap_width: int,
+        compact: bool,
+        compact_support: bool,
     ) -> str:
         """Return a feature, contrast, reference, support, and FDR label."""
         feature = cls._display_feature_label(row["feature_label"])
+        if compact:
+            detail = cls._compact_effect_detail(
+                row,
+                include_support=compact_support,
+            )
+            return f"{feature} — {detail}"
+
         raw_contrast = cls._optional_text(row["contrast"])
         contrast = cls._display_label(raw_contrast)
         by_key = cls._optional_text(row.get("by_key", row.get("by")))
@@ -676,6 +696,55 @@ class MixedModelPlotter(_PlotterBase):
             annotations.append(support)
         annotations.append(cls._fdr_label(row.get("pvalue_fdr")))
         return f"{feature}\n{contrast}\n{'; '.join(annotations)}"
+
+    @classmethod
+    def _compact_effect_detail(
+        cls,
+        row: pd.Series,
+        *,
+        include_support: bool,
+    ) -> str:
+        """Return a concise focal comparison with optional unit support."""
+        by_level = cls._optional_text(row.get("by_level"))
+        level = cls._optional_text(row.get("level"))
+        reference = cls._optional_text(row.get("reference"))
+        if by_level:
+            focal = cls._display_label(by_level)
+        elif level and reference and reference.casefold() != "marginal_mean":
+            focal = (
+                f"{cls._display_label(level)} vs "
+                f"{cls._display_label(reference)}"
+            )
+        elif level:
+            focal = cls._display_label(level)
+        else:
+            focal = cls._display_label(cls._optional_text(row.get("contrast")))
+
+        support = cls._compact_support_label(row) if include_support else ""
+        return f"{focal}; {support}" if support else focal
+
+    @classmethod
+    def _compact_support_label(cls, row: pd.Series) -> str:
+        """Return the shortest unambiguous available support count."""
+        paired = cls._finite_count(row.get("n_paired_units"))
+        if paired is not None:
+            return f"n={cls._format_count(paired)} paired"
+
+        level = cls._finite_count(row.get("n_level_units"))
+        reference = cls._finite_count(row.get("n_reference_units"))
+        if level is not None and reference is not None:
+            return (
+                f"n={cls._format_count(level)}/{cls._format_count(reference)}"
+            )
+        if level is not None:
+            return f"n={cls._format_count(level)}"
+
+        independent = cls._finite_count(row.get("n_independent_units"))
+        return (
+            f"n={cls._format_count(independent)}"
+            if independent is not None
+            else ""
+        )
 
     @classmethod
     def _variance_row_label(

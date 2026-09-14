@@ -5,12 +5,14 @@ from __future__ import annotations
 import gc
 import hashlib
 import logging
+import textwrap
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
 import anndata as ad  # type: ignore[import]
+import numpy as np
 import pandas as pd
 from nasp_compendium import GeneModules  # type: ignore[import]
 from nasp_compendium.types import GeneModule  # type: ignore[import]
@@ -21,6 +23,9 @@ from nasp_atlas.single_cell.module_scoring import ScorerName
 from nasp_atlas.single_cell.module_scoring import inverse_module_score_name
 from nasp_atlas.single_cell.module_scoring import module_score_name
 from nasp_atlas.single_cell.module_scoring import positive_module_score_name
+from nasp_atlas.single_cell.reference_sets import reference_bundle_hash
+from nasp_atlas.single_cell.reference_sets import reference_gene_sets
+from nasp_atlas.single_cell.reference_sets import reference_metadata
 from nasp_atlas.single_cell.score_diagnostics import compare_module_scorers
 from nasp_atlas.single_cell.score_diagnostics import (
     cross_scorer_module_correlations,
@@ -54,6 +59,7 @@ class _ScanpyModuleScorer(Protocol):
         gene_symbol_column: str,
         random_state: int,
         expression_layer: str | None,
+        gene_modules: Sequence[GeneModule] | None = None,
     ) -> Sequence[GeneModule]:
         """Score modules in place and return the scored modules."""
         ...
@@ -72,6 +78,7 @@ class _AucellModuleScorer(Protocol):
         chunk_size: int,
         random_state: int,
         num_workers: int,
+        gene_modules: Sequence[GeneModule] | None = None,
     ) -> tuple[ad.AnnData, pd.DataFrame, Sequence[GeneModule]]:
         """Return AUCell-scored AnnData, raw AUC table, and modules."""
         ...
@@ -86,6 +93,7 @@ class _ModuleScoringPlan:
     random_state: int
     score_heatmap_groupby_key: str
     point_size: float
+    gene_modules: tuple[GeneModule, ...] | None = None
 
 
 def module_scoring_outputs(
@@ -116,6 +124,7 @@ def module_scoring_outputs(
     aucell_chunk_size: int,
     aucell_num_workers: int,
     point_size: float,
+    include_reference_sets: bool = False,
 ) -> None:
     """Score modules and write score tables, UMAPs, and heatmaps.
 
@@ -146,6 +155,7 @@ def module_scoring_outputs(
       aucell_chunk_size: Maximum cells densified in one AUCell block.
       aucell_num_workers: Worker processes used by each AUCell block.
       point_size: UMAP point size for score plots.
+      include_reference_sets: Score bundled Reactome and Hallmark signatures.
     """
     score_tables: list[pd.DataFrame] = []
     requested_scorers = [
@@ -177,12 +187,23 @@ def module_scoring_outputs(
         development_stage_key=development_stage_key,
         age_key=age_key,
     )
+    definitions = None
+    if include_reference_sets:
+        definitions = _reference_scoring_modules(
+            adata,
+            module_ids,
+            gene_symbol_column=gene_symbol_column,
+            output_dir=Path(output_dir),
+        )
+        module_ids = [module.module_id for module in definitions]
+
     scoring_plan = _ModuleScoringPlan(
         gene_symbol_column=gene_symbol_column,
         expression_layer=expression_layer,
         random_state=random_state,
         score_heatmap_groupby_key=score_heatmap_groupby_key,
         point_size=point_size,
+        gene_modules=definitions,
     )
 
     score_metadata = score_table_obs_metadata(
@@ -201,6 +222,10 @@ def module_scoring_outputs(
         aucell_num_workers=aucell_num_workers,
     )
     score_provenance.index = score_metadata.index
+    if include_reference_sets:
+        score_provenance["scoring_reference_bundle_sha256"] = (
+            reference_bundle_hash()
+        )
     score_metadata = pd.concat([score_metadata, score_provenance], axis=1)
 
     completed_scorers: list[str] = []
@@ -431,19 +456,52 @@ def _plot_module_score_umaps(
     point_size: float,
 ) -> None:
     """Plot final module scores with their separate native-scale colorbars."""
-    plotter.plot_multi_obs_umap_panel(
-        adata,
-        obs_keys=score_keys,
-        filename=f"tabula_sapiens_{scorer}_module_umaps",
-        cmap="RdBu_r",
-        ncols=5,
-        size=point_size,
-        vmin=None,
-        vmax=None,
-        center_zero=True,
-        shared_colorbar=False,
-        standardization="none",
+    reference_names = (
+        reference_metadata().set_index("module_id")["name"].to_dict()
     )
+    suffix = "_score" if scorer == "scanpy" else "_auc"
+    reference_keys = [
+        key for key in score_keys if key.removesuffix(suffix) in reference_names
+    ]
+    for key in reference_keys:
+        identifier = key.removesuffix(suffix)
+        values = np.asarray(adata.obs[key], dtype=float)
+        finite = values[np.isfinite(values)]
+        bound = max(float(np.abs(finite).max()), 1e-12) if finite.size else 1.0
+        plotter.plot_umap_panel(
+            adata,
+            panels=[
+                {
+                    "obs_key": key,
+                    "title": textwrap.fill(str(reference_names[identifier]), 35)
+                    + f"\n{scorer.capitalize()} reference score",
+                    "kind": "numeric",
+                    "cmap": "RdBu_r" if scorer == "scanpy" else "Blues",
+                    "vmin": -bound if scorer == "scanpy" else 0.0,
+                    "vmax": bound,
+                }
+            ],
+            filename=f"{identifier}_{scorer}_umap",
+            panel_w=2.5,
+            panel_h=2.5,
+            size=min(point_size, 8.0),
+        )
+    if score_keys := [key for key in score_keys if key not in reference_keys]:
+        plotter.plot_multi_obs_umap_panel(
+            adata,
+            obs_keys=score_keys,
+            filename=f"tabula_sapiens_{scorer}_module_umaps",
+            cmap="RdBu_r",
+            ncols=5,
+            size=point_size,
+            vmin=None,
+            vmax=None,
+            center_zero=True,
+            shared_colorbar=False,
+            standardization="none",
+        )
+    else:
+        return
 
 
 def _score_scanpy_outputs(
@@ -460,13 +518,36 @@ def _score_scanpy_outputs(
     scoring_plan: _ModuleScoringPlan,
 ) -> None:
     """Run scanpy scoring and emit scanpy score outputs."""
-    scanpy_modules = scanpy_scorer(
-        adata,
-        module_ids,
-        gene_symbol_column=scoring_plan.gene_symbol_column,
-        random_state=scoring_plan.random_state,
-        expression_layer=scoring_plan.expression_layer,
+    references = [
+        module
+        for module in scoring_plan.gene_modules or ()
+        if module.module_id.startswith(("REACTOME_", "HALLMARK_"))
+    ]
+    reference_ids = {module.module_id for module in references}
+    scanpy_modules = list(
+        scanpy_scorer(
+            adata,
+            [
+                identifier
+                for identifier in module_ids
+                if identifier not in reference_ids
+            ],
+            gene_symbol_column=scoring_plan.gene_symbol_column,
+            random_state=scoring_plan.random_state,
+            expression_layer=scoring_plan.expression_layer,
+        )
     )
+    if references:
+        scanpy_modules.extend(
+            scanpy_scorer(
+                adata,
+                [module.module_id for module in references],
+                gene_modules=references,
+                gene_symbol_column=scoring_plan.gene_symbol_column,
+                random_state=scoring_plan.random_state,
+                expression_layer=scoring_plan.expression_layer,
+            )
+        )
     scanpy_score_keys = [
         module_score_name(module, scorer="scanpy") for module in scanpy_modules
     ]
@@ -537,6 +618,7 @@ def _score_aucell_outputs(
         chunk_size=chunk_size,
         random_state=scoring_plan.random_state,
         num_workers=num_workers,
+        gene_modules=scoring_plan.gene_modules,
     )
     auc_score_keys: list[str] | None = None
     auc_scores: pd.DataFrame | None = None
@@ -609,29 +691,83 @@ def _write_cross_scorer_comparison_outputs(
         combined_scores,
         scored_module_ids,
     )
-    concordance_path = (
-        Path(output_dir) / "tabula_sapiens_scorer_concordance.csv"
-    )
-    concordance.to_csv(concordance_path, index=False)
-    logger.info(
-        "[tabula_sapiens] scorer concordance -> %s",
-        concordance_path,
+    _write_scorer_comparison_table(
+        concordance,
+        output_dir=output_dir,
+        filename="tabula_sapiens_scorer_concordance.csv",
+        log_message="[tabula_sapiens] scorer concordance -> %s",
     )
 
     cross_module_correlations = cross_scorer_module_correlations(
         combined_scores,
         scored_module_ids,
     )
-    cross_module_path = (
-        Path(output_dir) / "tabula_sapiens_cross_scorer_module_correlations.csv"
-    )
-    cross_module_correlations.to_csv(cross_module_path, index=False)
-    logger.info(
-        "[tabula_sapiens] cross-scorer module correlations -> %s",
-        cross_module_path,
+    _write_scorer_comparison_table(
+        cross_module_correlations,
+        output_dir=output_dir,
+        filename="tabula_sapiens_cross_scorer_module_correlations.csv",
+        log_message="[tabula_sapiens] cross-scorer module correlations -> %s",
     )
     plotter.plot_scorer_concordance_heatmap(
         cross_module_correlations,
         filename="tabula_sapiens_scorer_concordance",
         module_order=scored_module_ids,
+    )
+
+
+def _write_scorer_comparison_table(
+    table: pd.DataFrame,
+    *,
+    output_dir: str | Path,
+    filename: str,
+    log_message: str,
+) -> None:
+    """Write a scorer comparison table to CSV and log its path."""
+    output_path = Path(output_dir) / filename
+    table.to_csv(output_path, index=False)
+    logger.info(log_message, output_path)
+
+
+def _reference_scoring_modules(
+    adata: ad.AnnData,
+    module_ids: Sequence[str],
+    *,
+    gene_symbol_column: str,
+    output_dir: Path,
+) -> tuple[GeneModule, ...]:
+    """Resolve requested signatures and publish reference-gene coverage."""
+    reference_modules = reference_gene_sets()
+    symbols = (
+        adata.var[gene_symbol_column]
+        .astype(object)
+        .fillna(pd.Series(adata.var_names, index=adata.var_names))
+        .astype(str)
+        .str.strip()
+    )
+    available = set(symbols)
+
+    coverage = reference_metadata().set_index("module_id")
+    for module in reference_modules:
+        found = available.intersection(module.positive_genes)
+        coverage.loc[module.module_id, "n_measured_genes"] = len(found)
+        coverage.loc[module.module_id, "missing_genes"] = ";".join(
+            sorted(set(module.positive_genes) - found)
+        )
+        coverage.loc[module.module_id, "status"] = (
+            "ok" if found else "unavailable_no_genes"
+        )
+    coverage.to_csv(Path(output_dir) / "reference_gene_coverage.csv")
+
+    return tuple(
+        GeneModules.modules(
+            identifier,
+            adata=adata,  # type: ignore[arg-type]
+            gene_symbol_column=gene_symbol_column,
+            output="symbols",
+        )
+        for identifier in module_ids
+    ) + tuple(
+        module
+        for module in reference_modules
+        if available.intersection(module.positive_genes)
     )

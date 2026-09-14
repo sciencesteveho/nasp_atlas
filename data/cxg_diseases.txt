@@ -1,0 +1,187 @@
+Alzheimer disease
+B-cell acute lymphoblastic leukemia
+B-cell non-Hodgkin lymphoma
+Barrett esophagus
+COVID-19
+Crohn disease
+Down syndrome
+HER2 positive breast carcinoma
+HIV infectious disease
+Lewy body dementia
+Parkinson disease
+Pick disease
+Plasmodium malariae malaria
+Sjogren syndrome
+Wilms tumor
+acute kidney failure
+acute myeloid leukemia
+acute myocardial infarction
+acute promyelocytic leukemia
+adenocarcinoma
+age related macular degeneration 7
+amyotrophic lateral sclerosis
+amyotrophic lateral sclerosis 26 with or without frontotemporal dementia
+anencephaly
+anorexia nervosa
+anthracosis
+arrhythmogenic right ventricular cardiomyopathy
+aspiration pneumonia
+atherosclerosis
+atrial fibrillation
+attention deficit-hyperactivity disorder
+basal cell carcinoma
+benign prostatic hyperplasia
+bipolar I disorder
+bipolar II disorder
+bipolar disorder
+blastoma
+brain cancer
+brain neoplasm
+breast cancer
+breast carcinoma
+breast mucinous carcinoma
+bronchopulmonary dysplasia
+bulimia nervosa
+cardiomyopathy
+cataract
+celiac disease
+chromophobe renal cell carcinoma
+chronic kidney disease
+chronic obstructive pulmonary disease
+chronic rhinitis
+clear cell renal carcinoma
+clonal hematopoiesis
+cognitive disorder
+colon adenocarcinoma
+colon sessile serrated adenoma/polyp
+colorectal cancer
+colorectal carcinoma
+colorectal neoplasm
+common variable immunodeficiency
+congenital heart disease
+coronary artery disorder
+cystic fibrosis
+cytomegalovirus infection
+dementia
+diabetes mellitus
+diffuse large B-cell lymphoma
+digestive system disorder
+dilated cardiomyopathy
+enamel caries
+epilepsy
+estrogen-receptor positive breast cancer
+follicular lymphoma
+frontotemporal dementia
+gastric cancer
+gastric intestinal metaplasia
+gastritis
+gingivitis
+glioblastoma
+head injury
+heart disorder
+heart failure
+heart valve disorder
+hematologic disorder
+hydrosalpinx
+hyperplastic polyp
+hypersensitivity pneumonitis
+hypertrophic cardiomyopathy
+inflammatory bowel disease
+inflammatory disease
+influenza
+injury
+interstitial lung disease
+intestinal failure–associated liver disease
+invasive ductal breast carcinoma
+invasive lobular breast carcinoma
+invasive tubular breast carcinoma
+isolated focal cortical dysplasia type II
+juvenile dermatomyositis
+keloid
+kidney benign neoplasm
+kidney oncocytoma
+leishmaniasis
+leukoencephalopathy, diffuse hereditary, with spheroids 1
+listeriosis
+liver cancer
+localized scleroderma
+long COVID-19
+luminal A breast carcinoma
+luminal B breast carcinoma
+lung adenocarcinoma
+lung cancer
+lung large cell carcinoma
+lymphangioleiomyomatosis
+lymphoid interstitial pneumonia
+lymphoma
+macular degeneration
+major depressive disorder
+malignant ovarian serous tumor
+malignant pancreatic neoplasm
+melanoma
+metastatic malignant neoplasm
+metastatic melanoma
+mitral valve insufficiency
+multiple sclerosis
+myelodysplastic syndrome
+myelodysplastic/myeloproliferative disease
+myocardial infarction
+myocardial ischemia
+myocarditis
+neuroblastoma
+neuroendocrine carcinoma
+non-compaction cardiomyopathy
+non-small cell lung carcinoma
+non-specific interstitial pneumonia
+nonpapillary renal cell carcinoma
+normal
+normal pressure hydrocephalus
+obsessive-compulsive disorder
+obstructive nephropathy
+open-angle glaucoma
+opiate dependence
+oral cavity squamous cell carcinoma
+oropharynx squamous cell carcinoma
+ovarian cancer
+periodontitis
+pilocytic astrocytoma
+plasma cell myeloma
+pleomorphic carcinoma
+pneumonia
+post-COVID-19 disorder
+post-traumatic stress disorder
+prediabetes syndrome
+primary biliary cholangitis
+primary cutaneous diffuse large B-cell lymphoma, Leg type
+primary sclerosing cholangitis
+progressive supranuclear palsy
+prostatic acinar adenocarcinoma
+pulmonary emphysema
+pulmonary fibrosis
+pulmonary sarcoidosis
+pulpitis
+respiratory failure
+respiratory system disorder
+rheumatoid arthritis
+schizoaffective bipolar disorder
+schizoaffective depressive disorder
+schizophrenia
+small cell lung carcinoma
+squamous cell carcinoma
+squamous cell lung carcinoma
+systemic lupus erythematosus
+tardive dyskinesia
+tauopathy
+temporal lobe epilepsy
+tongue cancer
+toxoplasmosis
+triple-negative breast carcinoma
+trisomy 18
+tubular adenoma
+tubulovillous adenoma
+type 1 diabetes mellitus
+type 2 diabetes mellitus
+ulcerative colitis
+uveal melanoma
+vascular dementia
+visceral leishmaniasis

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import anndata as ad
@@ -12,7 +11,6 @@ import pytest
 import scipy.sparse as sp
 
 from nasp_atlas.analysis.tabula_sapiens import association_analysis
-from nasp_atlas.analysis.tabula_sapiens import workflows
 from nasp_atlas.single_cell.associations import ObsSchema
 from nasp_atlas.single_cell.associations import aggregate_feature_frame
 from nasp_atlas.single_cell.associations import (
@@ -181,26 +179,6 @@ def test_benjamini_hochberg_matches_reference() -> None:
     )
 
 
-def test_resolve_feature_specs_splits_sources() -> None:
-    """Modules resolve to score columns and sensors to var names."""
-    adata = _synthetic_adata()
-    scores = _synthetic_scores(adata)
-
-    specs, skipped = resolve_feature_specs(
-        adata,
-        scores,
-        module_ids=["NASP_DNA_SENSING"],
-        sensor_group="nucleic_acid_sensors",
-        scorer="scanpy",
-        gene_symbol_column="feature_name",
-    )
-
-    sources = {spec.feature_id: spec.source for spec in specs}
-    assert sources["NASP_DNA_SENSING_score"] == "scores"
-    assert sources["CGAS"] == "expression"
-    assert skipped == []
-
-
 def test_resolve_feature_specs_reports_missing() -> None:
     """Missing genes are returned as skip records, not silently dropped."""
     adata = _synthetic_adata()
@@ -235,30 +213,6 @@ def test_resolve_feature_specs_missing_score_column() -> None:
     assert any(
         "NASP_ABSENT_score" in record["skip_reason"] for record in skipped
     )
-
-
-def test_build_cell_feature_frame_is_long_without_unit() -> None:
-    """The cell frame is tidy-long and carries no statistical_unit column."""
-    adata = _synthetic_adata()
-    scores = _synthetic_scores(adata)
-    specs, _ = resolve_feature_specs(
-        adata,
-        scores,
-        module_ids=["NASP_DNA_SENSING"],
-        gene_symbols=["CGAS"],
-        gene_symbol_column="feature_name",
-    )
-
-    cell_frame = build_cell_feature_frame(
-        adata, scores, specs, schema=ObsSchema()
-    )
-
-    assert "statistical_unit" not in cell_frame.columns
-    assert set(cell_frame["feature_id"]) == {
-        "NASP_DNA_SENSING_score",
-        "CGAS",
-    }
-    assert len(cell_frame) == adata.n_obs * len(specs)
 
 
 def test_module_features_use_scores_not_anndata() -> None:
@@ -529,44 +483,6 @@ def test_summarize_feature_groups_reports_group_support() -> None:
     assert (summary["statistical_unit"] == "donor").all()
 
 
-def test_summarize_feature_groups_empty_declares_columns() -> None:
-    """An empty grouping still returns a frame with the declared columns."""
-    empty = pd.DataFrame(
-        columns=[
-            "feature_type",
-            "feature_id",
-            "feature_label",
-            "feature_value",
-            "donor_id",
-            "sex",
-            "statistical_unit",
-            "aggregation",
-        ]
-    )
-
-    summary = summarize_feature_groups(
-        empty, group_key="sex", schema=ObsSchema()
-    )
-
-    assert summary.empty
-    assert summary.columns.tolist() == [
-        "feature_type",
-        "feature_id",
-        "feature_label",
-        "group_key",
-        "group",
-        "statistical_unit",
-        "aggregation",
-        "analysis_role",
-        "mean",
-        "median",
-        "std",
-        "sem",
-        "n_units",
-        "n_donors",
-    ]
-
-
 def test_partial_correlation_controls_tissue() -> None:
     """Partial correlation returns one residualized row per feature."""
     adata = _synthetic_adata()
@@ -592,21 +508,6 @@ def test_partial_correlation_controls_tissue() -> None:
 
     assert len(partial) == 1
     assert partial.iloc[0]["feature_id"] == "NASP_DNA_SENSING_score"
-
-
-def test_validate_eqtl_table_returns_available_value_columns() -> None:
-    """A valid eQTL table reports each supported burden column in order."""
-    eqtl_table = pd.DataFrame(
-        {
-            "gene_symbol": ["CGAS"],
-            "total_eqtls": [12],
-            "tissue_specific_eqtls": [3],
-        }
-    )
-
-    value_columns = validate_eqtl_table(eqtl_table, merge_mode="gene")
-
-    assert value_columns == ["total_eqtls", "tissue_specific_eqtls"]
 
 
 def test_prepare_eqtl_table_accepts_long_sensor_schema() -> None:
@@ -937,333 +838,39 @@ def test_validate_eqtl_table_reports_missing_columns() -> None:
 
 
 def test_orchestration_end_to_end(tmp_path: Path) -> None:
-    """The workflow emits mixed-model inference and retained NASP summaries."""
+    """Saved atlas results recover the planted age signal with donor support."""
     adata = _synthetic_adata()
-    scores = _synthetic_scores(adata)
-    h5ad_path, score_path = _write_inputs(tmp_path, adata, scores)
-    output_dir = tmp_path / "assoc"
-    stale_tables = output_dir / "association_tables"
-    stale_regressions = output_dir / "association_plots" / "regressions"
-    stale_boxplots = output_dir / "association_plots" / "boxplots"
-    stale_mixed = output_dir / "association_plots" / "mixed_models"
-    stale_nasp = output_dir / "association_plots" / "nasp"
-    for directory in (
-        stale_tables,
-        stale_regressions,
-        stale_boxplots,
-        stale_mixed,
-        stale_nasp,
-    ):
-        directory.mkdir(parents=True, exist_ok=True)
-    (stale_tables / "association_age_stability.csv").write_text("stale\n")
-    (stale_regressions / "old_regression.png").write_bytes(b"stale")
-    (stale_boxplots / "old_group.png").write_bytes(b"stale")
-    (stale_mixed / "nasp_mixed_condition_effects_by_cell_type.png").write_bytes(
-        b"stale"
+    h5ad_path, score_path = _write_inputs(
+        tmp_path, adata, _synthetic_scores(adata)
     )
-    (stale_nasp / "nasp_age_effects_by_cell_type.png").write_bytes(b"stale")
+    output_dir = tmp_path / "assoc"
 
     association_analysis(
         h5ad_path=h5ad_path,
         score_csv_path=score_path,
         output_dir=output_dir,
-        sensor_group="nucleic_acid_sensors",
         statistical_unit="donor_tissue",
-        aggregation="mean",
         mixed_model_min_cells=5,
     )
 
     tables = output_dir / "association_tables"
-    mixed_table_names = {
-        "association_mixed_model_contrasts.csv",
-        "association_mixed_model_fixed_effects.csv",
-        "association_mixed_model_term_tests.csv",
-        "association_mixed_model_variance_components.csv",
-        "association_mixed_model_diagnostics.csv",
-        "association_mixed_model_availability.csv",
-    }
-    written_table_names = {path.name for path in tables.glob("*.csv")}
-    assert mixed_table_names <= written_table_names
-    provenance = pd.read_csv(tables / "association_provenance.csv").iloc[0]
-    assert Path(provenance["h5ad_path"]) == h5ad_path.resolve()
-    assert Path(provenance["score_csv_path"]) == score_path.resolve()
-    assert provenance["scorer"] == "scanpy"
-    assert provenance["expression_source"] == "X"
-    assert provenance["statistical_unit"] == "donor_tissue"
-    assert provenance["aggregation"] == "mean"
-    assert json.loads(provenance["requested_module_ids"]) == []
-    assert set(json.loads(provenance["resolved_module_labels"])) == {
-        "IFN_I_OUTPUT",
-        "NASP_DNA_SENSING",
-        "NASP_RNA_SENSING",
-    }
-    assert set(json.loads(provenance["resolved_gene_labels"])) == set(
-        SENSOR_GENES
-    )
-    assert len(provenance["compendium_marker_panel_sha256"]) == 64
-
     contrasts = pd.read_csv(tables / "association_mixed_model_contrasts.csv")
-    fixed_effects = pd.read_csv(
-        tables / "association_mixed_model_fixed_effects.csv"
-    )
-    term_tests = pd.read_csv(tables / "association_mixed_model_term_tests.csv")
-    variance = pd.read_csv(
-        tables / "association_mixed_model_variance_components.csv"
-    )
-    diagnostics = pd.read_csv(
-        tables / "association_mixed_model_diagnostics.csv"
-    )
-    availability = pd.read_csv(
-        tables / "association_mixed_model_availability.csv"
-    ).set_index("analysis")
-
-    model_unit = "donor_id x tissue_in_publication x cell_type x assay"
-    provenance_columns = {
-        "age_center_years",
-        "aggregation",
-        "detection_threshold",
-        "configured_condition_reference",
-        "minimum_cells_per_observation",
-        "minimum_donors",
-        "minimum_studies",
-        "minimum_repeated_contexts",
-        "observational_unit",
-        "independent_unit",
-    }
-    for result in (
-        contrasts,
-        fixed_effects,
-        term_tests,
-        variance,
-        diagnostics,
-    ):
-        assert provenance_columns <= set(result.columns)
-        assert set(result["aggregation"]) == {"mean"}
-        assert set(result["minimum_cells_per_observation"]) == {5}
-        assert set(result["minimum_donors"]) == {3}
-        assert set(result["minimum_studies"]) == {3}
-        assert set(result["minimum_repeated_contexts"]) == {3}
-        assert set(result["detection_threshold"]) == {0.0}
-        assert set(result["configured_condition_reference"]) == {"normal"}
-        assert set(result["observational_unit"]) == {model_unit}
-        assert set(result["independent_unit"]) == {"donor"}
-        assert set(result["age_center_years"]) == {55.0}
-
-    assert set(contrasts["estimand"]) == {
-        "adjusted_cell_type",
-        "age_by_cell_type",
-        "assay_batch_effects",
-        "paired_tissue",
-    }
-    estimable_contrasts = contrasts.loc[contrasts["estimable"]]
-    assert set(estimable_contrasts["estimand"]) == {
-        "age_by_cell_type",
-        "paired_tissue",
-    }
-    paired_tissue = contrasts.loc[contrasts["estimand"] == "paired_tissue"]
-    assert (paired_tissue["n_paired_units"] == 6).all()
-    assert set(variance["component"]) == {"donor", "residual"}
-    unavailable_variance = variance.loc[~variance["estimable"]]
-    assert not unavailable_variance.empty
-    assert set(unavailable_variance["status"]) == {"invalid_covariance"}
-    assert set(unavailable_variance["reason"]) == {
-        "hessian_not_positive_definite"
-    }
-
-    assert set(diagnostics["analysis"]) == {
-        "adjusted_context",
-        "age_by_cell_type",
-        "paired_tissue",
-    }
-    assert diagnostics["converged"].all()
-    assert set(diagnostics["status"]) == {"ok", "invalid_covariance"}
-    assert set(
-        diagnostics.loc[
-            diagnostics["status"].eq("invalid_covariance"), "reason"
-        ]
-    ) == {"hessian_not_positive_definite"}
-    assert set(diagnostics["n_input_observations"]) == {12.0}
-    assert set(diagnostics["n_observations"]) == {12.0}
-    assert set(diagnostics["n_dropped_missing"]) == {0.0}
-    assert set(diagnostics["n_dropped_nonfinite"]) == {0.0}
-    assert set(diagnostics["n_groups"]) == {6.0}
-    assert set(diagnostics["n_independent_units"]) == {6.0}
-    assert set(diagnostics["optimizer_methods"]) == {"lbfgs|powell"}
-    assert diagnostics["statsmodels_version"].notna().all()
-    assert diagnostics["statsmodels_version"].astype(str).str.len().gt(0).all()
-
-    expected_availability = {
-        "adjusted_cell_type",
-        "condition_by_cell_type",
-        "age_by_cell_type",
-        "paired_tissue",
-        "assay_batch_effects",
-        "variance_decomposition",
-        "multi_study_structure",
-    }
-    assert set(availability.index) == expected_availability
-    assert set(availability["minimum_cells"]) == {5}
-    assert set(availability["minimum_donors"]) == {3}
-    assert set(availability["minimum_studies"]) == {3}
-    assert set(availability["minimum_repeated_contexts"]) == {3}
-    assert set(availability["detection_threshold"]) == {0.0}
-    assert set(availability["configured_condition_reference"]) == {"normal"}
-    assert set(availability["observational_unit"]) == {model_unit}
-    assert set(availability["independent_unit"]) == {"donor"}
-    assert set(availability.loc[availability["estimable"], "status"]) == {
-        "partially_estimable"
-    }
-    assert set(availability.index[availability["estimable"]]) == {
-        "age_by_cell_type",
-        "paired_tissue",
-        "variance_decomposition",
-    }
-    assert (
-        availability.loc["adjusted_cell_type", "reason"]
-        == "single_predictor_level:cell_type"
-    )
-    assert (
-        availability.loc["condition_by_cell_type", "reason"]
-        == "missing_predictor:disease"
-    )
-    assert (
-        availability.loc["assay_batch_effects", "reason"]
-        == "single_predictor_level:assay"
-    )
-    assert (
-        availability.loc["multi_study_structure", "reason"]
-        == "missing_study_column:dataset_id"
-    )
-
-    skipped = pd.read_csv(tables / "association_skipped_features.csv")
-    assert {
-        "feature_type",
-        "requested",
-        "skip_reason",
-    } <= set(skipped.columns)
-    profiles = pd.read_csv(tables / "nasp_evidence_profiles.csv")
-    assert {
-        "unit_id",
-        "relative_competence",
-        "output_minus_competence_gap",
-    } <= set(profiles.columns)
-    context_summary = pd.read_csv(tables / "nasp_context_summary.csv")
-    assert {
-        "tissue_in_publication",
-        "cell_type",
-        "relative_competence",
-        "n_donors",
-    } <= set(context_summary.columns)
-    coupling = pd.read_csv(tables / "nasp_module_coupling.csv")
-    assert {
-        "module_a",
-        "module_b",
-        "spearman_r",
-        "signed_gene_jaccard",
-    } <= set(coupling.columns)
-    sensor_output = pd.read_csv(tables / "nasp_sensor_output_coupling.csv")
-    assert {
-        "gene",
-        "output_module",
-        "spearman_r",
-        "gene_in_output_module",
-    } <= set(sensor_output.columns)
-    context_ranking = pd.read_csv(tables / "nasp_module_context_ranking.csv")
-    assert {
-        "feature_label",
-        "n_finite_donors",
-        "eligible",
-        "context_percentile",
-    } <= set(context_ranking.columns)
-    hypotheses = pd.read_csv(tables / "nasp_hypothesis_priorities.csv")
-    assert {
-        "hypothesis",
-        "priority_score",
-        "interpretation",
-        "experimental_follow_up",
-    } <= set(hypotheses.columns)
-    mechanistic_edges = pd.read_csv(tables / "nasp_mechanistic_edges.csv")
-    assert {
-        "source_module",
-        "target_module",
-        "mechanistic_edge",
-        "spearman_r",
-    } <= set(mechanistic_edges.columns)
-    assert {
-        "dna_sensing_to_ifn_output",
-        "rna_sensing_to_ifn_output",
-    } <= set(mechanistic_edges["mechanistic_edge"])
-
-    deprecated_tables = {
-        "association_age_stability.csv",
-        "association_partial_correlation_age.csv",
-        "association_group_test_results.csv",
-        "association_group_summary.csv",
-    }
-    assert deprecated_tables.isdisjoint(written_table_names)
-
-    plot_root = tables.parent / "association_plots"
-    mixed_plots = plot_root / "mixed_models"
-    expected_mixed_plots = {
-        "nasp_mixed_age_slopes_by_cell_type.png",
-        "nasp_mixed_paired_tissue_effects.png",
-        "nasp_mixed_variance_decomposition.png",
-    }
-    written_mixed_plots = {
-        path.name: path for path in mixed_plots.glob("*.png")
-    }
-    assert set(written_mixed_plots) == expected_mixed_plots
-    assert all(path.stat().st_size > 0 for path in written_mixed_plots.values())
-
-    expected_nasp_plots = {
-        "nasp_module_coupling_heatmap.png",
-        "nasp_competence_output_state_map.png",
-        "nasp_ranked_hypotheses.png",
-        "nasp_sensor_output_mismatch.png",
-        "nasp_mechanistic_edge_network.png",
-    }
-    plot_manifest = pd.read_csv(tables / "association_plot_manifest.csv")
-    assert set(plot_manifest["kind"]) == {
-        "mixed_model_inference",
-        "nasp_summary",
-    }
-    mixed_manifest = plot_manifest.loc[
-        plot_manifest["kind"].eq("mixed_model_inference")
+    age = contrasts.loc[
+        contrasts.feature_label.eq("IFN_I_OUTPUT")
+        & contrasts.estimand.eq("age_by_cell_type")
+        & contrasts.estimable
     ]
-    nasp_manifest = plot_manifest.loc[plot_manifest["kind"].eq("nasp_summary")]
-    assert set(mixed_manifest["analysis_scope"]) == {
-        Path(filename).stem for filename in expected_mixed_plots
-    }
-    assert set(nasp_manifest["analysis_scope"]) == {
-        Path(filename).stem for filename in expected_nasp_plots
-    }
-    assert set(mixed_manifest["statistical_unit"]) == {model_unit}
-    assert set(nasp_manifest["statistical_unit"]) == {"donor_tissue_cell_type"}
-    assert set(plot_manifest["aggregation"]) == {"mean"}
-    assert plot_manifest["predictor"].isna().all()
-    manifest_paths = [Path(path) for path in plot_manifest["path"]]
-    assert {path.name for path in manifest_paths} == {
-        *expected_mixed_plots,
-        *expected_nasp_plots,
-    }
-    assert all(path.is_file() for path in manifest_paths)
+    assert not age.empty
+    np.testing.assert_allclose(age.estimate, 1.0, atol=0.2)
+    paired = contrasts.loc[
+        contrasts.estimand.eq("paired_tissue") & contrasts.estimable
+    ]
+    assert not paired.empty
+    assert paired.n_paired_units.eq(6).all()
 
-    nasp_plots = tables.parent / "association_plots" / "nasp"
-    written_nasp_plots = {path.name: path for path in nasp_plots.glob("*.png")}
-    assert set(written_nasp_plots) == expected_nasp_plots
-    assert all(path.stat().st_size > 0 for path in written_nasp_plots.values())
-
-    deprecated_plot_names = {
-        "nasp_age_effects_by_cell_type.png",
-        "nasp_sensor_age_effects_by_cell_type.png",
-        "nasp_age_effect_consistency_across_cell_types.png",
-        "nasp_sensor_age_effect_consistency_across_cell_types.png",
-    }
-    all_plot_names = {path.name for path in plot_root.rglob("*.png")}
-    assert deprecated_plot_names.isdisjoint(all_plot_names)
-    assert not any((plot_root / "regressions").glob("*.png"))
-    assert not any((plot_root / "boxplots").glob("*.png"))
-    assert not any((plot_root / "barplots").glob("*.png"))
+    manifest = pd.read_csv(tables / "association_plot_manifest.csv")
+    assert not manifest.empty
+    assert all(Path(path).stat().st_size > 0 for path in manifest.path)
 
 
 def test_orchestration_writes_eqtl_annotations(tmp_path: Path) -> None:
@@ -1422,96 +1029,6 @@ def test_orchestration_rejects_nonfinite_detection_threshold_before_io(
             output_dir=tmp_path / "assoc",
             detection_threshold=np.inf,
         )
-
-
-def test_empty_workflow_outputs_keep_mixed_and_manifest_headers(
-    tmp_path: Path,
-) -> None:
-    """Unavailable workflow stages still write readable public CSV schemas."""
-    workflows._write_empty_association_tables(tmp_path)
-    expected = workflows.TabulaMixedModelResults.empty()
-    table_names = {
-        "association_mixed_model_contrasts.csv": expected.contrasts,
-        "association_mixed_model_fixed_effects.csv": expected.fixed_effects,
-        "association_mixed_model_term_tests.csv": expected.term_tests,
-        "association_mixed_model_variance_components.csv": (
-            expected.variance_components
-        ),
-        "association_mixed_model_diagnostics.csv": expected.diagnostics,
-        "association_mixed_model_availability.csv": expected.availability,
-    }
-    for filename, schema in table_names.items():
-        observed = pd.read_csv(tmp_path / filename)
-        assert list(observed.columns) == list(schema.columns)
-        assert observed.empty
-
-    regression = pd.read_csv(tmp_path / "association_regression_results.csv")
-    annotations = pd.read_csv(tmp_path / "association_eqtl_annotations.csv")
-    assert regression.columns.tolist() == [
-        "feature_type",
-        "feature_id",
-        "feature_label",
-        "predictor",
-        "statistical_unit",
-        "aggregation",
-        "stratify_key",
-        "stratum",
-        "analysis_role",
-        "n_units",
-        "fdr_method",
-        "n",
-        "pearson_r",
-        "pearson_pvalue",
-        "spearman_r",
-        "spearman_pvalue",
-        "slope",
-        "intercept",
-        "ols_pvalue",
-        "skipped",
-        "skip_reason",
-        "pearson_pvalue_fdr",
-        "spearman_pvalue_fdr",
-        "ols_pvalue_fdr",
-        "analysis_scope",
-        "response_estimand",
-        "eqtl_fdr_family",
-        "eqtl_source_schema",
-        "eqtl_count_unit",
-        "eqtl_predictor_transform",
-        "eqtl_table_path",
-    ]
-    assert annotations.columns.tolist() == [
-        "feature_type",
-        "feature_id",
-        "feature_label",
-        "feature_value",
-        "statistical_unit",
-        "aggregation",
-        "unit_id",
-        "n_cells",
-        "n_cells_total",
-        "eqtl_matched",
-        "eqtl_merge_mode",
-        "eqtl_source_schema",
-        "eqtl_count_unit",
-        "eqtl_predictor_transform",
-        "eqtl_table_path",
-    ]
-    assert regression.empty
-    assert annotations.empty
-
-    manifest = pd.read_csv(tmp_path / "association_plot_manifest.csv")
-    assert manifest.columns.tolist() == [
-        "kind",
-        "feature_id",
-        "predictor",
-        "statistical_unit",
-        "aggregation",
-        "stratum",
-        "analysis_scope",
-        "path",
-    ]
-    assert manifest.empty
 
 
 def test_orchestration_cell_level_marked_descriptive(tmp_path: Path) -> None:

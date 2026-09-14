@@ -57,7 +57,47 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Reuse an existing score table only when all scorers completed.",
+        help="Reuse scores when the completion manifest and request match.",
+    )
+    for option, default, description in (
+        ("mixed-models-combined", True, "Fit all scored cells together."),
+        (
+            "mixed-models-per-tissue",
+            False,
+            "Independently fit every scored tissue.",
+        ),
+        (
+            "donor-sensitivity",
+            False,
+            "Write donor deletion ranks and paired tissue differences.",
+        ),
+        (
+            "gene-diagnostics",
+            False,
+            "Write gene expression/detection by donor and assay.",
+        ),
+        (
+            "gene-removal-sensitivity",
+            False,
+            "Rescore dominant-gene and shared-gene deletions.",
+        ),
+    ):
+        parser.add_argument(
+            f"--{option}",
+            action=argparse.BooleanOptionalAction,
+            default=default,
+            help=description,
+        )
+    parser.add_argument(
+        "--sensitivity-dominant-genes",
+        type=int,
+        default=1,
+        help="Driver genes removed separately per module.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print worker options without loading data or writing files.",
     )
     parser.add_argument(
         "--subset-fraction",
@@ -190,6 +230,21 @@ def _parse_arguments() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--mechanism-diagnostics",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Regulator branches, IFN components, and OAS/RNase L diagnostics.",
+    )
+    parser.add_argument(
+        "--reference-sets",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Score shipped Reactome/Hallmark sets and compare with curated "
+            "scores."
+        ),
+    )
+    parser.add_argument(
         "--score-table-filename",
         default="tabula_sapiens_module_scores.csv.gz",
     )
@@ -203,6 +258,10 @@ def main() -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     args = _parse_arguments()
+    if args.dry_run:
+        for name, value in vars(args).items():
+            logger.info("%s = %s", name, value)
+        return
     outputs = tabula_sapiens_tissue_analysis(
         h5ad_path=args.h5ad_path,
         output_dir=args.output_path,
@@ -235,6 +294,14 @@ def main() -> None:
         ),
         max_plots=args.max_plots,
         plot_nasp_visualizations=args.nasp_visualizations,
+        mixed_models_combined=args.mixed_models_combined,
+        mixed_models_per_tissue=args.mixed_models_per_tissue,
+        run_donor_sensitivity=args.donor_sensitivity,
+        run_gene_diagnostics=args.gene_diagnostics,
+        run_gene_removal_sensitivity=args.gene_removal_sensitivity,
+        sensitivity_dominant_genes=args.sensitivity_dominant_genes,
+        run_mechanism_diagnostics=args.mechanism_diagnostics,
+        include_reference_sets=args.reference_sets,
     )
     for output_name, output_path in outputs.items():
         logger.info("%s -> %s", output_name, output_path)

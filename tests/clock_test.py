@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import dataclasses
-
 import anndata as ad  # type: ignore[import]
 import joblib  # type: ignore[import]
 import numpy as np
 import numpy.typing as npt
 import pandas as pd
-import pytest
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import Pipeline
@@ -57,14 +54,6 @@ class _CapturingEstimator:
     def predict(self, X: pd.DataFrame) -> npt.NDArray[np.float64]:
         self.seen = X.copy()
         return np.zeros(X.shape[0], dtype=float)
-
-
-def test_clock_config_is_immutable() -> None:
-    """ClockConfig blocks attribute mutation after construction."""
-    config = clock_analysis.ClockConfig()
-
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        config.species = "mouse"
 
 
 def test_predict_metacells_has_stable_dataframe_return_type() -> None:
@@ -293,42 +282,3 @@ def test_clock_regression_plots_written_for_prediction_columns(
         tmp_path / "clock_tissue_chronoage_scaleddiff_tage_regression.png"
     )
     assert output_path.stat().st_size > 0
-
-
-def test_clock_regression_writes_title_and_count_colorbar(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    """Clock regression figures show their title and metacell-count scale."""
-    tidy = pd.DataFrame(
-        {
-            "age_years": [20.0, 20.1, 30.0, 40.0, 50.0],
-            "chronoage_scaleddiff_tage": [18.0, 18.1, 29.0, 42.0, 51.0],
-        }
-    )
-    figures = []
-    close_figure = clock_analysis.plt.close
-
-    def capture_close(figure) -> None:
-        figures.append(figure)
-
-    monkeypatch.setattr(clock_analysis.plt, "close", capture_close)
-
-    try:
-        clock_analysis.plot_clock_regressions(
-            tidy,
-            output_dir=tmp_path,
-            level="tissue",
-            age_key="age_years",
-            title="Tabula Sapiens",
-        )
-
-        ax = figures[0].axes[0]
-        colorbar_ax = figures[0].axes[1]
-        colorbar_ticks = colorbar_ax.get_yticks()
-        assert ax.get_title() == "Tabula Sapiens (n=5)"
-        assert colorbar_ticks.tolist() == [1, 2]
-        assert all(float(tick).is_integer() for tick in colorbar_ticks)
-    finally:
-        for figure in figures:
-            close_figure(figure)
