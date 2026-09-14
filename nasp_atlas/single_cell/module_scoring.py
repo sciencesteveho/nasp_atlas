@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Sequence
 from dataclasses import replace
 from typing import Literal, TypeAlias, cast
@@ -15,7 +16,8 @@ import scipy.sparse as sp  # type: ignore[import]
 from nasp_compendium import GeneModules  # type: ignore[import]
 from nasp_compendium.types import GeneModule  # type: ignore[import]
 from pyscenic.aucell import GeneSignature  # type: ignore[import]
-from pyscenic.aucell import aucell  # type: ignore[import]
+from pyscenic.aucell import aucell4r  # type: ignore[import]
+from pyscenic.aucell import create_rankings  # type: ignore[import]
 
 from nasp_atlas.single_cell.utils import expression_matrix
 
@@ -377,9 +379,33 @@ def score_aucell_modules(
             f"{unavailable}."
         )
 
+    n_chunks = (adata.n_obs + chunk_size - 1) // chunk_size
+    started_at = time.perf_counter()
+    logger.info(
+        "AUCell started: cells=%d, genes=%d, signatures=%d, "
+        "chunk_size=%d, workers=%d, chunks=%d, seed=%d",
+        adata.n_obs,
+        len(kept_gene_ids),
+        len(signatures),
+        chunk_size,
+        num_workers,
+        n_chunks,
+        random_state,
+    )
+
     auc_parts: list[pd.DataFrame] = []
-    for start in range(0, adata.n_obs, chunk_size):
+    for chunk_number, start in enumerate(
+        range(0, adata.n_obs, chunk_size), start=1
+    ):
         stop = min(start + chunk_size, adata.n_obs)
+        chunk_started_at = time.perf_counter()
+        logger.info(
+            "AUCell chunk %d/%d: scoring cells %d-%d",
+            chunk_number,
+            n_chunks,
+            start + 1,
+            stop,
+        )
         block = source_matrix[start:stop, keep_mask]
         block_values = (
             block.toarray() if sp.issparse(block) else np.asarray(block)  # type: ignore[union-attr]
@@ -390,14 +416,31 @@ def score_aucell_modules(
             columns=kept_gene_ids,
         )
         auc_parts.append(
-            aucell(
-                block_df,
+            aucell4r(
+                _create_aucell_rankings(block_df, seed=random_state),
                 signatures,
-                seed=random_state,
                 num_workers=num_workers,
             )
         )
 
+        finished_at = time.perf_counter()
+        elapsed = finished_at - started_at
+        remaining = elapsed * (adata.n_obs - stop) / stop
+        logger.info(
+            "AUCell chunk %d/%d complete: %d/%d cells (%.1f%%), "
+            "chunk %.1fs, elapsed %.1fmin, "
+            "estimated remaining %.1fmin (chunks only)",
+            chunk_number,
+            n_chunks,
+            stop,
+            adata.n_obs,
+            100.0 * stop / adata.n_obs,
+            finished_at - chunk_started_at,
+            elapsed / 60.0,
+            remaining / 60.0,
+        )
+
+    logger.info("AUCell chunks finished; assembling signed module scores")
     auc_df = pd.concat(auc_parts)
     for module in modules:
         score_name = module_score_name(module, scorer="aucell")
@@ -428,7 +471,38 @@ def score_aucell_modules(
     for score_column in auc_df.columns:
         adata_auc.obs[score_column] = auc_df[score_column]
 
+    logger.info(
+        "AUCell finished: cells=%d, modules=%d, elapsed %.1fmin",
+        adata.n_obs,
+        len(modules),
+        (time.perf_counter() - started_at) / 60.0,
+    )
     return adata_auc, auc_df, modules
+
+
+def _create_aucell_rankings(
+    expression: pd.DataFrame,
+    *,
+    seed: int,
+) -> pd.DataFrame:
+    """Rank each cell with pySCENIC's seeded ties and missing values last."""
+    values = expression.to_numpy()
+    if values.dtype.kind not in "iufb" or values.dtype.itemsize > 8:
+        return create_rankings(expression, seed=seed)
+
+    shuffled = expression.sample(frac=1.0, axis=1, random_state=seed)
+    values = shuffled.to_numpy()
+    # Complement integers to reverse their order without negation overflow.
+    descending_values = ~values if values.dtype.kind in "iub" else -values
+    order = np.argsort(descending_values, axis=1, kind="stable")
+    ranks = np.empty(order.shape, dtype=np.uint32)
+    np.put_along_axis(
+        ranks,
+        order,
+        np.arange(order.shape[1], dtype=np.uint32)[None, :],
+        axis=1,
+    )
+    return pd.DataFrame(ranks, index=shuffled.index, columns=shuffled.columns)
 
 
 def _resolve_supplied_module(

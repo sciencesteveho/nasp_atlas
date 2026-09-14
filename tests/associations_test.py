@@ -1001,7 +1001,7 @@ def test_orchestration_does_not_rescore(tmp_path: Path, monkeypatch) -> None:
         _fail,
     )
     monkeypatch.setattr(
-        "nasp_atlas.single_cell.module_scoring.aucell",
+        "nasp_atlas.single_cell.module_scoring.aucell4r",
         _fail,
     )
 

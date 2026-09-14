@@ -288,6 +288,12 @@ def write_score_tables(
         scores = pd.concat([obs_metadata.reindex(scores.index), scores], axis=1)
     score_path = Path(output_dir) / filename
     score_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "[tabula_sapiens] writing module scores: cells=%d, columns=%d -> %s",
+        len(scores),
+        len(scores.columns),
+        score_path,
+    )
     scores.to_csv(
         score_path,
         index=True,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 
 import anndata as ad
@@ -11,6 +12,8 @@ import pytest
 from nasp_compendium import GeneModules
 from nasp_compendium.types import GeneIdOutput
 from nasp_compendium.types import GeneModule
+from pyscenic.aucell import GeneSignature
+from pyscenic.aucell import aucell
 
 from nasp_atlas.single_cell.module_scoring import combine_module_scores
 from nasp_atlas.single_cell.module_scoring import score_aucell_modules
@@ -103,22 +106,43 @@ def test_aucell_rejects_empty_signature_selection() -> None:
         score_aucell_modules(adata, [], expression_layer=None)
 
 
-def test_aucell_preserves_signed_scores_across_chunks_and_missing_symbols() -> (
-    None
-):
-    """Chunking and symbol fallback preserve cell-aligned signed scores."""
+@pytest.mark.parametrize("dtype", [np.float32, np.int64])
+def test_aucell_preserves_signed_scores_across_chunks_and_missing_symbols(
+    caplog,
+    dtype,
+) -> None:
+    """Chunked scores match pySCENIC with ties and report progress."""
     rng = np.random.default_rng(8)
     genes = ["CGAS", "LMNB1", *[f"background_{i}" for i in range(98)]]
-    values = rng.uniform(0, 1, size=(12, 100))
+    values = rng.integers(0, 4, size=(12, 100)).astype(dtype)
     values[:6, 0] = 10
     values[6:, 1] = 10
+    values[:, 2:8] = 10
+    if np.issubdtype(dtype, np.floating):
+        values[1, 2:8] = [np.nan, np.nan, np.inf, -np.inf, 0.0, -0.0]
+    else:
+        limits = np.iinfo(dtype)
+        values[1, 2:6] = [limits.min, limits.max, limits.max - 1, 0]
+
     adata = ad.AnnData(
         values,
         obs=pd.DataFrame(index=[f"cell_{i}" for i in range(12)]),
         var=pd.DataFrame({"feature_name": genes}, index=genes),
     )
     module = _gene_module(inverse_genes=("LMNB1",))
-    _, reference, _ = score_aucell_modules(
+    reference = aucell(
+        pd.DataFrame(values, index=adata.obs_names, columns=genes),
+        [
+            GeneSignature("NASP_TEST_pos_auc", {"CGAS": 1.0}),
+            GeneSignature("NASP_TEST_inv_auc", {"LMNB1": 1.0}),
+        ],
+        seed=17,
+        num_workers=1,
+    )
+    reference["NASP_TEST_auc"] = combine_module_scores(
+        module, reference, scorer="aucell"
+    )
+    _, single_chunk, _ = score_aucell_modules(
         adata,
         [module.module_id],
         gene_modules=[module],
@@ -128,6 +152,11 @@ def test_aucell_preserves_signed_scores_across_chunks_and_missing_symbols() -> (
     )
     adata.var.loc["CGAS", "feature_name"] = None
     original_obs = adata.obs.copy()
+    original_values = values.copy()
+    caplog.set_level(
+        logging.INFO, logger="nasp_atlas.single_cell.module_scoring"
+    )
+    caplog.clear()
 
     _, chunked, _ = score_aucell_modules(
         adata,
@@ -138,10 +167,18 @@ def test_aucell_preserves_signed_scores_across_chunks_and_missing_symbols() -> (
         random_state=17,
     )
 
+    pd.testing.assert_frame_equal(
+        reference.sort_index(), single_chunk.sort_index(), check_exact=True
+    )
     pd.testing.assert_frame_equal(reference.sort_index(), chunked.sort_index())
     pd.testing.assert_frame_equal(adata.obs, original_obs)
+    np.testing.assert_array_equal(adata.X, original_values)
     scores = chunked.reindex(adata.obs_names)["NASP_TEST_auc"]
     assert scores.iloc[:6].mean() > scores.iloc[6:].mean()
+    assert "AUCell chunk 1/4" in caplog.text
+    assert "AUCell chunk 4/4 complete: 12/12 cells (100.0%)" in caplog.text
+    assert "estimated remaining 0.0min" in caplog.text
+    assert "AUCell finished" in caplog.text
 
 
 def test_scanpy_raw_scoring_uses_the_raw_gene_universe() -> None:

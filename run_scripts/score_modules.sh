@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N nasp_tissue
-#PBS -l select=1:ncpus=16:mem=128gb
-#PBS -l walltime=12:00:00
+#PBS -l select=1:ncpus=16:mem=320gb
+#PBS -l walltime=36:00:00
 #PBS -m a
 #PBS -j oe
 #PBS -o /rds/general/user/sho3/projects/lms-scott-raw/live/steve/tabula_sapiens/scripts/job_out/
@@ -73,7 +73,8 @@ MIXED_MODEL_MIN_REPEATED_CONTEXTS="${MIXED_MODEL_MIN_REPEATED_CONTEXTS:-3}"
 MAX_PLOTS="${MAX_PLOTS:-200}"
 RANDOM_STATE="${RANDOM_STATE:-42}"
 AUCELL_CHUNK_SIZE="${AUCELL_CHUNK_SIZE:-1000}"
-AUCELL_NUM_WORKERS="${AUCELL_NUM_WORKERS:-8}"
+# Ranking is serial; one worker avoids per-chunk forks of the full atlas.
+AUCELL_NUM_WORKERS="${AUCELL_NUM_WORKERS:-1}"
 
 # PBS logging
 PBS_COMMON="${HOME}/pbs_common.sh"
@@ -273,6 +274,7 @@ main() {
   printf 'Cell fraction: %s\n' "${SUBSET_FRACTION:-all cells}"
   printf 'Combined / per-tissue models: %s / %s\n' "${MIXED_MODELS_COMBINED}" "${MIXED_MODELS_PER_TISSUE}"
   printf 'Scorers: %s\n' "${SCORERS}"
+  printf 'AUCell chunk size / workers: %s / %s\n' "${AUCELL_CHUNK_SIZE}" "${AUCELL_NUM_WORKERS}"
   printf 'Resume: %s\n' "${RESUME}"
 
   run_analysis "${REPO_DIR}" "${python_path}" "${python_args[@]}"
