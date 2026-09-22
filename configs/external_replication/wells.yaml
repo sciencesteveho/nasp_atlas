@@ -1,0 +1,39 @@
+cohort_id: wells
+input_path: ../../development/h5ad/589324ee-ce60-4295-843f-29a52894a522.h5ad
+counts_source: raw/X
+gene_id_column: _index
+gene_symbol_column: feature_name
+obs_columns:
+  donor_id: donor_id
+  tissue: tissue
+  assay: assay
+  sex: sex
+  age: donor_age
+  institute: institute
+  cmv: cmv
+obs_constants:
+  modality: cells
+filters:
+  assay: ["10x 5' v2"]
+  disease: [normal]
+  is_primary_data: [true]
+  tissue: [spleen, blood]
+populations:
+  classical_monocyte:
+    column: author_cell_type
+    labels: [monocyte_classical]
+library_keys: [library_id, library_id_demultiplexed_tissue, library_id_repository]
+donor_metadata: [sex, age, institute, cmv]
+comparison:
+  level_key: tissue
+  target: spleen
+  reference: blood
+  minimum_cells: 10
+  minimum_pairs: 6
+source_notes: >-
+  Wells et al., Nature Immunology 2025, doi:10.1038/s41590-025-02241-4.
+  Count source raw/X was audited separately from processed X. This request
+  pools distinct retained cells within donor/tissue; preparation relationships
+  require source verification before confirmatory inference. Five donor IDs
+  match the Kedlian release; retain cross-cohort linkage. Tissue differences
+  include collection/processing differences and do not identify activation.

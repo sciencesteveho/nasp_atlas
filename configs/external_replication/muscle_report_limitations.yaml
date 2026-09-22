@@ -1,0 +1,40 @@
+# Reviewed report limitations for the Kedlian muscle cohort. The frozen
+# registration carries one global list written before the muscle gates were
+# resolved; this list replaces it in muscle reports only.
+- >-
+  Observational expression signatures, not evidence of activation, mechanism
+  or causality.
+- >-
+  Vascular endothelium versus CD4 T cells is largely a cell-identity contrast;
+  a positive difference does not show NASP specificity.
+- >-
+  External cells pool 10x 3' v2 (five donors) and 3' v3 (four donors). Each
+  donor has one chemistry, so pairing removes donor and chemistry baselines but
+  not a chemistry-by-population effect. The TS reference uses 3' v3 only.
+- >-
+  Muscle counts are the authors' released count layer, whose paper describes
+  CellBender ambient-RNA removal; TS scores use raw molecule counts rather
+  than TS decontX-corrected counts, so ambient-RNA handling differs between
+  cohorts.
+- >-
+  The primary analysis additionally excludes released is_doublet flags. No
+  muscle cell exceeds the published Scrublet threshold of 0.4, so the
+  as-released cell set equals the published-threshold set.
+- >-
+  Nuclei are a separate modality scored on their own nuclei: seven donors, of
+  whom only three are among the nine primary donors, so 9 + 7 is not
+  independent donor support and agreement is not a separate human replication.
+  Full-group differences between the cell and nuclei sets confound modality
+  with donor composition.
+- >-
+  The TS target uses the generic endothelial label plus capillary, arterial and
+  vascular-tree labels (lymphatic excluded), which is less specific than
+  ArtEC, CapEC and VenEC. The TS reference has five donors.
+- >-
+  NASP_RNA_SENSING has no TS-supported positive direction in the harmonized
+  reference (the scorers disagree in sign), so it is unavailable for
+  confirmation and its external estimate is descriptive.
+- >-
+  Five donor IDs occur in both the Wells and muscle releases and 583B is in
+  both primary analyses. Cohorts are not treated as independent people, and
+  there is no cross-cohort calibrated score magnitude or meta-analysis.

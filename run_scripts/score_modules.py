@@ -6,7 +6,10 @@ import argparse
 import logging
 from pathlib import Path
 
+from nasp_compendium import GeneModules
+
 from nasp_atlas.analysis import tabula_sapiens_tissue_analysis
+from nasp_atlas.analysis.sensor_reports import analyze_sensor_reference
 
 
 logger = logging.getLogger(__name__)
@@ -248,7 +251,26 @@ def _parse_arguments() -> argparse.Namespace:
         "--score-table-filename",
         default="tabula_sapiens_module_scores.csv.gz",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--sensor-specs",
+        type=Path,
+        nargs="+",
+        help="Cohort YAMLs for paired sensor reports, once per comparison",
+    )
+    parser.add_argument(
+        "--sensor-panel",
+        type=Path,
+        help="Curated sensor panel; defaults to the installed compendium",
+    )
+    parser.add_argument(
+        "--sensors-only",
+        action="store_true",
+        help="Only focused sensor reports; no module scoring or atlas fitting",
+    )
+    args = parser.parse_args()
+    if args.sensors_only and not args.sensor_specs:
+        parser.error("--sensors-only requires --sensor-specs")
+    return args
 
 
 def main() -> None:
@@ -261,6 +283,22 @@ def main() -> None:
     if args.dry_run:
         for name, value in vars(args).items():
             logger.info("%s = %s", name, value)
+        return
+    if args.sensors_only:
+        root = (
+            args.output_path
+            / (args.run_name or args.h5ad_path.stem)
+            / "sensors"
+        )
+        for spec_path in args.sensor_specs:
+            output = analyze_sensor_reference(
+                spec_path=spec_path,
+                panel_path=args.sensor_panel
+                or GeneModules.default_panel_path(),
+                h5ad_path=args.h5ad_path,
+                output_dir=root / spec_path.stem,
+            )
+            logger.info("Sensor report -> %s", output)
         return
     outputs = tabula_sapiens_tissue_analysis(
         h5ad_path=args.h5ad_path,
@@ -302,6 +340,8 @@ def main() -> None:
         sensitivity_dominant_genes=args.sensitivity_dominant_genes,
         run_mechanism_diagnostics=args.mechanism_diagnostics,
         include_reference_sets=args.reference_sets,
+        sensor_specs=args.sensor_specs,
+        sensor_panel_path=args.sensor_panel,
     )
     for output_name, output_path in outputs.items():
         logger.info("%s -> %s", output_name, output_path)

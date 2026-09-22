@@ -1,0 +1,38 @@
+cohort_id: kedlian_muscle
+input_path: ../../development/h5ad/SKM_human_raw_cells2nuclei_2023-06-22.hdf
+counts_source: layers/counts
+gene_id_column: ENSEMBL
+gene_symbol_column: SYMBOL
+obs_columns:
+  donor_id: DonorID
+  assay: 10X_version
+  modality: batch
+  sex: Sex
+  age: Age_group
+  age_group: Age_bin
+obs_constants:
+  tissue: muscle
+filters:
+  batch: [cells]
+  is_doublet: [false]
+populations:
+  vascular_endothelium:
+    column: annotation_level1
+    labels: [ArtEC, CapEC, VenEC]
+  CD4_T:
+    column: annotation_level2
+    labels: [CD4+T]
+library_keys: [SampleID]
+donor_metadata: [sex, age, age_group]
+comparison:
+  level_key: population
+  target: vascular_endothelium
+  reference: CD4_T
+  minimum_cells: 10
+  minimum_pairs: 6
+source_notes: >-
+  Kedlian et al., Nature Aging 2024, doi:10.1038/s43587-024-00613-3.
+  AnnData-encoded HDF5; counts are in layers/counts, not X. Released doublet
+  flag exclusion differs from the published Scrublet threshold. QC provenance,
+  preparation relationships and generic TS endothelial mapping remain gates.
+  Cells pool v2/v3 within modality; nuclei stay separate. Age is descriptive.

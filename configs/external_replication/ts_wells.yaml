@@ -1,0 +1,33 @@
+cohort_id: tabula_sapiens
+input_path: ../../development/h5ad/1c88f927-bcbb-4bb1-9881-281842945a2d.h5ad
+counts_source: raw/X
+gene_id_column: _index
+gene_symbol_column: feature_name
+obs_columns:
+  donor_id: donor_id
+  tissue: tissue_in_publication
+  assay: assay
+  sex: sex
+obs_constants:
+  modality: cells
+filters:
+  assay: ["10x 3' v3"]
+  tissue_in_publication: [Spleen, Blood]
+populations:
+  classical_monocyte:
+    column: cell_type
+    labels: [classical monocyte]
+library_keys: [sample_id, library_plate]
+donor_metadata: [sex]
+comparison:
+  level_key: tissue
+  target: Spleen
+  reference: Blood
+  minimum_cells: 10
+  minimum_pairs: 3
+source_notes: >-
+  Focused Tabula Sapiens discovery reconstruction. raw/X is the candidate
+  count source; validate count arrays and release preprocessing before scoring.
+  Do not substitute the decontXcounts layer silently. Chemistry differs from
+  Wells 5-prime data. Correct DDX58/RIGI mapping explicitly while preserving
+  the historical saved score estimates.

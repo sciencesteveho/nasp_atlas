@@ -7,16 +7,195 @@ from collections import Counter
 from pathlib import Path
 
 import anndata as ad  # type: ignore[import]
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
+from nasp_compendium import GeneModules  # type: ignore[import]
 from nasp_compendium.types import GeneModule  # type: ignore[import]
+
+from nasp_atlas.analysis.tabula_sapiens.compendium_symbols import (
+    COMPENDIUM_SYMBOL_COLUMN,
+)
+from nasp_atlas.analysis.tabula_sapiens.compendium_symbols import (
+    add_compendium_symbol_column,
+)
+from nasp_atlas.analysis.tabula_sapiens.scoring import (
+    plot_reference_score_umaps,
+)
+from nasp_atlas.analysis.tabula_sapiens.scoring import (
+    plot_scorer_concordance_by_source,
+)
+from nasp_atlas.single_cell.visualization import SummaryPlotter
+from nasp_atlas.single_cell.visualization import UmapPlotter
 
 
 tabula_sapiens = importlib.import_module("nasp_atlas.analysis.tabula_sapiens")
 tabula_sapiens_workflows = importlib.import_module(
     "nasp_atlas.analysis.tabula_sapiens.workflows"
 )
+
+
+def test_compendium_aliases_recover_renamed_genes_without_guessing(
+    tmp_path,
+) -> None:
+    """A curated gene under a newer dataset symbol must still be matched.
+
+    GENEA appears only as its curated alias NEWA (as DDX58 appears as RIGI).
+    GENEC and GENED both list SHARED, so neither may claim that feature.
+    """
+    template = {
+        "module_class": "rna_sensing_core",
+        "sensor_family": "RLR",
+        "activation_tier": "Early",
+        "scoring_direction": "positive",
+        "cell_type_breadth": "Broad",
+        "detectability": "high",
+        "doi": "10.0000/test",
+        "sensor": "rna_sensor",
+    }
+    panel = pd.DataFrame(
+        [
+            {**template, "gene_symbol": gene, "aliases": aliases}
+            for gene, aliases in (
+                ("GENEA", "NEWA"),
+                ("GENEB", ""),
+                ("GENEC", "SHARED"),
+                ("GENED", "SHARED"),
+            )
+        ]
+    ).assign(module_id="TEST_SENSING")
+    panel_path = tmp_path / "marker_genes.tsv"
+    panel.to_csv(panel_path, sep="\t", index=False)
+    adata = ad.AnnData(
+        var=pd.DataFrame(
+            {"feature_name": ["NEWA", "GENEB", "SHARED", "OTHER"]},
+            index=["G1", "G2", "G3", "G4"],
+        )
+    )
+
+    applied = add_compendium_symbol_column(
+        adata, source_column="feature_name", panel_path=panel_path
+    )
+    module = GeneModules.modules(
+        "TEST_SENSING",
+        panel_path=panel_path,
+        adata=adata,
+        gene_symbol_column=COMPENDIUM_SYMBOL_COLUMN,
+        output="var_names",
+    )
+
+    assert applied == {"GENEA": "NEWA"}
+    assert set(module.positive_genes) == {"G1", "G2"}
+    assert set(module.missing_positive_genes) == {"GENEC", "GENED"}
+    assert adata.var.feature_name.tolist() == [
+        "NEWA",
+        "GENEB",
+        "SHARED",
+        "OTHER",
+    ]
+
+
+@pytest.mark.parametrize(
+    "scorer,suffix", [("scanpy", "_score"), ("aucell", "_auc")]
+)
+def test_reference_umaps_group_databases_without_changing_scores(
+    tmp_path, monkeypatch, scorer, suffix
+) -> None:
+    """Each external source retains its panel values and original embedding."""
+    identifiers = [
+        "REACTOME_R_HSA_1834949",
+        "REACTOME_R_HSA_1834941",
+        "HALLMARK_INFLAMMATORY_RESPONSE",
+    ]
+    scores = {
+        f"{identifier}{suffix}": np.array([0.1, 0.2, 0.3]) + i
+        for i, identifier in enumerate(identifiers)
+    }
+    embedding = np.array([[0.0, 1.0], [2.0, 3.0], [4.0, 5.0]])
+    adata = ad.AnnData(
+        obs=pd.DataFrame(scores, index=["a", "b", "c"]),
+        obsm={"X_umap": embedding},
+    )
+    figures = []
+    close = plt.close
+    monkeypatch.setattr(plt, "close", figures.append)
+    try:
+        plot_reference_score_umaps(
+            adata,
+            list(scores),
+            scorer=scorer,
+            plotter=UmapPlotter(tmp_path, dpi=60),
+        )
+        shown = [
+            [
+                axis.collections[0]
+                for axis in figure.axes
+                if axis.collections
+                and axis.collections[0].get_offsets().shape == (3, 2)
+            ]
+            for figure in figures
+        ]
+        assert [len(panels) for panels in shown] == [2, 1]
+        for collection, values in zip(
+            [panel for panels in shown for panel in panels],
+            scores.values(),
+            strict=True,
+        ):
+            np.testing.assert_allclose(collection.get_array(), values)
+            np.testing.assert_allclose(collection.get_offsets(), embedding)
+    finally:
+        for figure in figures:
+            close(figure)
+
+
+def test_concordance_source_split_preserves_within_source_pairs(
+    tmp_path, monkeypatch
+) -> None:
+    """Split matrices retain off-diagonal pairs and unavailable correlations."""
+    identifiers = [
+        "NASP_DNA_SENSING",
+        "IFN_I_OUTPUT",
+        "REACTOME_R_HSA_1834949",
+        "HALLMARK_INFLAMMATORY_RESPONSE",
+    ]
+    values = np.arange(16, dtype=float).reshape(4, 4) / 16
+    values[2, 3] = np.nan
+    correlations = pd.DataFrame(
+        [
+            {
+                "scanpy_module_id": scanpy,
+                "aucell_module_id": aucell,
+                "spearman_r": values[row, column],
+            }
+            for row, aucell in enumerate(identifiers)
+            for column, scanpy in enumerate(identifiers)
+        ]
+    )
+    original = correlations.copy(deep=True)
+    figures = []
+    close = plt.close
+    monkeypatch.setattr(plt, "close", figures.append)
+    try:
+        plot_scorer_concordance_by_source(
+            correlations,
+            identifiers,
+            plotter=SummaryPlotter(tmp_path, dpi=60),
+        )
+        assert len(figures) == 2
+        for figure, expected in zip(
+            figures,
+            (values[:2, :2], values[2:, 2:]),
+            strict=True,
+        ):
+            np.testing.assert_allclose(
+                figure.axes[0].images[0].get_array().filled(np.nan),
+                expected,
+            )
+        pd.testing.assert_frame_equal(correlations, original)
+    finally:
+        for figure in figures:
+            close(figure)
 
 
 def _write_completed_score_table(

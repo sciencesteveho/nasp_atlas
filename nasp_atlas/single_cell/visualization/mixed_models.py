@@ -55,6 +55,22 @@ class MixedModelPlotter(_PlotterBase):
         compact_label_support: bool = False,
         fdr_threshold: float = 0.05,
         figsize: tuple[float, float] | None = None,
+        cmap_name: str = "RdBu_r",
+        interval_color: str = "black",
+        title_fontsize: float | None = None,
+        label_fontsize: float | None = None,
+        tick_fontsize: float | None = None,
+        title_pad: float | None = None,
+        label_pad: float | None = None,
+        legend_loc: str = "upper left",
+        legend_anchor: tuple[float, float] | None = (1.01, 1.0),
+        legend_fontsize: float | None = None,
+        legend_marker_size: float = 3.2,
+        y_label: str | None = None,
+        show_x_ticks: bool = True,
+        show_y_ticks: bool = True,
+        show_x_tick_labels: bool = True,
+        show_y_tick_labels: bool = True,
     ) -> None:
         """Plot planned mixed-model contrasts with 95% confidence intervals.
 
@@ -95,6 +111,22 @@ class MixedModelPlotter(_PlotterBase):
           fdr_threshold: Adjusted p-value threshold encoded by marker fill.
           figsize: Optional exact figure width and height in inches, overriding
             adaptive dimensions.
+          cmap_name: Diverging marker palette, centered on zero effect.
+          interval_color: Color of confidence-interval lines.
+          title_fontsize: Title size in points; None keeps publication style.
+          label_fontsize: Axis-label size in points; None keeps shared style.
+          tick_fontsize: Tick-label size in points; None keeps shared style.
+          title_pad: Title gap in points; None keeps shared style.
+          label_pad: Axis-label gap in points; None keeps shared style.
+          legend_loc: Matplotlib legend anchor location.
+          legend_anchor: Anchor in axes coordinates; None places it inside.
+          legend_fontsize: Legend font size in points; None keeps shared style.
+          legend_marker_size: Legend marker diameter in positive points.
+          y_label: Optional contrast-axis label; None keeps it empty.
+          show_x_ticks: Whether effect-axis tick marks are drawn.
+          show_y_ticks: Whether contrast-row tick marks are drawn.
+          show_x_tick_labels: Whether effect-axis tick labels are drawn.
+          show_y_tick_labels: Whether contrast-row labels are drawn.
 
         Example Usage:
           >>> plotter.plot_mixed_model_effects(
@@ -105,6 +137,8 @@ class MixedModelPlotter(_PlotterBase):
           ...     filename="nasp_mixed_age_slopes_by_cell_type",
           ...     max_effects=24,
           ...     row_height=0.44,
+          ...     point_size=15,
+          ...     legend_anchor=(1.02, 1.0),
           ... )
         """
         set_matplotlib_publication_parameters()
@@ -121,6 +155,17 @@ class MixedModelPlotter(_PlotterBase):
             fdr_threshold=fdr_threshold,
             figsize=figsize,
         )
+        for size in (
+            title_fontsize,
+            label_fontsize,
+            tick_fontsize,
+            legend_fontsize,
+            legend_marker_size,
+        ):
+            if size is not None and (not np.isfinite(size) or size <= 0):
+                raise ValueError(
+                    "Font and legend marker sizes must be positive and finite"
+                )
 
         required = {
             "analysis",
@@ -248,14 +293,14 @@ class MixedModelPlotter(_PlotterBase):
             np.nanmax(np.abs(np.concatenate((ci_low, ci_high, estimates))))
         )
         effect_limit = max(effect_limit, np.finfo(float).eps)
-        cmap = plt.get_cmap("RdBu_r")
+        cmap = plt.get_cmap(cmap_name)
         colors = cmap((estimates / effect_limit + 1.0) / 2.0)
 
         ax.hlines(
             y_positions,
             ci_low,
             ci_high,
-            color="black",
+            color=interval_color,
             linewidth=interval_linewidth,
             zorder=1,
         )
@@ -301,9 +346,26 @@ class MixedModelPlotter(_PlotterBase):
         ax.set_yticklabels(selected["_row_label"].tolist())
         ax.invert_yaxis()
         ax.tick_params(axis="both", which="major", pad=tick_label_pad)
-        ax.set_xlabel(x_label or self._effect_axis_label(selected))
-        resolved_title = title or self._display_label(estimand)
-        ax.set_title(resolved_title)
+        if tick_fontsize is not None:
+            ax.tick_params(axis="both", labelsize=tick_fontsize)
+        ax.set_xlabel(
+            self._effect_axis_label(selected) if x_label is None else x_label,
+            fontsize=label_fontsize,
+            labelpad=label_pad,
+        )
+        resolved_title = (
+            self._display_label(estimand) if title is None else title
+        )
+        ax.set_title(resolved_title, fontsize=title_fontsize, pad=title_pad)
+        if y_label is not None:
+            ax.set_ylabel(y_label, fontsize=label_fontsize, labelpad=label_pad)
+        self._set_tick_visibility(
+            ax,
+            show_x_ticks=show_x_ticks,
+            show_y_ticks=show_y_ticks,
+            show_x_tick_labels=show_x_tick_labels,
+            show_y_tick_labels=show_y_tick_labels,
+        )
         ax.spines[["top", "right"]].set_visible(False)
         ax.legend(
             handles=[
@@ -314,7 +376,7 @@ class MixedModelPlotter(_PlotterBase):
                     linestyle="none",
                     markerfacecolor="#777777",
                     markeredgecolor="#555555",
-                    markersize=3.2,
+                    markersize=legend_marker_size,
                     label=f"FDR ≤ {fdr_threshold:g}",
                 ),
                 Line2D(
@@ -324,13 +386,14 @@ class MixedModelPlotter(_PlotterBase):
                     linestyle="none",
                     markerfacecolor="white",
                     markeredgecolor="#777777",
-                    markersize=3.2,
+                    markersize=legend_marker_size,
                     label=f"FDR > {fdr_threshold:g} or unadjusted",
                 ),
             ],
             frameon=False,
-            loc="upper left",
-            bbox_to_anchor=(1.01, 1.0),
+            loc=legend_loc,
+            bbox_to_anchor=legend_anchor,
+            fontsize=legend_fontsize,
             borderaxespad=0.0,
         )
         self._save_figure_and_log(
@@ -356,6 +419,18 @@ class MixedModelPlotter(_PlotterBase):
         bar_height: float = 0.68,
         tick_label_pad: float = 1.5,
         figsize: tuple[float, float] | None = None,
+        x_label: str = "Variance fraction",
+        y_label: str | None = None,
+        title_fontsize: float | None = None,
+        label_fontsize: float | None = None,
+        tick_fontsize: float | None = None,
+        show_x_ticks: bool = True,
+        show_y_ticks: bool = True,
+        show_x_tick_labels: bool = True,
+        show_y_tick_labels: bool = True,
+        legend_loc: str = "upper left",
+        legend_anchor: tuple[float, float] | None = (1.01, 1.0),
+        legend_fontsize: float | None = None,
     ) -> None:
         """Plot variance fractions without converting missing values to zero.
 
@@ -384,6 +459,18 @@ class MixedModelPlotter(_PlotterBase):
           tick_label_pad: Gap in points between row labels and the axis.
           figsize: Optional exact figure width and height in inches, overriding
             adaptive dimensions.
+          x_label: Variance-axis label; an empty string hides it.
+          y_label: Optional feature-axis label; None keeps it empty.
+          title_fontsize: Title size in points; None keeps publication style.
+          label_fontsize: Axis-label size in points; None keeps shared style.
+          tick_fontsize: Tick-label size in points; None keeps shared style.
+          show_x_ticks: Whether variance-axis tick marks are drawn.
+          show_y_ticks: Whether feature-row tick marks are drawn.
+          show_x_tick_labels: Whether variance-axis tick labels are drawn.
+          show_y_tick_labels: Whether feature-row labels are drawn.
+          legend_loc: Matplotlib legend anchor location.
+          legend_anchor: Anchor in axes coordinates; None places it inside.
+          legend_fontsize: Legend font size in points; None keeps shared style.
 
         Example Usage:
           >>> plotter.plot_mixed_model_variance(
@@ -406,6 +493,14 @@ class MixedModelPlotter(_PlotterBase):
             tick_label_pad=tick_label_pad,
             figsize=figsize,
         )
+        for size in (
+            title_fontsize,
+            label_fontsize,
+            tick_fontsize,
+            legend_fontsize,
+        ):
+            if size is not None and (not np.isfinite(size) or size <= 0):
+                raise ValueError("Font sizes must be positive and finite")
 
         required = {
             "analysis",
@@ -597,8 +692,21 @@ class MixedModelPlotter(_PlotterBase):
         ax.set_yticklabels(row_labels)
         ax.invert_yaxis()
         ax.tick_params(axis="both", which="major", pad=tick_label_pad)
-        ax.set_xlabel("Variance fraction")
-        ax.set_title(title or self._display_label(analysis))
+        if tick_fontsize is not None:
+            ax.tick_params(axis="both", labelsize=tick_fontsize)
+        ax.set_xlabel(x_label, fontsize=label_fontsize)
+        if y_label is not None:
+            ax.set_ylabel(y_label, fontsize=label_fontsize)
+        ax.set_title(
+            title or self._display_label(analysis), fontsize=title_fontsize
+        )
+        self._set_tick_visibility(
+            ax,
+            show_x_ticks=show_x_ticks,
+            show_y_ticks=show_y_ticks,
+            show_x_tick_labels=show_x_tick_labels,
+            show_y_tick_labels=show_y_tick_labels,
+        )
         ax.spines[["top", "right"]].set_visible(False)
         handles = [
             Patch(
@@ -622,8 +730,9 @@ class MixedModelPlotter(_PlotterBase):
         ax.legend(
             handles=handles,
             frameon=False,
-            loc="upper left",
-            bbox_to_anchor=(1.01, 1.0),
+            loc=legend_loc,
+            bbox_to_anchor=legend_anchor,
+            fontsize=legend_fontsize,
             borderaxespad=0.0,
         )
         self._save_figure_and_log(

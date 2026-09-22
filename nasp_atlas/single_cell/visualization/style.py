@@ -18,6 +18,7 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.colors import ListedColormap
 from matplotlib.figure import Figure
 from matplotlib.figure import SubFigure
+from matplotlib.transforms import ScaledTranslation
 from mpl_toolkits.axes_grid1.inset_locator import (  # type: ignore[import]
     inset_axes,
 )
@@ -93,15 +94,29 @@ class _PlotterBase:
         ticks: Sequence[float] | None = None,
         title: str | None = None,
         extend: Literal["neither", "both", "min", "max"] = "neither",
+        *,
+        pad_inches: float | None = None,
     ) -> None:
-        """Add a consistently styled inset colorbar beside a plot."""
+        """Add an inset colorbar, optionally fixing its gap in inches."""
+        anchor = (1.02 + colorbar_style.pad, 0.0, 1, 1)
+        transform = ax.transAxes
+        if pad_inches is not None:
+            if not np.isfinite(pad_inches) or pad_inches < 0:
+                raise ValueError(
+                    "Colorbar padding must be finite and nonnegative"
+                )
+            anchor = (1.0, 0.0, 1, 1)
+            transform = ax.transAxes + ScaledTranslation(
+                pad_inches, 0.0, fig.dpi_scale_trans
+            )
+
         cax = inset_axes(
             ax,
             width=colorbar_style.width,
             height=colorbar_style.height,
             loc="center left",
-            bbox_to_anchor=(1.02 + colorbar_style.pad, 0.0, 1, 1),
-            bbox_transform=ax.transAxes,
+            bbox_to_anchor=anchor,
+            bbox_transform=transform,
             borderpad=0,
         )
         cbar = fig.colorbar(
@@ -120,6 +135,33 @@ class _PlotterBase:
                 rotation=270,
                 labelpad=colorbar_style.title_labelpad,
                 va="bottom",
+            )
+
+    @staticmethod
+    def _set_tick_visibility(
+        ax: Axes,
+        *,
+        show_x_ticks: bool = True,
+        show_y_ticks: bool = True,
+        show_x_tick_labels: bool = True,
+        show_y_tick_labels: bool = True,
+    ) -> None:
+        """Hide requested tick marks or tick labels on both sides of `ax`.
+
+        True leaves the plot's existing tick styling unchanged, so defaults
+        preserve tuned layouts. Tick marks and tick labels toggle separately.
+        """
+        if not show_x_ticks:
+            ax.tick_params(axis="x", which="both", bottom=False, top=False)
+        if not show_x_tick_labels:
+            ax.tick_params(
+                axis="x", which="both", labelbottom=False, labeltop=False
+            )
+        if not show_y_ticks:
+            ax.tick_params(axis="y", which="both", left=False, right=False)
+        if not show_y_tick_labels:
+            ax.tick_params(
+                axis="y", which="both", labelleft=False, labelright=False
             )
 
     @staticmethod
@@ -220,6 +262,7 @@ class _PlotterBase:
         cmap_name: str = "RdYlBu_r",
         *,
         blue_blend: float = 0.0,
+        zero_color: str = "#eeeeee",
     ) -> ListedColormap:
         """Returns a matplotlib cmap with light gray at zero values.
 
@@ -227,6 +270,7 @@ class _PlotterBase:
           cmap_name: Base colormap name.
           blue_blend: Blend the lower, blue side toward white. 0.0 leaves the
             colormap unchanged; 1.0 makes the blue side white.
+          zero_color: Color assigned to the zero-value endpoint.
         """
         base = plt.colormaps[cmap_name].resampled(256)
         colors = base(np.linspace(0, 1, 256))
@@ -235,7 +279,7 @@ class _PlotterBase:
             colors[:midpoint, :3] = (
                 colors[:midpoint, :3] * (1 - blue_blend) + blue_blend
             )
-        colors[0] = mcolors.to_rgba("#eeeeee")
+        colors[0] = mcolors.to_rgba(zero_color)
         return mcolors.ListedColormap(colors)
 
     @staticmethod
@@ -243,6 +287,7 @@ class _PlotterBase:
         cmap: Colormap | str,
         *,
         zero_position: float | Literal["low", "center", "high"] = "low",
+        zero_color: str = "#eeeeee",
     ) -> ListedColormap:
         """Return a copy of `cmap` with the zero position set to light gray."""
         base = plt.get_cmap(cmap) if isinstance(cmap, str) else cmap
@@ -257,7 +302,7 @@ class _PlotterBase:
             position = float(np.clip(zero_position, 0.0, 1.0))
 
         index = round(position * (len(colors) - 1))
-        colors[index] = mcolors.to_rgba("#eeeeee")
+        colors[index] = mcolors.to_rgba(zero_color)
         name = getattr(base, "name", "cmap")
         return mcolors.ListedColormap(colors, name=f"{name}_zero_gray")
 

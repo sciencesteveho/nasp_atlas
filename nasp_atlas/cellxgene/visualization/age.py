@@ -163,6 +163,9 @@ def plot_age_ranges(
     cmap: str = "tab20",
     bar_spacing: float = 0.5,
     bar_height: float = 0.4125,
+    title: str | None = None,
+    x_label: str = "Cells",
+    annotate: bool = True,
 ) -> Path:
     """Plot age-range composition for current obs or one dataset.
 
@@ -178,6 +181,10 @@ def plot_age_ranges(
       cmap: Colormap palette to use.
       bar_spacing: Vertical spacing between adjacent bars.
       bar_height: Height of each horizontal bar in y-axis units.
+      title: Optional title; None shows "Age ranges" with dataset and cell
+        totals, and an empty string hides it.
+      x_label: Cell-count axis label; an empty string hides it.
+      annotate: Whether bars show their cell count and percentage.
 
     Returns:
       Path to the written figure file.
@@ -224,21 +231,26 @@ def plot_age_ranges(
         edgecolor=edge_colors,
     )
 
-    annotate_bars(
-        ax=ax,
-        y_positions=y_positions,
-        n_cells=n_cells,
-        fractions=fractions,
-        x_max=float(n_cells.max()),
-    )
+    if annotate:
+        annotate_bars(
+            ax=ax,
+            y_positions=y_positions,
+            n_cells=n_cells,
+            fractions=fractions,
+            x_max=float(n_cells.max()),
+        )
 
     ax.set_yticks(y_positions)
     ax.set_yticklabels(labels)
-    ax.set_xlabel("Cells")
-    title = format_plot_title(
-        dataset_id=dataset_id, total_cells=total_cells, n_datasets=n_datasets
-    )
-    ax.set_title(f"Age ranges\n{title}")
+    ax.set_xlabel(x_label)
+    if title is None:
+        summary = format_plot_title(
+            dataset_id=dataset_id,
+            total_cells=total_cells,
+            n_datasets=n_datasets,
+        )
+        title = f"Age ranges\n{summary}"
+    ax.set_title(title)
 
     y_padding = bar_spacing / 2
     ax.set_ylim(

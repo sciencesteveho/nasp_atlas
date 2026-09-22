@@ -243,11 +243,11 @@ class HeatmapPlotter(_VisualizationGeneMixin, _PlotterBase):
           cell_size: Width and height of each heatmap cell in inches.
           min_width: Minimum heatmap panel width in inches.
           min_height: Minimum heatmap panel height in inches.
-          colorbar_style: Base heatmap colorbar styling. Defaults to the
-            heatmap-tuned inset colorbar style.
+          colorbar_style: Base heatmap colorbar styling; its pad is in inches.
           cbar_height: Optional override for colorbar height.
           cbar_width: Optional override for colorbar width.
-          cbar_pad: Optional override for heatmap-to-colorbar padding.
+          cbar_pad: Nonnegative heatmap-to-colorbar gap in inches; overrides
+            the style's pad. Default: 0.10 inches, independent of matrix size.
           cbar_title: Optional title drawn above the heatmap colorbar.
           vmin: Lower color limit. Defaults to 0 so zero maps to gray with the
             default expression colormap.
@@ -268,7 +268,7 @@ class HeatmapPlotter(_VisualizationGeneMixin, _PlotterBase):
         set_matplotlib_publication_parameters()
         out = self.output_dir / filename
         colorbar_style = (
-            colorbar_style or ColorbarStyle(height=0.36, width=0.07, pad=0.02)
+            colorbar_style or ColorbarStyle(height=0.36, width=0.07, pad=0.10)
         ).with_overrides(
             height=cbar_height,
             width=cbar_width,
@@ -362,6 +362,7 @@ class HeatmapPlotter(_VisualizationGeneMixin, _PlotterBase):
             mappable=image,
             colorbar_style=colorbar_style,
             title=cbar_title,
+            pad_inches=colorbar_style.pad,
         )
 
         self._save_figure_and_log(
@@ -404,11 +405,11 @@ class HeatmapPlotter(_VisualizationGeneMixin, _PlotterBase):
           cell_size: Width and height of each heatmap cell in inches.
           min_width: Minimum heatmap panel width in inches.
           min_height: Minimum heatmap panel height in inches.
-          colorbar_style: Base heatmap colorbar styling. Defaults to the
-            heatmap-tuned inset colorbar style.
+          colorbar_style: Base heatmap colorbar styling; its pad is in inches.
           cbar_height: Optional override for colorbar height.
           cbar_width: Optional override for colorbar width.
-          cbar_pad: Optional override for heatmap-to-colorbar padding.
+          cbar_pad: Nonnegative heatmap-to-colorbar gap in inches; overrides
+            the style's pad. Default: 0.10 inches, independent of matrix size.
           cbar_title: Optional vertical colorbar label.
           vmin: Lower color limit. When omitted with center_zero=True, the
             lower limit is the negative maximum absolute grouped score.
@@ -428,7 +429,7 @@ class HeatmapPlotter(_VisualizationGeneMixin, _PlotterBase):
         set_matplotlib_publication_parameters()
         out = self.output_dir / filename
         colorbar_style = (
-            colorbar_style or ColorbarStyle(height=0.36, width=0.07, pad=0.02)
+            colorbar_style or ColorbarStyle(height=0.36, width=0.07, pad=0.10)
         ).with_overrides(
             height=cbar_height,
             width=cbar_width,
@@ -506,6 +507,7 @@ class HeatmapPlotter(_VisualizationGeneMixin, _PlotterBase):
             mappable=image,
             colorbar_style=colorbar_style,
             title=cbar_title,
+            pad_inches=colorbar_style.pad,
         )
 
         self._save_figure_and_log(fig, out, "[plot] score heatmap -> %s")

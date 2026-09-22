@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import textwrap
 from collections.abc import Mapping
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from nasp_compendium.display import humanize_module_name  # type: ignore[import]
 
@@ -16,6 +18,26 @@ from nasp_atlas.single_cell.associations import ObsSchema
 from nasp_atlas.single_cell.reference_sets import reference_metadata
 from nasp_atlas.single_cell.visualization.style import _PlotterBase
 from nasp_atlas.visualization import set_matplotlib_publication_parameters
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class _Presentation:
+    """Presentation overrides shared by one `plot_tables` call."""
+
+    figsize: tuple[float, float] | None
+    title: str | None
+    x_label: str | None
+    y_label: str | None
+    title_fontsize: float | None
+    label_fontsize: float | None
+    tick_fontsize: float | None
+    show_x_ticks: bool
+    show_y_ticks: bool
+    show_x_tick_labels: bool
+    show_y_tick_labels: bool
+    cmap_name: str | None
+    cbar_label: str | None
+    point_color: str
 
 
 class MechanismPlotter(_PlotterBase):
@@ -35,6 +57,19 @@ class MechanismPlotter(_PlotterBase):
         max_regulators: int = 12,
         max_contexts: int = 8,
         figsize: tuple[float, float] | None = None,
+        title: str | None = None,
+        x_label: str | None = None,
+        y_label: str | None = None,
+        title_fontsize: float | None = None,
+        label_fontsize: float | None = None,
+        tick_fontsize: float | None = None,
+        show_x_ticks: bool = True,
+        show_y_ticks: bool = True,
+        show_x_tick_labels: bool = True,
+        show_y_tick_labels: bool = True,
+        cmap_name: str | None = None,
+        cbar_label: str | None = None,
+        point_color: str = "#4477aa",
     ) -> list[Path]:
         """Save PNG/PDF overviews and the full rows used for their display.
 
@@ -43,10 +78,20 @@ class MechanismPlotter(_PlotterBase):
         Missing estimates appear gray. Couplings have no significance marks;
         gene expression is scaled within each gene, not across genes.
 
+        Presentation overrides apply to every figure rendered by one call, so
+        pass one table family per call to tune one figure. `title`, `x_label`,
+        `y_label` and `cbar_label` replace each figure's default text when not
+        None; an empty string hides it. Font sizes are positive points; None
+        keeps the shared publication style. The tick flags hide tick marks or
+        tick labels. `cmap_name` replaces the default palettes ("RdBu_r" for
+        correlations and z-scores, "Blues" for overlap) without changing their
+        fixed limits; keep a diverging palette for signed values.
+        `point_color` colors regulator scatter points.
+
         Example Usage:
           >>> paths = plotter.plot_tables(
           ...     tables, schema=ObsSchema(), max_regulators=8,
-          ...     figsize=(3.5, 2.8),
+          ...     figsize=(3.5, 2.8), title="Coupling", cmap_name="PuOr_r",
           ... )
         """
         if min(max_regulators, max_contexts) < 1 or (
@@ -56,7 +101,26 @@ class MechanismPlotter(_PlotterBase):
             raise ValueError(
                 "Figure dimensions and row limits must be positive"
             )
+        for size in (title_fontsize, label_fontsize, tick_fontsize):
+            if size is not None and (not np.isfinite(size) or size <= 0):
+                raise ValueError("Font sizes must be positive and finite")
 
+        presentation = _Presentation(
+            figsize=figsize,
+            title=title,
+            x_label=x_label,
+            y_label=y_label,
+            title_fontsize=title_fontsize,
+            label_fontsize=label_fontsize,
+            tick_fontsize=tick_fontsize,
+            show_x_ticks=show_x_ticks,
+            show_y_ticks=show_y_ticks,
+            show_x_tick_labels=show_x_tick_labels,
+            show_y_tick_labels=show_y_tick_labels,
+            cmap_name=cmap_name,
+            cbar_label=cbar_label,
+            point_color=point_color,
+        )
         paths: list[Path] = []
         with plt.rc_context():
             set_matplotlib_publication_parameters()
@@ -64,13 +128,13 @@ class MechanismPlotter(_PlotterBase):
                 self._regulator_branches(
                     tables.get("regulator_output_coupling", pd.DataFrame()),
                     max_regulators=max_regulators,
-                    figsize=figsize,
+                    presentation=presentation,
                 )
             )
             paths.extend(
                 self._regulator_points(
                     tables.get("regulator_output_points", pd.DataFrame()),
-                    figsize=figsize,
+                    presentation=presentation,
                 )
             )
 
@@ -93,14 +157,14 @@ class MechanismPlotter(_PlotterBase):
                             schema,
                             minimum_donors,
                             max_contexts,
-                            figsize,
+                            presentation,
                         )
                     )
 
             paths.extend(
                 self._reference_comparisons(
                     tables.get("reference_comparisons", pd.DataFrame()),
-                    figsize=figsize,
+                    presentation=presentation,
                 )
             )
 
@@ -111,7 +175,7 @@ class MechanismPlotter(_PlotterBase):
         regulators: pd.DataFrame,
         *,
         max_regulators: int,
-        figsize: tuple[float, float] | None,
+        presentation: _Presentation,
     ) -> list[Path]:
         """Select supported regulators and render their branch comparison."""
         paths: list[Path] = []
@@ -140,9 +204,9 @@ class MechanismPlotter(_PlotterBase):
                         "display_gene",
                         "output_module",
                         "spearman_r",
-                        "Regulator-output coupling (descriptive)",
+                        "Regulator-output coupling",
                         "regulator_branches",
-                        figsize,
+                        presentation,
                     )
                 )
 
@@ -152,7 +216,7 @@ class MechanismPlotter(_PlotterBase):
         self,
         points: pd.DataFrame,
         *,
-        figsize: tuple[float, float] | None,
+        presentation: _Presentation,
     ) -> list[Path]:
         """Render selected pairs using centered donor-context values."""
         paths: list[Path] = []
@@ -160,29 +224,32 @@ class MechanismPlotter(_PlotterBase):
             for (gene, output), group in points.groupby(
                 ["gene", "output_module"], sort=False
             ):
-                figure, axis = plt.subplots(figsize=figsize or (3.5, 2.2))
+                figure, axis = plt.subplots(
+                    figsize=presentation.figsize or (3.5, 2.2)
+                )
                 try:
                     axis.scatter(
                         group.gene_centered,
                         group.output_centered,
                         s=7,
-                        color="#4477aa",
+                        color=presentation.point_color,
                         alpha=0.65,
                         linewidths=0,
                     )
-                    axis.set_xlabel(f"{gene}: context-centered expression")
-                    axis.set_ylabel(
-                        textwrap.fill(
+                    self._decorate(
+                        axis,
+                        presentation,
+                        title=(
+                            f"Exploratory r={group.spearman_r.iloc[0]:.2f}; "
+                            f"{group.independent_donor.nunique()} donors "
+                            f"/ {len(group)} donor-contexts"
+                        ),
+                        x_label=f"{gene}: context-centered expression",
+                        y_label=textwrap.fill(
                             f"{humanize_module_name(str(output))}: "
                             "centered score",
                             35,
-                        )
-                    )
-                    axis.set_title(
-                        f"Exploratory r={group.spearman_r.iloc[0]:.2f}; "
-                        f"{group.independent_donor.nunique()} donors "
-                        f"/ {len(group)} donor-contexts",
-                        loc="left",
+                        ),
                     )
                     axis.spines[["top", "right"]].set_visible(False)
                     paths.extend(
@@ -199,7 +266,7 @@ class MechanismPlotter(_PlotterBase):
         self,
         comparison: pd.DataFrame,
         *,
-        figsize: tuple[float, float] | None,
+        presentation: _Presentation,
     ) -> list[Path]:
         """Render reference agreement and overlap on matching module axes."""
         paths: list[Path] = []
@@ -219,7 +286,7 @@ class MechanismPlotter(_PlotterBase):
             names = reference_metadata().set_index("module_id")["display_name"]
             shown["reference_name"] = shown.reference_module.map(names)
             for value, title in (
-                ("spearman_r", "Reference agreement (descriptive)"),
+                ("spearman_r", "Reference agreement"),
                 (
                     "gene_jaccard",
                     "Reference overlap (not independent validation)",
@@ -233,7 +300,7 @@ class MechanismPlotter(_PlotterBase):
                         value,
                         title,
                         f"reference_{value}",
-                        figsize,
+                        presentation,
                     )
                 )
 
@@ -247,7 +314,7 @@ class MechanismPlotter(_PlotterBase):
         value: str,
         title: str,
         filename: str,
-        figsize: tuple[float, float] | None,
+        presentation: _Presentation,
     ) -> list[Path]:
         """Plot signed correlations or unsigned overlap without filling gaps."""
         if frame.empty or not frame[value].notna().any():
@@ -256,19 +323,23 @@ class MechanismPlotter(_PlotterBase):
         matrix = frame.pivot(index=row, columns=column, values=value)
         labels = [textwrap.fill(str(x), 32) for x in matrix.index]
         lines = sum(label.count("\n") + 1 for label in labels)
-        dimensions = figsize or (3.5, max(1.5, 0.9 + 0.14 * lines))
+        dimensions = presentation.figsize or (
+            3.5,
+            max(1.5, 0.9 + 0.14 * lines),
+        )
 
         figure, axis = plt.subplots(figsize=dimensions)
         try:
+            default_cmap = "RdBu_r" if value == "spearman_r" else "Blues"
             cmap = plt.get_cmap(
-                "RdBu_r" if value == "spearman_r" else "Blues"
+                presentation.cmap_name or default_cmap
             ).with_extremes(bad="#dddddd")
             artist = axis.imshow(
                 np.ma.masked_invalid(matrix.to_numpy(dtype=float)),
                 cmap=cmap,
                 vmin=-1 if value == "spearman_r" else 0,
                 vmax=1,
-                aspect="auto",
+                aspect="equal",
             )
 
             axis.set_yticks(
@@ -283,16 +354,21 @@ class MechanismPlotter(_PlotterBase):
                 ],
                 rotation=90,
             )
-            axis.set_title(title, loc="left", pad=4)
             axis.tick_params(length=0, pad=2)
+            self._decorate(axis, presentation, title=title, title_pad=4)
             axis.spines[:].set_visible(False)
+            default_label = "Spearman r" if value == "spearman_r" else "Jaccard"
             figure.colorbar(
                 artist,
                 ax=axis,
                 fraction=0.035,
                 pad=0.025,
                 shrink=0.35,
-                label="Spearman r" if value == "spearman_r" else "Jaccard",
+                label=(
+                    default_label
+                    if presentation.cbar_label is None
+                    else presentation.cbar_label
+                ),
             )
             return self._export(figure, frame, filename)
         finally:
@@ -305,7 +381,7 @@ class MechanismPlotter(_PlotterBase):
         schema: ObsSchema,
         minimum_donors: int,
         max_contexts: int,
-        figsize: tuple[float, float] | None,
+        presentation: _Presentation,
     ) -> list[Path]:
         """Show donor-median expression and detection for ordered components."""
         display = _component_display(
@@ -331,7 +407,10 @@ class MechanismPlotter(_PlotterBase):
             for label, count in selected.items()
         ]
         lines = sum(label.count("\n") + 1 for label in labels)
-        dimensions = figsize or (3.5, max(1.3, 0.75 + 0.15 * lines))
+        dimensions = presentation.figsize or (
+            3.5,
+            max(1.3, 0.75 + 0.15 * lines),
+        )
 
         figure, axis = plt.subplots(figsize=dimensions)
         try:
@@ -351,7 +430,7 @@ class MechanismPlotter(_PlotterBase):
                 yy[valid],
                 c=values[valid],
                 s=3 + 28 * detection.to_numpy(dtype=float)[valid],
-                cmap="RdBu_r",
+                cmap=presentation.cmap_name or "RdBu_r",
                 vmin=-2,
                 vmax=2,
                 edgecolors="#777777",
@@ -367,17 +446,19 @@ class MechanismPlotter(_PlotterBase):
             )
             axis.set_ylim(len(selected) - 0.5, -0.5)
             axis.set_xlim(-0.5, len(genes) - 0.5)
-            axis.set_title(
-                "OAS / RNase L components"
-                if name == "oas_rnasel"
-                else "IFN ligands / receptor context / response",
-                loc="left",
-                pad=4,
-            )
-            axis.set_xlabel(
-                "Dot area: donor-median detection; x: unavailable", labelpad=3
-            )
             axis.tick_params(length=0, pad=2)
+            self._decorate(
+                axis,
+                presentation,
+                title=(
+                    "OAS / RNase L components"
+                    if name == "oas_rnasel"
+                    else "IFN ligands / receptor context / response"
+                ),
+                x_label="Dot area: donor-median detection; x: unavailable",
+                title_pad=4,
+                x_label_pad=3,
+            )
             axis.spines[:].set_visible(False)
             figure.colorbar(
                 artist,
@@ -385,11 +466,52 @@ class MechanismPlotter(_PlotterBase):
                 fraction=0.035,
                 pad=0.025,
                 shrink=0.35,
-                label="Gene-wise z",
+                label=(
+                    "Gene-wise z"
+                    if presentation.cbar_label is None
+                    else presentation.cbar_label
+                ),
             )
             return self._export(figure, shown, name)
         finally:
             plt.close(figure)
+
+    def _decorate(
+        self,
+        axis: Axes,
+        presentation: _Presentation,
+        *,
+        title: str,
+        x_label: str = "",
+        y_label: str = "",
+        title_pad: float | None = None,
+        x_label_pad: float | None = None,
+    ) -> None:
+        """Apply default or overridden axis text, font sizes and tick flags."""
+        axis.set_title(
+            title if presentation.title is None else presentation.title,
+            loc="left",
+            pad=title_pad,
+            fontsize=presentation.title_fontsize,
+        )
+        axis.set_xlabel(
+            x_label if presentation.x_label is None else presentation.x_label,
+            labelpad=x_label_pad,
+            fontsize=presentation.label_fontsize,
+        )
+        axis.set_ylabel(
+            y_label if presentation.y_label is None else presentation.y_label,
+            fontsize=presentation.label_fontsize,
+        )
+        if presentation.tick_fontsize is not None:
+            axis.tick_params(labelsize=presentation.tick_fontsize)
+        self._set_tick_visibility(
+            axis,
+            show_x_ticks=presentation.show_x_ticks,
+            show_y_ticks=presentation.show_y_ticks,
+            show_x_tick_labels=presentation.show_x_tick_labels,
+            show_y_tick_labels=presentation.show_y_tick_labels,
+        )
 
     def _export(
         self, figure: Figure, frame: pd.DataFrame, filename: str

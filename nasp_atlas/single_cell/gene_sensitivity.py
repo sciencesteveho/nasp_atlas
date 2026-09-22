@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import field
 from dataclasses import replace
 
 import anndata as ad  # type: ignore[import]
@@ -15,7 +16,9 @@ from nasp_atlas.single_cell.associations import ObsSchema
 from nasp_atlas.single_cell.context_summary import summarize_module_contexts
 from nasp_atlas.single_cell.gene_diagnostics import GeneDiagnosticResults
 from nasp_atlas.single_cell.module_scoring import ScorerName
+from nasp_atlas.single_cell.module_scoring import inverse_module_score_name
 from nasp_atlas.single_cell.module_scoring import module_score_name
+from nasp_atlas.single_cell.module_scoring import positive_module_score_name
 from nasp_atlas.single_cell.module_scoring import score_aucell_modules
 from nasp_atlas.single_cell.module_scoring import score_scanpy_module
 from nasp_atlas.single_cell.utils import expression_matrix
@@ -32,6 +35,7 @@ class GeneSensitivityResults:
     donor_scores: pd.DataFrame
     context_changes: pd.DataFrame
     overlap_coupling: pd.DataFrame
+    cell_scores: pd.DataFrame = field(default_factory=pd.DataFrame)
 
 
 def gene_removal_sensitivity(
@@ -47,6 +51,7 @@ def gene_removal_sensitivity(
     expression_layer: str | None = None,
     use_raw: bool = False,
     dominant_genes: int = 1,
+    dominant_per_arm: bool = False,
     minimum_cells: int = 10,
     minimum_donors: int = 3,
     random_state: int = 42,
@@ -57,7 +62,11 @@ def gene_removal_sensitivity(
 
     Dominant candidates have the largest maximum context-level median absolute
     expression per arm member, among donor-supported diagnostic contexts.
-    Each candidate is removed separately. Shared signed genes are removed
+    Each candidate is removed separately. With dominant_per_arm=True, select
+    candidates separately within each scored arm; the default retains the
+    module-wide selection. Returned cell_scores retain scored components so
+    callers can diagnose degenerate arms in changed measurements.
+    Shared signed genes are removed
     from both members of each requested pair. Context-dependent genes are never
     scored. Losing a previously present score arm is explicitly unscorable.
 
@@ -115,6 +124,7 @@ def gene_removal_sensitivity(
         set(symbols[~unique]),
         dominant_genes,
         minimum_donors,
+        dominant_per_arm,
     )
 
     # Share expression storage; only variant score columns belong to this view.
@@ -170,6 +180,8 @@ def _score_variants(
             num_workers=aucell_num_workers,
         )
     elif scorer == "scanpy":
+        if not isinstance(working.obs, pd.DataFrame):
+            raise TypeError("Gene sensitivity requires in-memory scores")
         for definition in definitions:
             resolved = replace(
                 definition,
@@ -187,7 +199,16 @@ def _score_variants(
                 expression_layer=None,
                 random_state=random_state,
             )
-            variant_scores[column] = working.obs[column].to_numpy()
+            columns = [column]
+            if definition.positive_genes:
+                columns.append(
+                    positive_module_score_name(definition, scorer=scorer)
+                )
+            inverse = inverse_module_score_name(definition, scorer=scorer)
+            if inverse is not None:
+                columns.append(inverse)
+            columns = list(dict.fromkeys(columns))
+            variant_scores[columns] = working.obs[columns].to_numpy()
     elif scorer != "aucell":
         raise ValueError(f"Unsupported scorer: {scorer}")
 
@@ -269,6 +290,7 @@ def _summarize_variants(
         overlap_coupling=_overlap_coupling(
             variants, baseline, changed, contexts, minimum_donors
         ),
+        cell_scores=variant_scores.reindex(obs.index),
     )
 
 
@@ -278,29 +300,50 @@ def _removal_requests(
     pairs: Sequence[tuple[str, str]],
     dominant_genes: int,
     minimum_donors: int,
-) -> list[tuple[str, str, str, set[str]]]:
+    dominant_per_arm: bool,
+) -> list[tuple[str, str, str, str, set[str]]]:
     """Select supported drivers and paired shared-gene removal requests."""
     lookup = {module.module_id: module for module in modules}
-    requests: list[tuple[str, str, str, set[str]]] = []
+    requests: list[tuple[str, str, str, str, set[str]]] = []
     for module in modules:
         selected = diagnostics.loc[
             diagnostics.module_id.eq(module.module_id)
             & diagnostics.n_donors.ge(minimum_donors)
             & diagnostics.arm.ne("context_dependent")
         ]
-        drivers = (
-            selected.groupby("gene")
-            .driver_magnitude.max()
-            .dropna()
-            .sort_values(ascending=False, kind="stable")
-            .head(dominant_genes)
+        arms = (
+            [
+                arm
+                for arm, genes in (
+                    ("positive", module.positive_genes),
+                    ("inverse", module.inverse_genes),
+                )
+                if genes
+            ]
+            if dominant_per_arm
+            else ["all_scored"]
         )
-        requests.extend(
-            (module.module_id, "dominant_gene", "", {gene})
-            for gene in drivers.index
-        )
-        if drivers.empty:
-            requests.append((module.module_id, "dominant_gene", "", set()))
+        for arm in arms:
+            candidates = (
+                selected.loc[selected.arm.eq(arm)]
+                if dominant_per_arm
+                else selected
+            )
+            drivers = (
+                candidates.groupby("gene")
+                .driver_magnitude.max()
+                .dropna()
+                .sort_values(ascending=False, kind="stable")
+                .head(dominant_genes)
+            )
+            requests.extend(
+                (module.module_id, "dominant_gene", "", arm, {gene})
+                for gene in drivers.index
+            )
+            if drivers.empty:
+                requests.append(
+                    (module.module_id, "dominant_gene", "", arm, set())
+                )
 
     for left, right in dict.fromkeys(tuple(sorted(pair)) for pair in pairs):
         if left not in lookup or right not in lookup or left == right:
@@ -313,8 +356,8 @@ def _removal_requests(
         )
         requests.extend(
             [
-                (left, "shared_genes", right, shared),
-                (right, "shared_genes", left, shared),
+                (left, "shared_genes", right, "shared_scored", shared),
+                (right, "shared_genes", left, "shared_scored", shared),
             ]
         )
 
@@ -329,6 +372,7 @@ def _removal_variants(
     ambiguous: set[str],
     dominant_genes: int,
     minimum_donors: int,
+    dominant_per_arm: bool,
 ) -> tuple[pd.DataFrame, list[GeneModule]]:
     """Define deletions explicitly, retaining failed and empty-arm variants."""
     lookup = {module.module_id: module for module in modules}
@@ -338,11 +382,12 @@ def _removal_variants(
         pairs,
         dominant_genes,
         minimum_donors,
+        dominant_per_arm,
     )
 
     records: list[dict[str, object]] = []
     definitions: list[GeneModule] = []
-    for index, (module_id, mode, partner, removed) in enumerate(requests):
+    for index, (module_id, mode, partner, arm, removed) in enumerate(requests):
         module = lookup[module_id]
         positive = tuple(
             g for g in module.positive_genes if g in available - removed
@@ -370,6 +415,7 @@ def _removal_variants(
                 "module_id": module_id,
                 "mode": mode,
                 "partner_module": partner,
+                "selection_arm": arm,
                 "removed_genes": ";".join(sorted(removed)),
                 "ambiguous_genes": ";".join(
                     sorted(
@@ -401,6 +447,7 @@ def _removal_variants(
             "module_id",
             "mode",
             "partner_module",
+            "selection_arm",
             "removed_genes",
             "ambiguous_genes",
             "positive_genes",

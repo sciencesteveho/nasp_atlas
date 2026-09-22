@@ -14,6 +14,18 @@ from nasp_compendium import GeneModules
 from nasp_compendium.types import GeneModule
 
 from nasp_atlas.analysis import association_analysis
+from nasp_atlas.analysis.external_replication.contrasts import (
+    estimate_module_contrasts,
+)
+from nasp_atlas.analysis.external_replication.gene_effects import (
+    estimate_gene_removal_effects,
+)
+from nasp_atlas.analysis.external_replication.scoring import (
+    aggregate_module_scores,
+)
+from nasp_atlas.analysis.external_replication.specification import (
+    ComparisonSpec,
+)
 from nasp_atlas.analysis.tabula_sapiens.scoring import score_table_provenance
 from nasp_atlas.single_cell import ObsSchema
 from nasp_atlas.single_cell import donor_sensitivity
@@ -23,6 +35,9 @@ from nasp_atlas.single_cell import score_aucell_modules
 from nasp_atlas.single_cell import score_scanpy_module
 from nasp_atlas.single_cell import score_scanpy_modules
 from nasp_atlas.single_cell.module_scoring import ScorerName
+from nasp_atlas.single_cell.module_scoring import inverse_module_score_name
+from nasp_atlas.single_cell.module_scoring import module_score_name
+from nasp_atlas.single_cell.module_scoring import positive_module_score_name
 from nasp_atlas.single_cell.visualization.robustness import RobustnessPlotter
 
 
@@ -229,6 +244,7 @@ def test_gene_removal_matches_independent_rescoring(
         schema=ObsSchema(),
         scorer=scorer,
         module_pairs=[("A", "B")],
+        dominant_per_arm=signed,
         minimum_cells=1,
         aucell_chunk_size=8,
     )
@@ -237,6 +253,12 @@ def test_gene_removal_matches_independent_rescoring(
         "module_id == 'A' and mode == 'shared_genes'"
     ).iloc[0]
     assert selected.removed_genes == "SHARED"
+    if signed:
+        drivers = result.variants.query("mode == 'dominant_gene'")
+        assert set(drivers.selection_arm) == {"positive", "inverse"}
+        inverse = drivers.loc[drivers.selection_arm.eq("inverse")]
+        assert inverse.status.eq("unscorable_arm").all()
+        assert set(inverse.removed_genes) == {"bg0", "bg1"}
     expected_module = replace(modules[0], positive_genes=("LEFT",))
     expected = adata.copy()
     if scorer == "scanpy":
@@ -265,9 +287,114 @@ def test_gene_removal_matches_independent_rescoring(
         .feature_value
     )
     np.testing.assert_allclose(actual.sort_index(), expected_means.sort_index())
+    expected_components = (
+        expected.obs if scorer == "scanpy" else expected_scores
+    )
+    variant_module = replace(expected_module, module_id=selected.variant_id)
+    for score_name in (
+        module_score_name,
+        positive_module_score_name,
+        inverse_module_score_name,
+    ):
+        expected_column = score_name(expected_module, scorer=scorer)
+        variant_column = score_name(variant_module, scorer=scorer)
+        if expected_column is not None:
+            np.testing.assert_allclose(
+                result.cell_scores[variant_column],
+                expected_components[expected_column].reindex(obs.index),
+            )
     pd.testing.assert_frame_equal(adata.obs, original_obs)
     np.testing.assert_allclose(adata.X.toarray(), values)
     assert result.overlap_coupling.n_donors.eq(8).all()
+
+    # Use the actual returned means in the external paired estimator; compare
+    # with independently rescored cell means, including the donor intersection.
+    external = adata.copy()
+    names = {"tissue_in_publication": "tissue", "cell_type": "population"}
+    external.obs = obs.rename(columns=names).assign(
+        cohort_id="fixture", modality="cells"
+    )
+    external_result = replace(
+        result,
+        donor_scores=result.donor_scores.rename(columns=names).assign(
+            cohort_id="fixture"
+        ),
+    )
+    comparison = ComparisonSpec(
+        level_key="tissue",
+        target="Muscle",
+        reference="Lung",
+        minimum_cells=1,
+        minimum_pairs=6,
+    )
+    baseline_donors = aggregate_module_scores(
+        external.obs,
+        scores,
+        modules,
+        scorer=scorer,
+        scoring_context_id="baseline",
+        minimum_cells=1,
+    )
+    baseline_effect = estimate_module_contrasts(
+        baseline_donors,
+        pd.DataFrame(
+            {"module_id": ["A", "B"], "scorer": scorer, "status": "ok"}
+        ),
+        comparison,
+    )
+    effect, arms, _ = estimate_gene_removal_effects(
+        external_result,
+        external,
+        modules,
+        comparison,
+        baseline_effect.donor_differences,
+        scorer=scorer,
+        scoring_context_id="removal",
+    )
+    measured = effect.estimates.loc[
+        effect.estimates.variant_id.eq(selected.variant_id)
+    ].iloc[0]
+    means = expected_means.unstack("tissue_in_publication")
+    expected_difference = means.Muscle - means.Lung
+    assert measured.estimate == pytest.approx(expected_difference.mean())
+    assert measured.standard_error == pytest.approx(
+        expected_difference.std(ddof=1) / np.sqrt(8)
+    )
+    assert measured.n_matched_donors == 8
+    assert measured.variant_matched_estimate == pytest.approx(measured.estimate)
+    assert measured.baseline_matched_estimate == pytest.approx(
+        baseline_effect.estimates.loc[
+            baseline_effect.estimates.module_id.eq("A"), "estimate"
+        ].item()
+    )
+    assert arms.status.eq("ok").all()
+    if signed:
+        failed = effect.estimates.loc[
+            effect.estimates.selection_arm.eq("inverse")
+        ]
+        assert failed.eligibility_reason.eq("unscorable_arm").all()
+        assert failed.pvalue.isna().all()
+        # A variable final score cannot rescue a constant retained arm.
+        component = positive_module_score_name(variant_module, scorer=scorer)
+        degenerate = replace(
+            external_result,
+            cell_scores=external_result.cell_scores.assign(**{component: 0.0}),
+        )
+        invalid, _, _ = estimate_gene_removal_effects(
+            degenerate,
+            external,
+            modules,
+            comparison,
+            baseline_effect.donor_differences,
+            scorer=scorer,
+            scoring_context_id="constant-arm",
+        )
+        invalid_effect = invalid.estimates.loc[
+            invalid.estimates.variant_id.eq(selected.variant_id)
+        ].iloc[0]
+        assert invalid_effect.estimate == pytest.approx(measured.estimate)
+        assert invalid_effect.eligibility_reason == "degenerate_arm"
+        assert np.isnan(invalid_effect.pvalue)
 
 
 def test_removing_the_only_signed_gene_is_unscorable() -> None:

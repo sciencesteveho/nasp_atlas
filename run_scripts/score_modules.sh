@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N nasp_tissue
-#PBS -l select=1:ncpus=16:mem=320gb
-#PBS -l walltime=36:00:00
+#PBS -l select=1:ncpus=16:mem=200gb
+#PBS -l walltime=23:59:59
 #PBS -m a
 #PBS -j oe
 #PBS -o /rds/general/user/sho3/projects/lms-scott-raw/live/steve/tabula_sapiens/scripts/job_out/

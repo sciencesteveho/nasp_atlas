@@ -220,6 +220,24 @@ class NaspPlotter(_PlotterBase):
         cbar_height: str | float | None = None,
         cbar_width: str | float | None = None,
         figsize: tuple[float, float] | None = None,
+        x_label: str | None = None,
+        y_label: str | None = None,
+        title_fontsize: float | None = None,
+        label_fontsize: float | None = None,
+        tick_fontsize: float | None = None,
+        point_label_fontsize: float | None = None,
+        show_x_ticks: bool = True,
+        show_y_ticks: bool = True,
+        show_x_tick_labels: bool = True,
+        show_y_tick_labels: bool = True,
+        cmap_name: str = "RdBu_r",
+        cbar_label: str = "Output - competence",
+        corner_labels: tuple[str, str, str] | None = (
+            "active-like",
+            "responsive-like",
+            "competent-like",
+        ),
+        corner_label_color: str = "#7C7C7C",
     ) -> None:
         """Plot relative competence against output for supported contexts.
 
@@ -238,6 +256,15 @@ class NaspPlotter(_PlotterBase):
         `figsize` overrides the total figure size. Set `title` to `None` to
         show only the facet value as each panel title.
 
+        `x_label` and `y_label` replace the axis labels when not None; an
+        empty string hides them. Font sizes are positive points and None keeps
+        the shared publication style; `point_label_fontsize` sizes context
+        labels. The tick flags hide tick marks or tick labels without changing
+        the fixed zero-to-one limits. `cmap_name` recolors the gap on its fixed
+        -1 to +1 scale centered on zero; keep a diverging palette.
+        `corner_labels` gives the top-right, top-left and bottom-right
+        qualitative guides; None hides them.
+
         Example Usage:
           >>> plotter.plot_competence_output_state_map(
           ...     contexts,
@@ -245,9 +272,21 @@ class NaspPlotter(_PlotterBase):
           ...     label_columns=["cell_type"],
           ...     title=None,
           ...     figsize=(4.0, 4.0),
+          ...     point_label_fontsize=4,
+          ...     corner_labels=None,
           ... )
         """
         set_matplotlib_publication_parameters()
+        for size in (
+            title_fontsize,
+            label_fontsize,
+            tick_fontsize,
+            point_label_fontsize,
+        ):
+            if size is not None and (not np.isfinite(size) or size <= 0):
+                raise ValueError("Font sizes must be positive and finite")
+        if corner_labels is not None and len(corner_labels) != 3:
+            raise ValueError("corner_labels must contain three labels or None")
         required = [
             *label_columns,
             competence_column,
@@ -292,7 +331,7 @@ class NaspPlotter(_PlotterBase):
             fig.set_size_inches(*figsize)
 
         norm = TwoSlopeNorm(vmin=-1.0, vcenter=0.0, vmax=1.0)
-        cmap = plt.get_cmap("RdBu_r")
+        cmap = plt.get_cmap(cmap_name)
         used_axes: list[Axes] = []
         for ax, (facet_label, block) in zip(axes, facets, strict=False):
             sizes = self._support_sizes(
@@ -328,46 +367,47 @@ class NaspPlotter(_PlotterBase):
                     float(row[competence_column]),
                     float(row[output_column]),
                     label,
+                    fontsize=point_label_fontsize,
                 )
                 for label, (_, row) in zip(
                     labels, labeled.iterrows(), strict=True
                 )
             ]
-            ax.text(
-                0.96,
-                0.96,
-                "active-like",
-                ha="right",
-                va="top",
-                color="#7C7C7C",
-            )
-            ax.text(
-                0.04,
-                0.96,
-                "responsive-like",
-                ha="left",
-                va="top",
-                color="#7C7C7C",
-            )
-            ax.text(
-                0.96,
-                0.04,
-                "competent-like",
-                ha="right",
-                va="bottom",
-                color="#7C7C7C",
-            )
+            for label, x, y, ha, va in zip(
+                corner_labels or (),
+                (0.96, 0.04, 0.96),
+                (0.96, 0.96, 0.04),
+                ("right", "left", "right"),
+                ("top", "top", "bottom"),
+                strict=False,
+            ):
+                ax.text(x, y, label, ha=ha, va=va, color=corner_label_color)
             ax.set_xlim(-0.03, 1.03)
             ax.set_ylim(-0.03, 1.03)
             ax.set_aspect("equal")
-            ax.set_xlabel("Relative sensing competence")
-            ax.set_ylabel("Relative pathway output")
+            ax.set_xlabel(
+                "Relative sensing competence" if x_label is None else x_label,
+                fontsize=label_fontsize,
+            )
+            ax.set_ylabel(
+                "Relative pathway output" if y_label is None else y_label,
+                fontsize=label_fontsize,
+            )
             panel_title = title or ""
             if facet_column is not None:
                 separator = " · " if panel_title else ""
                 panel_title += f"{separator}{facet_label}"
-            ax.set_title(panel_title)
+            ax.set_title(panel_title, fontsize=title_fontsize)
             self._minimal_axis(ax)
+            if tick_fontsize is not None:
+                ax.tick_params(labelsize=tick_fontsize)
+            self._set_tick_visibility(
+                ax,
+                show_x_ticks=show_x_ticks,
+                show_y_ticks=show_y_ticks,
+                show_x_tick_labels=show_x_tick_labels,
+                show_y_tick_labels=show_y_tick_labels,
+            )
 
             if adjust_labels and texts:
                 self._adjust_point_labels(
@@ -396,7 +436,7 @@ class NaspPlotter(_PlotterBase):
             used_axes[-1],
             resolved_colorbar_style,
             mappable=ScalarMappable(norm=norm, cmap=cmap),
-            title="Output - competence",
+            title=cbar_label,
         )
         self._save_figure_and_log(
             fig,
@@ -412,6 +452,26 @@ class NaspPlotter(_PlotterBase):
         label_columns: Sequence[str],
         max_per_hypothesis: int = 12,
         panel_height: float = 1.2,
+        panel_width: float = 2.0,
+        bar_height: float = 0.72,
+        label_wrap_width: int | None = None,
+        xlabel_wrap_width: int | None = None,
+        title: str | None = None,
+        bar_color: str | None = None,
+        title_fontsize: float | None = None,
+        label_fontsize: float | None = None,
+        xlabel_fontsize: float | None = None,
+        tick_fontsize: float | None = None,
+        title_pad: float | None = None,
+        xlabel_pad: float | None = None,
+        tick_label_pad: float | None = None,
+        x_label: str | None = None,
+        y_label: str | None = None,
+        ylabel_fontsize: float | None = None,
+        show_x_ticks: bool = True,
+        show_y_ticks: bool = True,
+        show_x_tick_labels: bool = True,
+        show_y_tick_labels: bool = True,
     ) -> None:
         """Plot the highest supported contexts for each NASP hypothesis.
 
@@ -420,17 +480,56 @@ class NaspPlotter(_PlotterBase):
         tissue and cell type. `panel_height` sets each subplot row's height in
         inches.
 
+        `panel_width` is the width in inches of each panel; `bar_height` is
+        the bar thickness in row units. Optional wrapping widths are character
+        counts for context labels and formula labels. These controls preserve
+        score values, ranking, and the shared zero-to-one axis.
+        `title` and `bar_color` override each panel's hypothesis-specific
+        default; an empty title hides it. Font sizes and padding are in points;
+        None retains the shared publication style. Panel dimensions are
+        positive inches; bar height is positive in row units. These categorical
+        bars have no colorbar. For separate figures, pass one hypothesis.
+        `x_label` replaces each panel's priority-formula label and `y_label`
+        adds a context-axis label; empty strings hide them. The tick flags
+        hide tick marks or tick labels without changing the zero-to-one axis.
+
         Example Usage:
           >>> plotter.plot_ranked_nasp_hypotheses(
           ...     priorities,
           ...     filename="hypothesis_priorities",
           ...     label_columns=["tissue", "cell_type"],
           ...     panel_height=1.38,
+          ...     panel_width=3.5,
+          ...     label_wrap_width=45,
+          ...     xlabel_wrap_width=50,
+          ...     title_fontsize=10,
+          ...     label_fontsize=8,
+          ...     tick_label_pad=2,
           ... )
         """
         set_matplotlib_publication_parameters()
         if not np.isfinite(panel_height) or panel_height <= 0.0:
             raise ValueError("panel_height must be a positive finite value")
+        for name, value in (
+            ("panel_width", panel_width),
+            ("bar_height", bar_height),
+        ):
+            if not np.isfinite(value) or value <= 0.0:
+                raise ValueError(f"{name} must be positive and finite")
+        if max_per_hypothesis < 1:
+            raise ValueError("max_per_hypothesis must be at least one")
+        for width in (label_wrap_width, xlabel_wrap_width):
+            if width is not None and width < 1:
+                raise ValueError("Label wrapping widths must be positive")
+        for size in (
+            title_fontsize,
+            label_fontsize,
+            xlabel_fontsize,
+            ylabel_fontsize,
+            tick_fontsize,
+        ):
+            if size is not None and (not np.isfinite(size) or size <= 0):
+                raise ValueError("Font sizes must be positive and finite")
         required = [*label_columns, "hypothesis", "priority_score"]
         self._require_columns(priorities, required, table_name="priorities")
         scoped = priorities.copy()
@@ -445,7 +544,7 @@ class NaspPlotter(_PlotterBase):
         hypotheses = scoped["hypothesis"].drop_duplicates().astype(str).tolist()
         fig, axes = self._panel_figure(
             len(hypotheses),
-            panel_width=2.0,
+            panel_width=panel_width,
             panel_height=panel_height,
             max_columns=2,
         )
@@ -462,15 +561,22 @@ class NaspPlotter(_PlotterBase):
             ].nlargest(max_per_hypothesis, "priority_score")
             block = block.sort_values("priority_score", kind="stable")
             labels = self._row_labels(block, label_columns)
+            if label_wrap_width is not None:
+                labels = [
+                    textwrap.fill(label, width=label_wrap_width)
+                    for label in labels
+                ]
             y = np.arange(block.shape[0])
             ax.barh(
                 y,
                 block["priority_score"],
-                color=colors.get(hypothesis, "#4c78a8"),
-                height=0.72,
+                color=bar_color
+                if bar_color is not None
+                else colors.get(hypothesis, "#4c78a8"),
+                height=bar_height,
             )
             ax.set_yticks(y)
-            ax.set_yticklabels(labels)
+            ax.set_yticklabels(labels, fontsize=label_fontsize)
             ax.set_xlim(0.0, 1.0)
             priority_basis = None
             if "priority_basis" in block:
@@ -482,14 +588,38 @@ class NaspPlotter(_PlotterBase):
                 )
                 if len(observed_basis) == 1:
                     priority_basis = observed_basis.iloc[0]
-            ax.set_xlabel(
+            xlabel = (
                 _hypothesis_priority_label(
                     hypothesis,
                     priority_basis=priority_basis,
                 )
+                if x_label is None
+                else x_label
             )
-            ax.set_title(self._hypothesis_display_label(hypothesis))
+            if xlabel_wrap_width is not None:
+                xlabel = textwrap.fill(xlabel, width=xlabel_wrap_width)
+            ax.set_xlabel(xlabel, fontsize=xlabel_fontsize, labelpad=xlabel_pad)
+            if y_label is not None:
+                ax.set_ylabel(y_label, fontsize=ylabel_fontsize)
+            ax.set_title(
+                self._hypothesis_display_label(hypothesis)
+                if title is None
+                else title,
+                fontsize=title_fontsize,
+                pad=title_pad,
+            )
             self._minimal_axis(ax)
+            if tick_fontsize is not None:
+                ax.tick_params(axis="x", labelsize=tick_fontsize)
+            if tick_label_pad is not None:
+                ax.tick_params(axis="both", pad=tick_label_pad)
+            self._set_tick_visibility(
+                ax,
+                show_x_ticks=show_x_ticks,
+                show_y_ticks=show_y_ticks,
+                show_x_tick_labels=show_x_tick_labels,
+                show_y_tick_labels=show_y_tick_labels,
+            )
         self._hide_unused_axes(axes[len(hypotheses) :])
         self._save_figure_and_log(
             fig,

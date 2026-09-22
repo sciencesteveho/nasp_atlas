@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import textwrap
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Literal
@@ -55,6 +56,8 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
       ... )
     """
 
+    _ZERO_VALUE_GRAY = "#e0e0e0"
+
     def __init__(
         self,
         output_dir: str | Path,
@@ -72,7 +75,9 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
         super().__init__(output_dir, dpi=dpi)
         if expression_cmap is None:
             expression_cmap = self._pastelize_cmap("YlGnBu", blend=0.20)
-            expression_cmap = self._zero_gray_cmap(expression_cmap)
+            expression_cmap = self._zero_gray_cmap(
+                expression_cmap, zero_color=self._ZERO_VALUE_GRAY
+            )
         self.expression_cmap = expression_cmap
         logging.getLogger("matplotlib.category").setLevel(logging.WARNING + 1)
 
@@ -164,7 +169,7 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
         panel_w: float = 3.25,
         panel_h: float = 3.25,
         size: float = 2.0,
-        row_hspace: float = 0.22,
+        row_hspace: float = 0.15,
         col_wspace: float = 0.275,
         colorbar_style: ColorbarStyle | None = None,
         cbar_height: str | float | None = None,
@@ -258,6 +263,29 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
             figsize=(panel_w * ncols, panel_h * nrows),
             squeeze=False,
         )
+        if numeric_values is not None:
+            # Numeric score grids reserve title and colorbar space outside
+            # the requested panel dimensions, as the gene renderer does.
+            horizontal_margin = 0.05
+            bottom_margin = 0.05
+            title_lines = max(len(panel.title.splitlines()) for panel in panels)
+            title_margin = 0.15 * title_lines
+            figure_width = (
+                panel_w * (ncols + (ncols - 1) * col_wspace)
+                + 2 * horizontal_margin
+            )
+            figure_height = (
+                panel_h * (nrows + (nrows - 1) * row_hspace)
+                + title_margin
+                + bottom_margin
+            )
+            fig.set_size_inches(figure_width, figure_height)
+            fig.subplots_adjust(
+                left=horizontal_margin / figure_width,
+                right=1 - horizontal_margin / figure_width,
+                bottom=bottom_margin / figure_height,
+                top=1 - title_margin / figure_height,
+            )
 
         numeric_panels: list[tuple[Axes, PathCollection, UmapPanel]] = []
         for ax, panel in zip(axes.flat, panels, strict=False):
@@ -313,7 +341,8 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
         expression_layer: str | None = None,
         use_raw: bool = False,
         gene_symbol_column: str | None = None,
-        row_hspace: float = 0.22,
+        row_hspace: float = 0.15,
+        col_wspace: float = 0.15,
         colorbar_style: ColorbarStyle | None = None,
         cbar_height: str | float | None = None,
         cbar_width: str | float | None = None,
@@ -337,7 +366,8 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
           expression_layer: Layer to use for expression values.
           use_raw: Whether to use adata.raw when expression_layer is None.
           gene_symbol_column: Optional adata.var column used to resolve symbols.
-          row_hspace: Vertical spacing between rows.
+          row_hspace: Vertical spacing between rows, relative to panel height.
+          col_wspace: Column spacing relative to panel width.
           colorbar_style: Base expression colorbar styling. Defaults to the
             compact multi-panel UMAP colorbar style.
           cbar_height: Optional override for colorbar height.
@@ -379,7 +409,8 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
             pad=cbar_pad,
         )
         cmap = self._zero_gray_cmap(
-            cmap if cmap is not None else self.expression_cmap
+            cmap if cmap is not None else self.expression_cmap,
+            zero_color=self._ZERO_VALUE_GRAY,
         ).with_extremes(bad="lightgray")
         if expression_layer is not None and use_raw:
             raise ValueError(
@@ -472,6 +503,7 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
                 panel_w=panel_w,
                 panel_h=panel_h,
                 row_hspace=row_hspace,
+                col_wspace=col_wspace,
                 cmap=cmap,
                 colorbar_style=colorbar_style,
                 vmax=shared_vmax,
@@ -519,6 +551,7 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
         panel_w: float,
         panel_h: float,
         row_hspace: float,
+        col_wspace: float,
         cmap: Colormap,
         colorbar_style: ColorbarStyle,
         vmax: float | None,
@@ -528,10 +561,19 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
     ) -> tuple[np.ndarray, tuple[float, float]]:
         """Render a gene UMAP batch and report one panel's physical size."""
         nrows = math.ceil(len(var_names) / ncols)
+        horizontal_margin = 0.05
+        title_margin = 0.15
+        bottom_margin = 0.05
+        figure_width = panel_w * ncols + 2 * horizontal_margin
+        figure_height = (
+            panel_h * (nrows + (nrows - 1) * row_hspace)
+            + title_margin
+            + bottom_margin
+        )
         fig, axes = plt.subplots(
             nrows,
             ncols,
-            figsize=(panel_w * ncols, panel_h * nrows),
+            figsize=(figure_width, figure_height),
             squeeze=False,
         )
         try:
@@ -565,6 +607,7 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
                 ax.set_title(label, fontstyle="italic", pad=0.0)
                 ax.set_aspect("equal", adjustable="box")
                 ax.set_box_aspect(1)
+                ax.margins(x=0.01, y=0.01)
                 for spine in ax.spines.values():
                     spine.set_visible(False)
 
@@ -580,7 +623,16 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
             for ax in axes.flat[len(var_names) :]:
                 ax.axis("off")
 
-            fig.subplots_adjust(hspace=row_hspace, wspace=0.35)
+            # Size the grid slots to the square axes; row gaps no longer
+            # shrink axes inside wider, touching column slots.
+            fig.subplots_adjust(
+                left=horizontal_margin / figure_width,
+                right=1 - horizontal_margin / figure_width,
+                bottom=bottom_margin / figure_height,
+                top=1 - title_margin / figure_height,
+                hspace=row_hspace,
+                wspace=col_wspace,
+            )
             rgba = self._figure_rgba(fig)
             panel_bounds = axes.flat[0].get_window_extent()
             panel_size_inches = (
@@ -755,6 +807,8 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
         panel_h: float = 1.75,
         cmap: Colormap | str | None = None,
         row_hspace: float = 0.22,
+        col_wspace: float = 0.35,
+        title_wrap_width: int | None = None,
         colorbar_style: ColorbarStyle | None = None,
         cbar_height: str | float | None = None,
         cbar_width: str | float | None = None,
@@ -785,6 +839,9 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
           panel_h: Height of each panel in inches.
           cmap: Colormap for values.
           row_hspace: Vertical spacing between rows.
+          col_wspace: Column spacing relative to panel width.
+          title_wrap_width: Maximum title characters per line; None keeps
+            observation keys unchanged. Wrapping displays underscores as spaces.
           colorbar_style: Base numeric colorbar styling. Defaults to the
             compact multi-panel UMAP colorbar style.
           cbar_height: Optional override for colorbar height.
@@ -817,6 +874,8 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
           ... )
         """
         set_matplotlib_publication_parameters()
+        if title_wrap_width is not None and title_wrap_width <= 0:
+            raise ValueError("title_wrap_width must be positive or None")
         if standardization not in {"none", "zscore"}:
             raise ValueError(
                 "standardization must be 'none' or 'zscore'; "
@@ -855,14 +914,18 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
 
         colorbar_style = (
             colorbar_style
-            or ColorbarStyle(height="27.5%", width="4%", pad=0.02)
+            or ColorbarStyle(height="27.5%", width="8.5%", pad=0.015)
         ).with_overrides(
             height=cbar_height,
             width=cbar_width,
             pad=cbar_pad,
         )
         numeric_cmap = (
-            cmap if cmap is not None else self._umap_expression_cmap("viridis")
+            cmap
+            if cmap is not None
+            else self._umap_expression_cmap(
+                "viridis", zero_color=self._ZERO_VALUE_GRAY
+            )
         )
         values_by_key = {
             key: self._numeric_obs_values(
@@ -898,6 +961,11 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
             panels.append(
                 {
                     "obs_key": key,
+                    "title": (
+                        textwrap.fill(key.replace("_", " "), title_wrap_width)
+                        if title_wrap_width is not None
+                        else key
+                    ),
                     "kind": "numeric",
                     "cmap": self._zero_gray_cmap(
                         numeric_cmap,
@@ -905,6 +973,7 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
                             vmin=panel_vmin,
                             vmax=panel_vmax,
                         ),
+                        zero_color=self._ZERO_VALUE_GRAY,
                     ),
                     "vmin": panel_vmin,
                     "vmax": panel_vmax,
@@ -921,7 +990,7 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
             panel_h=panel_h,
             size=size,
             row_hspace=row_hspace,
-            col_wspace=0.35,
+            col_wspace=col_wspace,
             colorbar_style=colorbar_style,
             numeric_values=values_by_key,
             shared_colorbar=shared_colorbar,
@@ -1073,11 +1142,12 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
             )
             if cmap_key is None:
                 resolved_kwargs["color_map"] = self._umap_expression_cmap(
-                    "viridis"
+                    "viridis", zero_color=self._ZERO_VALUE_GRAY
                 )
             else:
                 resolved_kwargs[cmap_key] = self._zero_gray_cmap(
-                    resolved_kwargs[cmap_key]
+                    resolved_kwargs[cmap_key],
+                    zero_color=self._ZERO_VALUE_GRAY,
                 )
 
         sc.pl.embedding(
@@ -1177,6 +1247,7 @@ class UmapPlotter(_VisualizationGeneMixin, _PlotterBase):
                     vmax=panel.vmax,
                     values=numeric_values,
                 ),
+                zero_color=self._ZERO_VALUE_GRAY,
             )
             collection = ax.scatter(
                 xy[:, 0],

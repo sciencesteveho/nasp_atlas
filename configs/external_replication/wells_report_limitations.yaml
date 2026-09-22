@@ -1,0 +1,31 @@
+# Reviewed report limitations for the Wells cohort. The frozen registration
+# carries one global list written before the muscle gates were resolved; this
+# list replaces it in Wells reports only. It restates the four registered
+# entries that remain true and drops "muscle source and mapping gates pending",
+# which the resolved muscle registration now contradicts.
+- >-
+  Observational expression signatures, not evidence of activation, mechanism
+  or causality.
+- >-
+  External cells are 10x 5' libraries while the TS reference is 3'. Pairing
+  removes each person's baseline but not a chemistry-by-tissue effect, and the
+  two cohorts' score magnitudes are on separate scales.
+- >-
+  TS scores use raw molecule counts rather than TS decontX-corrected counts,
+  so ambient-RNA handling differs between the cohorts.
+- >-
+  NASP_DNA_SENSING and NASP_RNA_SENSING are significant in the direction
+  opposite the frozen expectation. The registered rule was applied as frozen,
+  so these are recorded as opposite_direction rather than reinterpreted.
+- >-
+  Balanced and pooled-chemistry rescoring retain the DNA sensing point-estimate
+  sign, but their pointwise intervals span zero. A retained sign is not
+  evidence of precision or of independence from the scoring population.
+- >-
+  Removing LMNB1 removes the only inverse member of the DNA sensing module, so
+  that arm becomes unscorable. An unscorable arm cannot show robustness to the
+  module's definition either way.
+- >-
+  Donor 583B appears in both the Wells and the muscle primary analyses, and
+  five donor IDs occur in both releases. The cohorts are not independent people
+  and no cross-cohort calibrated score magnitude or meta-analysis is reported.

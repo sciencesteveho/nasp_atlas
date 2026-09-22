@@ -1,0 +1,39 @@
+cohort_id: tabula_sapiens
+input_path: ../../development/h5ad/1c88f927-bcbb-4bb1-9881-281842945a2d.h5ad
+counts_source: raw/X
+gene_id_column: _index
+gene_symbol_column: feature_name
+obs_columns:
+  donor_id: donor_id
+  tissue: tissue_in_publication
+  assay: assay
+  sex: sex
+obs_constants:
+  modality: cells
+filters:
+  assay: ["10x 3' v3"]
+  tissue_in_publication: [Muscle]
+populations:
+  vascular_endothelium:
+    column: cell_type
+    labels:
+      - endothelial cell
+      - capillary endothelial cell
+      - endothelial cell of artery
+      - endothelial cell of vascular tree
+  CD4_T:
+    column: cell_type
+    labels: ["CD4-positive, alpha-beta T cell"]
+library_keys: [sample_id, library_plate]
+donor_metadata: [sex]
+comparison:
+  level_key: population
+  target: vascular_endothelium
+  reference: CD4_T
+  minimum_cells: 10
+  minimum_pairs: 3
+source_notes: >-
+  Candidate discovery mapping. Generic endothelial cells have not yet been
+  established as non-lymphatic; confirmation stays unavailable until source
+  annotation evidence resolves that gate. Retain descriptive estimates.
+  Validate raw count provenance as for the Wells TS reference.

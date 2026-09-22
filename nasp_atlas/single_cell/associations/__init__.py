@@ -52,6 +52,8 @@ from nasp_atlas.single_cell.associations.mixed_models import MixedModelSpec
 from nasp_atlas.single_cell.associations.mixed_models import (
     mixed_model_inference,
 )
+from nasp_atlas.single_cell.associations.paired import PairedContrastResult
+from nasp_atlas.single_cell.associations.paired import paired_feature_contrasts
 from nasp_atlas.single_cell.associations.stability import (
     summarize_continuous_association_stability,
 )
@@ -66,6 +68,7 @@ __all__ = [
     "MixedModelInferenceResult",
     "MixedModelSpec",
     "ObsSchema",
+    "PairedContrastResult",
     "StatisticalUnit",
     "aggregate_feature_frame",
     "aggregate_feature_frame_by_keys",
@@ -76,6 +79,7 @@ __all__ = [
     "merge_eqtl_counts",
     "metadata_columns",
     "mixed_model_inference",
+    "paired_feature_contrasts",
     "partial_correlation_controlling_tissue",
     "prepare_eqtl_table",
     "regress_features_on_continuous",

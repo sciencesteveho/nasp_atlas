@@ -46,6 +46,18 @@ class SummaryPlotter(_PlotterBase):
         cbar_width: str | float | None = None,
         cbar_pad: float | None = None,
         annotate: bool = False,
+        figsize: tuple[float, float] | None = None,
+        title: str | None = None,
+        x_label: str = "Scanpy",
+        y_label: str = "AUCell",
+        cbar_label: str = "Cell-level Spearman correlation",
+        title_fontsize: float | None = None,
+        label_fontsize: float | None = None,
+        tick_fontsize: float | None = None,
+        show_x_tick_labels: bool = True,
+        show_y_tick_labels: bool = True,
+        cmap_name: str = "RdBu_r",
+        missing_color: str = "#eeeeee",
     ) -> None:
         """Plot all Scanpy-module/AUCell-module score correlations.
 
@@ -64,19 +76,43 @@ class SummaryPlotter(_PlotterBase):
           cell_size: Width and height of each heatmap cell in inches.
           min_width: Minimum heatmap panel width in inches.
           min_height: Minimum heatmap panel height in inches.
-          colorbar_style: Explicit inset colorbar geometry.
+          colorbar_style: Explicit inset colorbar geometry; pad is in inches.
           cbar_height: Optional colorbar-height override.
           cbar_width: Optional colorbar-width override.
-          cbar_pad: Optional heatmap-to-colorbar padding override.
+          cbar_pad: Nonnegative gap in inches, independent of matrix size.
+            Defaults to 0.30 inches to leave room for the AUCell axis label.
           annotate: Whether to print correlation values in heatmap cells.
+          figsize: Optional exact figure width and height in inches, overriding
+            `cell_size`, `min_width` and `min_height`. Cells stay square.
+          title: Optional figure title; None or an empty string omits it.
+          x_label: Scanpy-axis label, drawn above the matrix; empty hides it.
+          y_label: AUCell-axis label, drawn right of the matrix; empty hides it.
+          cbar_label: Colorbar label; an empty string hides it.
+          title_fontsize: Title size in points; None keeps publication style.
+          label_fontsize: Axis-label size in points; None keeps shared style.
+          tick_fontsize: Module-label size in points; None keeps shared style.
+          show_x_tick_labels: Whether Scanpy module labels are drawn.
+          show_y_tick_labels: Whether AUCell module labels are drawn.
+          cmap_name: Palette on the fixed -1 to 1 scale; keep it diverging.
+          missing_color: Color for non-finite correlations, distinct from 0.
 
         Example Usage:
           >>> plotter.plot_scorer_concordance_heatmap(
           ...     concordance,
           ...     filename="scorer_concordance",
+          ...     title="Same-module agreement on the diagonal",
+          ...     cmap_name="PuOr_r",
           ... )
         """
         set_matplotlib_publication_parameters()
+        if figsize is not None and (
+            len(figsize) != 2
+            or any(not np.isfinite(value) or value <= 0 for value in figsize)
+        ):
+            raise ValueError("figsize must contain two positive finite inches")
+        for size in (title_fontsize, label_fontsize, tick_fontsize):
+            if size is not None and (not np.isfinite(size) or size <= 0):
+                raise ValueError("Font sizes must be positive and finite")
 
         required = {"scanpy_module_id", "aucell_module_id", statistic}
         if missing := sorted(required.difference(concordance.columns)):
@@ -124,11 +160,11 @@ class SummaryPlotter(_PlotterBase):
         values = matrix.to_numpy(dtype=float)
         masked = np.ma.masked_invalid(values)
 
-        cmap = plt.get_cmap("RdBu_r").copy()
-        cmap.set_bad("#eeeeee")
+        cmap = plt.get_cmap(cmap_name).copy()
+        cmap.set_bad(missing_color)
         panel_width = max(min_width, len(order) * cell_size)
         panel_height = max(min_height, len(order) * cell_size)
-        fig, ax = plt.subplots(figsize=(panel_width, panel_height))
+        fig, ax = plt.subplots(figsize=figsize or (panel_width, panel_height))
         image = ax.imshow(
             masked,
             cmap=cmap,
@@ -145,10 +181,21 @@ class SummaryPlotter(_PlotterBase):
             score_labels=labels,
             groups=labels,
         )
-        ax.set_xlabel("Scanpy", labelpad=6.5)
+        ax.set_xlabel(x_label, labelpad=6.5, fontsize=label_fontsize)
         ax.xaxis.set_label_position("top")
-        ax.set_ylabel("AUCell", rotation=270, labelpad=9.5)
+        ax.set_ylabel(
+            y_label, rotation=270, labelpad=9.5, fontsize=label_fontsize
+        )
         ax.yaxis.set_label_position("right")
+        if title:
+            ax.set_title(title, fontsize=title_fontsize, pad=14)
+        if tick_fontsize is not None:
+            ax.tick_params(axis="both", which="major", labelsize=tick_fontsize)
+        self._set_tick_visibility(
+            ax,
+            show_x_tick_labels=show_x_tick_labels,
+            show_y_tick_labels=show_y_tick_labels,
+        )
 
         if annotate:
             for row_index, column_index in np.ndindex(values.shape):
@@ -165,7 +212,7 @@ class SummaryPlotter(_PlotterBase):
                     )
 
         resolved_colorbar_style = (
-            colorbar_style or ColorbarStyle(height=0.4, width=0.08, pad=0.12)
+            colorbar_style or ColorbarStyle(height=0.4, width=0.08, pad=0.30)
         ).with_overrides(
             height=cbar_height,
             width=cbar_width,
@@ -177,7 +224,8 @@ class SummaryPlotter(_PlotterBase):
             ax,
             resolved_colorbar_style,
             mappable=image,
-            title="Cell-level Spearman correlation",
+            title=cbar_label,
+            pad_inches=resolved_colorbar_style.pad,
         )
         self._save_figure_and_log(
             fig,

@@ -38,6 +38,19 @@ class RobustnessPlotter(_PlotterBase):
         max_rows: int = 8,
         figsize: tuple[float, float] | None = None,
         label_width: int = 48,
+        title: str | None = None,
+        x_label: str | None = None,
+        y_label: str | None = None,
+        title_fontsize: float | None = None,
+        label_fontsize: float | None = None,
+        tick_fontsize: float | None = None,
+        show_x_ticks: bool = True,
+        show_y_ticks: bool = True,
+        show_x_tick_labels: bool = True,
+        show_y_tick_labels: bool = True,
+        point_color: str = "#333333",
+        rescored_color: str = "#0072B2",
+        range_color: str = "#777777",
     ) -> list[Path]:
         """Save available summaries as PNG, vector PDF, and displayed CSV.
 
@@ -50,9 +63,19 @@ class RobustnessPlotter(_PlotterBase):
         prioritizing donor support. Paired contrasts prioritize donor support.
         Missing estimates remain missing; complete results stay in input tables.
 
+        Presentation overrides apply to every figure rendered by one call, so
+        pass one table family per call to tune one figure. `title`, `x_label`
+        and `y_label` replace each figure's default text when not None; an
+        empty string hides it, and the default y label is empty. Font sizes are
+        positive points; None keeps the shared publication style. The tick
+        flags hide tick marks or tick labels without changing axis limits.
+        `point_color` marks baselines, `rescored_color` outlines rescored
+        diamonds and `range_color` draws deletion ranges and shift segments.
+
         Example Usage:
           >>> paths = plotter.plot_tables(
           ...     tables, max_rows=8, figsize=(3.5, 3.0), label_width=44,
+          ...     title="Gene removal", show_y_ticks=False,
           ... )
         """
         if max_rows < 1 or label_width < 1:
@@ -62,6 +85,9 @@ class RobustnessPlotter(_PlotterBase):
             or any(not np.isfinite(value) or value <= 0 for value in figsize)
         ):
             raise ValueError("figsize must contain two positive finite inches")
+        for size in (title_fontsize, label_fontsize, tick_fontsize):
+            if size is not None and (not np.isfinite(size) or size <= 0):
+                raise ValueError("Font sizes must be positive and finite")
 
         schema = schema or ObsSchema()
         summaries = _summaries(tables, schema, minimum_donors)
@@ -69,7 +95,7 @@ class RobustnessPlotter(_PlotterBase):
 
         with plt.rc_context():
             set_matplotlib_publication_parameters()
-            for name, (frame, title, xlabel) in summaries.items():
+            for name, (frame, base_title, base_xlabel) in summaries.items():
                 if frame.empty:
                     logger.info(
                         "No estimable rows for robustness figure %s", name
@@ -86,9 +112,36 @@ class RobustnessPlotter(_PlotterBase):
 
                 figure, axis = plt.subplots(figsize=dimensions)
                 try:
-                    _draw_summary(axis, shown, label_width=label_width)
-                    axis.set_title(title, loc="left", pad=5)
-                    axis.set_xlabel(xlabel, labelpad=3)
+                    _draw_summary(
+                        axis,
+                        shown,
+                        label_width=label_width,
+                        point_color=point_color,
+                        rescored_color=rescored_color,
+                        range_color=range_color,
+                    )
+                    axis.set_title(
+                        base_title if title is None else title,
+                        loc="left",
+                        pad=5,
+                        fontsize=title_fontsize,
+                    )
+                    axis.set_xlabel(
+                        base_xlabel if x_label is None else x_label,
+                        labelpad=3,
+                        fontsize=label_fontsize,
+                    )
+                    if y_label is not None:
+                        axis.set_ylabel(y_label, fontsize=label_fontsize)
+                    if tick_fontsize is not None:
+                        axis.tick_params(labelsize=tick_fontsize)
+                    self._set_tick_visibility(
+                        axis,
+                        show_x_ticks=show_x_ticks,
+                        show_y_ticks=show_y_ticks,
+                        show_x_tick_labels=show_x_tick_labels,
+                        show_y_tick_labels=show_y_tick_labels,
+                    )
                     if name == "gene_detection":
                         axis.set_xlim(-0.03, 1.03)
                     elif name == "overlap_coupling":
@@ -345,7 +398,15 @@ def _coupling_summary(
     )
 
 
-def _draw_summary(axis: Axes, frame: pd.DataFrame, *, label_width: int) -> None:
+def _draw_summary(
+    axis: Axes,
+    frame: pd.DataFrame,
+    *,
+    label_width: int,
+    point_color: str,
+    rescored_color: str,
+    range_color: str,
+) -> None:
     """Draw point estimates, genuine deletion ranges, and missing ranges."""
     labels = [textwrap.fill(str(label), label_width) for label in frame.label]
     heights = np.array([label.count("\n") + 1 for label in labels])
@@ -353,11 +414,15 @@ def _draw_summary(axis: Axes, frame: pd.DataFrame, *, label_width: int) -> None:
 
     if "low" in frame:
         axis.hlines(
-            positions, frame.low, frame.high, color="#777777", linewidth=0.6
+            positions, frame.low, frame.high, color=range_color, linewidth=0.6
         )
     if "after" in frame:
         axis.hlines(
-            positions, frame.point, frame.after, color="#777777", linewidth=0.6
+            positions,
+            frame.point,
+            frame.after,
+            color=range_color,
+            linewidth=0.6,
         )
         axis.scatter(
             frame.after,
@@ -365,11 +430,11 @@ def _draw_summary(axis: Axes, frame: pd.DataFrame, *, label_width: int) -> None:
             marker="D",
             s=9,
             facecolors="white",
-            edgecolors="#0072B2",
+            edgecolors=rescored_color,
             linewidths=0.6,
             zorder=3,
         )
-    axis.scatter(frame.point, positions, s=7, color="#333333", zorder=4)
+    axis.scatter(frame.point, positions, s=7, color=point_color, zorder=4)
     axis.set_yticks(positions, labels)
     axis.set_ylim(float(heights.sum()) + 0.15, -0.15)
     axis.tick_params(axis="y", length=0, pad=3)

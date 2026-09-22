@@ -65,6 +65,11 @@ class ClockRegressionStyle:
     scatter_cmap_min: float = 0.25
     scatter_count_bins: int = 30
     scatter_alpha: float = 0.6
+    figsize: tuple[float, float] = (1.1, 1.1)
+    x_label: str = "Chronological age"
+    y_label: str = "Predicted relative age"
+    fit_line_color: str = "lightskyblue"
+    show_correlation: bool = True
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -618,7 +623,7 @@ def _plot_clock_regression(
         style,
         title=f"{style.title or prediction_column} (n={x.size})",
     )
-    fig, ax = plt.subplots(figsize=(1.1, 1.1))
+    fig, ax = plt.subplots(figsize=style.figsize)
     mappable, ticks = _draw_clock_count_scatter(ax, x, y, style=style)
     _add_clock_count_colorbar(
         fig,
@@ -719,10 +724,10 @@ def _style_clock_regression_axes(
 ) -> None:
     """Apply regression annotation, labels, ticks, title, and spines."""
     if np.unique(x).size >= 2:
-        _add_regression_fit_annotation(x, y, ax)
+        _add_regression_fit_annotation(x, y, ax, style=style)
 
-    ax.set_xlabel("Chronological age")
-    ax.set_ylabel("Predicted relative age")
+    ax.set_xlabel(style.x_label)
+    ax.set_ylabel(style.y_label)
     x_tick_params = {"pad": style.x_tick_pad}
     y_tick_params = {"pad": style.y_tick_pad}
 
@@ -745,8 +750,10 @@ def _add_regression_fit_annotation(
     x: npt.NDArray[np.float64],
     y: npt.NDArray[np.float64],
     ax: Axes,
+    *,
+    style: ClockRegressionStyle,
 ) -> None:
-    """Draw a fitted regression line and Pearson correlation label."""
+    """Draw a fitted regression line and optional Pearson correlation label."""
     slope, intercept = np.polyfit(x, y, deg=1)
     x_limits = ax.get_xlim()
     y_limits = ax.get_ylim()
@@ -754,12 +761,12 @@ def _add_regression_fit_annotation(
     ax.plot(
         x_line,
         slope * x_line + intercept,
-        color="lightskyblue",
+        color=style.fit_line_color,
         linewidth=0.5,
     )
     ax.set_xlim(x_limits)
     ax.set_ylim(y_limits)
-    if np.unique(y).size >= 2:
+    if style.show_correlation and np.unique(y).size >= 2:
         pearson = cast(tuple[float, float], stats.pearsonr(x, y))
         r_value = pearson[0]
         ax.text(

@@ -17,8 +17,15 @@ import anndata as ad  # type: ignore[import]
 import pandas as pd
 from nasp_compendium import GeneModules  # type: ignore[import]
 
+from nasp_atlas.analysis.sensor_reports import analyze_sensor_reference
 from nasp_atlas.analysis.tabula_sapiens import associations
 from nasp_atlas.analysis.tabula_sapiens import scoring
+from nasp_atlas.analysis.tabula_sapiens.compendium_symbols import (
+    COMPENDIUM_SYMBOL_COLUMN,
+)
+from nasp_atlas.analysis.tabula_sapiens.compendium_symbols import (
+    add_compendium_symbol_column,
+)
 from nasp_atlas.analysis.tabula_sapiens.mechanisms import mechanism_analysis
 from nasp_atlas.analysis.tabula_sapiens.mixed_model_scopes import (
     mixed_model_scope_analysis,
@@ -311,6 +318,12 @@ def association_analysis(
         expression_layer=expression_layer,
         expression_use_raw=expression_use_raw,
     )
+    source_symbol_column = gene_symbol_column
+    symbol_aliases = add_compendium_symbol_column(
+        adata, source_column=source_symbol_column
+    )
+    # Match compendium symbols as the scoring stage did.
+    gene_symbol_column = COMPENDIUM_SYMBOL_COLUMN
     if module_ids is None and "scoring_reference_bundle_sha256" in scores:
         module_ids = [
             identifier
@@ -338,7 +351,8 @@ def association_analysis(
         gene_symbols=gene_symbols,
         sensor_group=sensor_group,
         scorer=scorer or associations._detect_scorer_from_scores(scores),
-        gene_symbol_column=gene_symbol_column,
+        gene_symbol_column=source_symbol_column,
+        compendium_symbol_aliases=symbol_aliases,
         expression_layer=expression_layer,
         expression_use_raw=expression_use_raw,
         eqtl_merge_mode=eqtl_merge_mode,
@@ -615,6 +629,7 @@ def _association_provenance(
     sensor_group: str | None,
     scorer: str,
     gene_symbol_column: str,
+    compendium_symbol_aliases: Mapping[str, str],
     expression_layer: str | None,
     expression_use_raw: bool,
     eqtl_merge_mode: str,
@@ -642,6 +657,9 @@ def _association_provenance(
         **eqtl_identity,
         "scorer": scorer,
         "gene_symbol_column": gene_symbol_column,
+        "compendium_symbol_aliases": json.dumps(
+            dict(compendium_symbol_aliases), sort_keys=True
+        ),
         "expression_source": (
             "raw" if expression_use_raw else expression_layer or "X"
         ),
@@ -1499,6 +1517,8 @@ def tabula_sapiens_tissue_analysis(
     sensitivity_dominant_genes: int = 1,
     run_mechanism_diagnostics: bool = False,
     include_reference_sets: bool = False,
+    sensor_specs: Sequence[Path] | None = None,
+    sensor_panel_path: Path | None = None,
 ) -> dict[str, Path]:
     """Score and analyze a complete or tissue-subset h5ad per scorer.
 
@@ -1510,6 +1530,9 @@ def tabula_sapiens_tissue_analysis(
     `resume_from_scores=True` reuses a score table only when its completion
     manifest matches the input, scoring settings, selection and file checksum.
     Combined and per-tissue models reuse the same scores independently.
+    Optional sensor specs run separate, focused count-based paired reports once
+    per comparison, outside the scorer loop. They use each spec's population
+    selection from the input source, independent of atlas model/tissue subsets.
 
     Args:
       h5ad_path: Complete-atlas or tissue-specific h5ad input path.
@@ -1536,6 +1559,9 @@ def tabula_sapiens_tissue_analysis(
       expression_layer: Expression layer used for scoring and associations.
       module_ids: Module IDs to score. Defaults to all compendium modules.
       sensor_group: Compendium sensor group used for gene-level associations.
+      sensor_specs: Cohort YAMLs defining exploratory paired sensor reports.
+      sensor_panel_path: Curated panel for these reports; defaults to the
+        installed compendium panel, independently recorded in each manifest.
       plot_modules: Whether to generate per-module marker plots.
       aucell_chunk_size: Cells processed in one AUCell block.
       aucell_num_workers: AUCell worker processes per block.
@@ -1612,6 +1638,7 @@ def tabula_sapiens_tissue_analysis(
         "subset_fraction": subset_fraction,
         "random_state": random_state,
         "gene_symbol_column": gene_symbol_column,
+        "compendium_symbol_matching": "curated_aliases",
         "expression_layer": expression_layer,
         "module_ids": list(module_ids) if module_ids is not None else None,
         "marker_panel_sha256": hashlib.sha256(
@@ -1716,6 +1743,13 @@ def tabula_sapiens_tissue_analysis(
             include_reference_sets=include_reference_sets,
         )
         outputs[f"association_{scorer_name}"] = association_dir
+    for spec_path in sensor_specs or ():
+        outputs[f"sensors_{spec_path.stem}"] = analyze_sensor_reference(
+            spec_path=spec_path,
+            panel_path=sensor_panel_path or GeneModules.default_panel_path(),
+            h5ad_path=Path(h5ad_path),
+            output_dir=run_dir / "sensors" / spec_path.stem,
+        )
     return outputs
 
 
@@ -1799,6 +1833,24 @@ def tabula_sapiens_scoring_analysis(
         single_tissue=single_tissue,
         single_tissue_use_rep=single_tissue_use_rep,
     )
+    symbol_aliases = add_compendium_symbol_column(
+        adata, source_column=gene_symbol_column
+    )
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "curated_symbol": gene,
+                "source_symbol": source,
+                "source_column": gene_symbol_column,
+            }
+            for gene, source in symbol_aliases.items()
+        ],
+        columns=["curated_symbol", "source_symbol", "source_column"],
+    ).to_csv(Path(output_dir) / "compendium_symbol_aliases.csv", index=False)
+    # Curated modules, sensors and marker plots match compendium symbols
+    # through the alias-aware column; the source column stays unchanged.
+    gene_symbol_column = COMPENDIUM_SYMBOL_COLUMN
     umap_plotter = UmapPlotter(output_dir=output_dir)
     heatmap_plotter = HeatmapPlotter(output_dir=output_dir)
     summary_plotter = SummaryPlotter(output_dir=output_dir)
@@ -1877,6 +1929,13 @@ def tabula_sapiens_scoring_analysis(
         gene_symbol_column=gene_symbol_column,
         expression_layer=expression_layer,
         ncols=6,
+        panel_w=0.6,
+        panel_h=0.6,
+        row_hspace=0.25,
+        col_wspace=0.0,
+        cbar_width=0.05,
+        cbar_height=0.3,
+        max_rows_per_batch=4,
         shared_colorbar=True,
         size=point_size,
     )
@@ -1939,6 +1998,9 @@ def tabula_sapiens_scoring_analysis(
         aucell_num_workers=aucell_num_workers,
         point_size=point_size,
         include_reference_sets=include_reference_sets,
+        reference_symbol_renames={
+            source: gene for gene, source in symbol_aliases.items()
+        },
     )
 
 
@@ -2038,6 +2100,13 @@ def _plot_module_gene_umaps(
             gene_symbol_column=gene_symbol_column,
             expression_layer=expression_layer,
             ncols=ncols,
+            panel_w=0.6,
+            panel_h=0.6,
+            row_hspace=0.25,
+            col_wspace=0.0,
+            cbar_width=0.05,
+            cbar_height=0.3,
+            max_rows_per_batch=4,
             shared_colorbar=True,
             size=point_size,
         )

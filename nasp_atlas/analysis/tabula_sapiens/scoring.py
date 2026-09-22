@@ -8,6 +8,7 @@ import logging
 import textwrap
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from dataclasses import replace
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -30,6 +31,8 @@ from nasp_atlas.single_cell.score_diagnostics import compare_module_scorers
 from nasp_atlas.single_cell.score_diagnostics import (
     cross_scorer_module_correlations,
 )
+from nasp_atlas.single_cell.umap import UmapPanelSpec
+from nasp_atlas.single_cell.visualization import ColorbarStyle
 from nasp_atlas.single_cell.visualization import GroupedGeneExpression
 from nasp_atlas.single_cell.visualization import HeatmapPlotter
 from nasp_atlas.single_cell.visualization import SummaryPlotter
@@ -41,6 +44,8 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "module_scoring_outputs",
     "plot_gene_expression_heatmaps_by_obs",
+    "plot_reference_score_umaps",
+    "plot_scorer_concordance_by_source",
     "safe_filename_token",
     "score_table_obs_metadata",
     "score_table_provenance",
@@ -125,6 +130,7 @@ def module_scoring_outputs(
     aucell_num_workers: int,
     point_size: float,
     include_reference_sets: bool = False,
+    reference_symbol_renames: Mapping[str, str] | None = None,
 ) -> None:
     """Score modules and write score tables, UMAPs, and heatmaps.
 
@@ -156,6 +162,9 @@ def module_scoring_outputs(
       aucell_num_workers: Worker processes used by each AUCell block.
       point_size: UMAP point size for score plots.
       include_reference_sets: Score bundled Reactome and Hallmark signatures.
+      reference_symbol_renames: Dataset symbols relabelled in
+        `gene_symbol_column`, mapped to their new labels (for example RIGI to
+        the curated DDX58), so reference sets still find those features.
     """
     score_tables: list[pd.DataFrame] = []
     requested_scorers = [
@@ -194,6 +203,7 @@ def module_scoring_outputs(
             module_ids,
             gene_symbol_column=gene_symbol_column,
             output_dir=Path(output_dir),
+            symbol_renames=reference_symbol_renames or {},
         )
         module_ids = [module.module_id for module in definitions]
 
@@ -436,6 +446,127 @@ def safe_filename_token(value: str) -> str:
     return token.strip("_") or "obs"
 
 
+def plot_reference_score_umaps(
+    adata: ad.AnnData,
+    score_keys: Sequence[str],
+    *,
+    scorer: ScorerName,
+    plotter: UmapPlotter,
+    point_size: float = 2.0,
+    ncols: int = 4,
+    panel_w: float = 2.5,
+    panel_h: float = 2.5,
+    row_hspace: float = 0.15,
+    col_wspace: float = 0.15,
+    cmap: str | None = None,
+    colorbar_style: ColorbarStyle | None = None,
+    cbar_height: str | float | None = None,
+    cbar_width: str | float | None = None,
+    cbar_pad: float | None = None,
+) -> None:
+    """Plot one native-score UMAP grid per external scoring database.
+
+    Each gene set retains its own color scale. Panel dimensions are in inches;
+    row spacing is a fraction of panel height. Only requested scores are shown.
+    `cmap` replaces the scorer default ("RdBu_r" on a zero-centered Scanpy
+    scale, "Blues" from zero for AUCell) without changing the limits.
+    `colorbar_style` sets geometry and tick styling. `cbar_height` and
+    `cbar_width` override its dimensions in inches (floats) or percentages of
+    the panel (strings). `cbar_pad` adds a gap in panel-width units to the
+    renderer's 0.02 offset. None retains the renderer's existing defaults.
+
+    Example Usage:
+      >>> plot_reference_score_umaps(
+      ...     adata, score_keys, scorer="scanpy", plotter=plotter,
+      ...     ncols=4, panel_w=2.5, panel_h=2.5,
+      ...     cbar_height=0.3, cbar_width=0.05, cbar_pad=0.02,
+      ... )
+    """
+    suffix = "_score" if scorer == "scanpy" else "_auc"
+    title_wrap_width = min(35, max(18, round(panel_w * 18)))
+    for source, metadata in reference_metadata().groupby("source", sort=False):
+        panels: list[UmapPanelSpec] = []
+        for entry in metadata.itertuples(index=False):
+            key = f"{entry.module_id}{suffix}"
+            if key not in score_keys:
+                continue
+            values = np.asarray(adata.obs[key], dtype=float)
+            finite = values[np.isfinite(values)]
+            bound = (
+                max(float(np.abs(finite).max()), 1e-12) if finite.size else 1.0
+            )
+            panels.append(
+                {
+                    "obs_key": key,
+                    "title": textwrap.fill(str(entry.name), title_wrap_width),
+                    "kind": "numeric",
+                    "cmap": cmap
+                    or ("RdBu_r" if scorer == "scanpy" else "Blues"),
+                    "vmin": -bound if scorer == "scanpy" else 0.0,
+                    "vmax": bound,
+                }
+            )
+        if not panels:
+            continue
+
+        database = (
+            "hallmark"
+            if source == "MSigDB Hallmark"
+            else safe_filename_token(str(source)).lower()
+        )
+        plotter.plot_umap_panel(
+            adata,
+            panels=panels,
+            filename=f"tabula_sapiens_{database}_{scorer}_module_umaps",
+            ncols=ncols,
+            panel_w=panel_w,
+            panel_h=panel_h,
+            row_hspace=row_hspace,
+            col_wspace=col_wspace,
+            size=min(point_size, 8.0),
+            colorbar_style=colorbar_style,
+            cbar_height=cbar_height,
+            cbar_width=cbar_width,
+            cbar_pad=cbar_pad,
+        )
+
+
+def plot_scorer_concordance_by_source(
+    correlations: pd.DataFrame,
+    module_ids: Sequence[str],
+    *,
+    plotter: SummaryPlotter,
+    cell_size: float = 0.0975,
+) -> None:
+    """Plot separate curated and external Scanpy/AUCell correlation matrices.
+
+    `cell_size` controls heatmap cell dimensions in inches. Both axes of each
+    matrix contain only modules from that source group.
+
+    Example Usage:
+      >>> plot_scorer_concordance_by_source(
+      ...     correlations, module_ids, plotter=plotter, cell_size=0.12,
+      ... )
+    """
+    reference_ids = set(reference_metadata().module_id)
+    for group, order in (
+        ("curated", [key for key in module_ids if key not in reference_ids]),
+        ("external", [key for key in module_ids if key in reference_ids]),
+    ):
+        if not order:
+            continue
+        selected = correlations.loc[
+            correlations.scanpy_module_id.isin(order)
+            & correlations.aucell_module_id.isin(order)
+        ]
+        plotter.plot_scorer_concordance_heatmap(
+            selected,
+            filename=f"tabula_sapiens_scorer_concordance_{group}",
+            module_order=order,
+            cell_size=cell_size,
+        )
+
+
 def _module_export_score_keys(
     modules: Sequence[GeneModule],
     *,
@@ -462,43 +593,40 @@ def _plot_module_score_umaps(
     point_size: float,
 ) -> None:
     """Plot final module scores with their separate native-scale colorbars."""
-    reference_names = (
-        reference_metadata().set_index("module_id")["name"].to_dict()
-    )
+    reference_ids = set(reference_metadata().module_id)
     suffix = "_score" if scorer == "scanpy" else "_auc"
     reference_keys = [
-        key for key in score_keys if key.removesuffix(suffix) in reference_names
+        key for key in score_keys if key.removesuffix(suffix) in reference_ids
     ]
-    for key in reference_keys:
-        identifier = key.removesuffix(suffix)
-        values = np.asarray(adata.obs[key], dtype=float)
-        finite = values[np.isfinite(values)]
-        bound = max(float(np.abs(finite).max()), 1e-12) if finite.size else 1.0
-        plotter.plot_umap_panel(
-            adata,
-            panels=[
-                {
-                    "obs_key": key,
-                    "title": textwrap.fill(str(reference_names[identifier]), 35)
-                    + f"\n{scorer.capitalize()} reference score",
-                    "kind": "numeric",
-                    "cmap": "RdBu_r" if scorer == "scanpy" else "Blues",
-                    "vmin": -bound if scorer == "scanpy" else 0.0,
-                    "vmax": bound,
-                }
-            ],
-            filename=f"{identifier}_{scorer}_umap",
-            panel_w=2.5,
-            panel_h=2.5,
-            size=min(point_size, 8.0),
-        )
+    plot_reference_score_umaps(
+        adata,
+        reference_keys,
+        scorer=scorer,
+        plotter=plotter,
+        point_size=point_size,
+        ncols=4,
+        panel_w=1.25,
+        panel_h=1.25,
+        row_hspace=0.15,
+        col_wspace=0.35,
+        cbar_height="28.5%",
+        cbar_width="4%",
+        cbar_pad=0.02,
+    )
     if score_keys := [key for key in score_keys if key not in reference_keys]:
         plotter.plot_multi_obs_umap_panel(
             adata,
             obs_keys=score_keys,
             filename=f"tabula_sapiens_{scorer}_module_umaps",
             cmap="RdBu_r",
-            ncols=5,
+            ncols=6,
+            panel_w=0.6,
+            panel_h=0.6,
+            row_hspace=0.75,
+            col_wspace=0.5,
+            title_wrap_width=16,
+            cbar_width=0.05,
+            cbar_height=0.3,
             size=point_size,
             vmin=None,
             vmax=None,
@@ -690,7 +818,7 @@ def _write_cross_scorer_comparison_outputs(
     output_dir: str | Path,
     plotter: SummaryPlotter,
 ) -> None:
-    """Write cross-scorer comparison tables and the concordance heatmap."""
+    """Write complete scorer comparison tables and source-group heatmaps."""
     combined_scores = pd.concat(score_tables, axis="columns")
     scored_module_ids = [str(module.module_id) for module in auc_modules]
     concordance = compare_module_scorers(
@@ -714,10 +842,10 @@ def _write_cross_scorer_comparison_outputs(
         filename="tabula_sapiens_cross_scorer_module_correlations.csv",
         log_message="[tabula_sapiens] cross-scorer module correlations -> %s",
     )
-    plotter.plot_scorer_concordance_heatmap(
+    plot_scorer_concordance_by_source(
         cross_module_correlations,
-        filename="tabula_sapiens_scorer_concordance",
-        module_order=scored_module_ids,
+        scored_module_ids,
+        plotter=plotter,
     )
 
 
@@ -740,9 +868,25 @@ def _reference_scoring_modules(
     *,
     gene_symbol_column: str,
     output_dir: Path,
+    symbol_renames: Mapping[str, str],
 ) -> tuple[GeneModule, ...]:
-    """Resolve requested signatures and publish reference-gene coverage."""
-    reference_modules = reference_gene_sets()
+    """Resolve requested signatures and publish reference-gene coverage.
+
+    `symbol_renames` relabels reference genes whose features carry another
+    label in `gene_symbol_column`; it changes the join key, not membership.
+    """
+    reference_modules = tuple(
+        replace(
+            module,
+            positive_genes=tuple(
+                symbol_renames.get(gene, gene) for gene in module.positive_genes
+            ),
+            inverse_genes=tuple(
+                symbol_renames.get(gene, gene) for gene in module.inverse_genes
+            ),
+        )
+        for module in reference_gene_sets()
+    )
     symbols = (
         adata.var[gene_symbol_column]
         .astype(object)

@@ -16,6 +16,8 @@ from nasp_atlas.single_cell.associations.core import ObsSchema
 from nasp_atlas.single_cell.associations.core import metadata_columns
 from nasp_atlas.single_cell.module_scoring import ScorerName
 from nasp_atlas.single_cell.module_scoring import module_score_name
+from nasp_atlas.single_cell.sensor_features import resolve_sensor_features
+from nasp_atlas.single_cell.sensor_features import sensor_catalog
 from nasp_atlas.single_cell.utils import expression_matrix
 
 
@@ -92,13 +94,10 @@ def resolve_feature_specs(
             label=module.module_id,
         )
 
-    if symbols := _requested_gene_symbols(
-        adata,
-        gene_symbols=gene_symbols,
-        sensor_group=sensor_group,
-        gene_symbol_column=gene_symbol_column,
-        use_raw=use_raw,
-    ):
+    symbols = list(gene_symbols or [])
+    if sensor_group is not None:
+        symbols.extend(GeneModules.sensors(sensor_group))
+    if symbols:
         _add_gene_specs(
             adata,
             symbols,
@@ -147,37 +146,6 @@ def _add_score_spec(
     )
 
 
-def _requested_gene_symbols(
-    adata: ad.AnnData,
-    *,
-    gene_symbols: Sequence[str] | None,
-    sensor_group: str | None,
-    gene_symbol_column: str,
-    use_raw: bool,
-) -> list[str]:
-    """Combine explicit genes and compendium sensors in one identifier space."""
-    symbols = list(gene_symbols or [])
-    if sensor_group is None:
-        return symbols
-
-    resolution_adata = adata
-    if use_raw:
-        raw = adata.raw
-        if raw is None:
-            raise ValueError("use_raw=True requires adata.raw to be set")
-        resolution_adata = ad.AnnData(shape=raw.shape, var=raw.var)
-
-    symbols.extend(
-        GeneModules.sensors(
-            sensor_group,
-            adata=resolution_adata,  # type: ignore[arg-type]
-            gene_symbol_column=gene_symbol_column,
-            output="symbols",
-        )
-    )
-    return symbols
-
-
 def _add_gene_specs(
     adata: ad.AnnData,
     symbols: Sequence[str],
@@ -194,32 +162,36 @@ def _add_gene_specs(
         raise ValueError("use_raw=True requires adata.raw to be set")
 
     source_var = raw.var if use_raw and raw is not None else adata.var
-    source_names = (
-        raw.var_names if use_raw and raw is not None else adata.var_names
+    if not isinstance(source_var, pd.DataFrame):
+        source_var = source_var.to_memory()
+    requested = (
+        pd.DataFrame({"gene": list(dict.fromkeys(symbols))})
+        .merge(
+            sensor_catalog(sensor_group="all")[["gene", "aliases"]],
+            on="gene",
+            how="left",
+            validate="one_to_one",
+        )
+        .fillna({"aliases": ""})
     )
-    var_names = pd.Index(source_names).astype(str)
-    symbol_to_var = {name: name for name in var_names}
-    if gene_symbol_column in source_var.columns:
-        for var_name, symbol in zip(
-            var_names,
-            source_var[gene_symbol_column].astype(str),
-            strict=True,
-        ):
-            if symbol and symbol != "nan":
-                symbol_to_var.setdefault(symbol, var_name)
-
-    for symbol in symbols:
-        var_name = symbol_to_var.get(symbol)
-        if var_name is None:
+    mapping = resolve_sensor_features(
+        source_var,
+        requested,
+        gene_symbol_column=gene_symbol_column,
+    )
+    for row in mapping.itertuples(index=False):
+        symbol = str(row.gene)
+        if row.mapping_status != "present":
             skipped.append(
                 {
                     "feature_type": "gene_expression",
                     "requested": symbol,
-                    "skip_reason": "gene absent from adata.var",
+                    "skip_reason": f"{row.mapping_status} in expression var",
                 }
             )
             continue
 
+        var_name = str(row.source_feature_id)
         key = ("gene_expression", var_name)
         if key in seen:
             continue
