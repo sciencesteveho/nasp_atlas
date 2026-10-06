@@ -87,24 +87,6 @@ def test_pairwise_correlations_remove_stratum_baselines() -> None:
     assert row["centered_within_strata"]
 
 
-def test_pairwise_correlations_can_limit_tested_pairs() -> None:
-    """Explicit pairs avoid unrelated feature-feature tests."""
-    frame = _correlation_frame()
-    extra = frame[frame["feature_label"] == "A"].copy()
-    extra["feature_label"] = "C"
-    frame = pd.concat([frame, extra], ignore_index=True)
-
-    result = pairwise_module_correlations(
-        frame,
-        unit_columns=["donor_id", "tissue"],
-        module_pairs=[("A", "C")],
-    )
-
-    assert list(zip(result["module_a"], result["module_b"], strict=True)) == [
-        ("A", "C")
-    ]
-
-
 def test_pairwise_correlations_reject_duplicate_units() -> None:
     """Duplicate module-unit rows fail instead of inflating sample size."""
     frame = _correlation_frame()

@@ -3,26 +3,31 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import anndata as ad  # type: ignore[import]
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scanpy as sc  # type: ignore[import]
+import scipy.sparse as sp  # type: ignore[import]
 from matplotlib.axes import Axes
 from matplotlib.collections import LineCollection
 from matplotlib.collections import PathCollection
 from matplotlib.colors import Colormap
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
+from matplotlib.ticker import MaxNLocator
 from matplotlib.typing import ColorType
+from scipy.cluster import hierarchy  # type: ignore[import]
 from scipy.cluster.hierarchy import (  # type: ignore[import]
     dendrogram as scipy_dendrogram,
 )
 
+from nasp_atlas.single_cell.utils import expression_matrix
 from nasp_atlas.single_cell.visualization.gene_resolution import (
     _VisualizationGeneMixin,
 )
@@ -168,6 +173,7 @@ class DotplotPlotter(_VisualizationGeneMixin, _PlotterBase):
         size_exponent: float,
         dot_edge_color: str,
         dot_edge_lw: float,
+        vmax: float = 1.0,
     ) -> PathCollection:
         """Draw the dot scatter and style axes without an enclosing box."""
         n_groups = len(stats.categories)
@@ -189,7 +195,7 @@ class DotplotPlotter(_VisualizationGeneMixin, _PlotterBase):
             linewidths=dot_edge_lw,
             clip_on=False,
             vmin=0,
-            vmax=1,
+            vmax=vmax,
         )
 
         ax.set_xticks(range(n_genes))
@@ -388,15 +394,23 @@ class DotplotPlotter(_VisualizationGeneMixin, _PlotterBase):
         sax.set_ylim(-0.06, 1.05)
 
     @staticmethod
-    def _draw_dotplot_colorbar(scat: PathCollection, cax: Axes) -> None:
+    def _draw_dotplot_colorbar(
+        scat: PathCollection,
+        cax: Axes,
+        *,
+        ticks: Sequence[float] = (0, 0.5, 1),
+        title: str = "Mean expression\nin group",
+        extend: Literal["neither", "both", "min", "max"] = "neither",
+    ) -> None:
         """Draw the mean expression colorbar."""
         cbar = plt.colorbar(
             scat,
             cax=cax,
             orientation="horizontal",
-            ticks=[0, 0.5, 1],
+            ticks=list(ticks),
+            extend=extend,
         )
-        cbar.ax.set_title("Mean expression\nin group", pad=2)
+        cbar.ax.set_title(title, pad=2)
         cbar.ax.tick_params(length=3, pad=1)
 
     @staticmethod
@@ -418,8 +432,15 @@ class DotplotPlotter(_VisualizationGeneMixin, _PlotterBase):
         size_exponent: float,
         dot_edge_color: str,
         dot_edge_lw: float,
-    ) -> None:
-        """Draw the size legend and colorbar for dotplots."""
+        colorbar_ticks: Sequence[float] = (0, 0.5, 1),
+        colorbar_title: str = "Mean expression\nin group",
+        colorbar_extend: Literal["neither", "both", "min", "max"] = "neither",
+    ) -> Axes:
+        """Draw the size legend and colorbar for dotplots.
+
+        Returns:
+          The colorbar axes.
+        """
         legend_block_h = size_legend_h + legend_inner_gap + cbar_h
         legend_bottom = scatter_y + max(0.0, (plot_h - legend_block_h) / 2.0)
         cbar_left = legend_left + (legend_w - cbar_w) / 2.0
@@ -452,7 +473,14 @@ class DotplotPlotter(_VisualizationGeneMixin, _PlotterBase):
             w=cbar_w,
             h=cbar_h,
         )
-        DotplotPlotter._draw_dotplot_colorbar(scat=scat, cax=cbar_ax)
+        DotplotPlotter._draw_dotplot_colorbar(
+            scat=scat,
+            cax=cbar_ax,
+            ticks=colorbar_ticks,
+            title=colorbar_title,
+            extend=colorbar_extend,
+        )
+        return cbar_ax
 
     @staticmethod
     def _extract_rank_genes_grouped(
@@ -948,6 +976,396 @@ class DotplotPlotter(_VisualizationGeneMixin, _PlotterBase):
         plt.close(fig)
         logger.info("[plot] rank-genes dotplot -> %s", out)
 
+    def summarize_gene_detection_by_obs(
+        self,
+        adata: Any,
+        genes: Sequence[str],
+        *,
+        groupby: str,
+        donor_key: str,
+        gene_symbol_column: str | None = None,
+        expression_layer: str | None = None,
+        min_cells: int = 50,
+        min_donors: int = 3,
+    ) -> pd.DataFrame:
+        """Return grouped mean expression, detection, and donor support.
+
+        Means include zeros over every cell in a group, and a cell detects a
+        gene when its value is positive. Sparse inputs are aggregated without
+        dense conversion. Cells without a `groupby` label are excluded and
+        counted in the log. Every observed group is retained; `supported`
+        marks groups with at least `min_cells` cells and `min_donors` donors.
+
+        Args:
+          adata: AnnData object containing expression values.
+          genes: Gene names to summarize; unresolved names are logged.
+          groupby: Observation column defining output groups.
+          donor_key: Observation column identifying donors.
+          gene_symbol_column: Optional var column used to resolve symbols.
+          expression_layer: Layer to summarize; None uses `adata.X`.
+          min_cells: Minimum cells in a supported group.
+          min_donors: Minimum distinct donors in a supported group.
+
+        Returns:
+          One row per group and resolved gene with `groupby`, `group`,
+          `gene`, `var_name`, `n_cells`, `n_donors`, `min_cells`,
+          `min_donors`, `supported`, `mean_expression` and
+          `fraction_detected`.
+
+        Raises:
+          KeyError: If `groupby` or `donor_key` is absent from `adata.obs`.
+          ValueError: If the selected expression values are non-finite.
+        """
+        for key in (groupby, donor_key):
+            if key not in adata.obs.columns:
+                raise KeyError(
+                    f"obs column not found for detection summary: {key}"
+                )
+
+        resolved = self._resolve_genes(
+            adata,
+            list(genes),
+            gene_symbol_column=gene_symbol_column,
+        )
+        unresolved = [
+            gene for gene in genes if gene not in resolved.requested_var_names
+        ]
+        if unresolved:
+            logger.warning(
+                "[plot] %d genes are absent from the detection summary: %s",
+                len(unresolved),
+                ", ".join(unresolved),
+            )
+        var_names, source = expression_matrix(
+            adata,
+            resolved.var_names,
+            expression_layer=expression_layer,
+        )
+        # Selected genes only, so CSR conversion is bounded by n_obs x genes.
+        matrix = sp.csr_matrix(
+            (adata.n_obs, 0) if source is None else source,
+            dtype=np.float64,
+        )
+        if not np.isfinite(matrix.data).all():
+            raise ValueError(
+                f"expression values summarized by {groupby!r} must be "
+                "finite; remove or impute non-finite values first"
+            )
+
+        codes, categories = pd.factorize(adata.obs[groupby], sort=True)
+        labelled = np.flatnonzero(codes >= 0)
+        if len(labelled) < adata.n_obs:
+            logger.warning(
+                "[plot] %d cells lack a %s label; excluded from the "
+                "detection summary",
+                adata.n_obs - len(labelled),
+                groupby,
+            )
+        n_groups = len(categories)
+        indicator = sp.csr_matrix(
+            (np.ones(len(labelled)), (codes[labelled], labelled)),
+            shape=(n_groups, adata.n_obs),
+        )
+        positive = matrix.copy()
+        positive.data = (positive.data > 0).astype(np.float64)
+        grouped_sums: Any = indicator @ matrix
+        grouped_detected: Any = indicator @ positive
+        sums = grouped_sums.toarray()
+        detected = grouped_detected.toarray()
+        n_cells = np.bincount(codes[labelled], minlength=n_groups)
+
+        donor_codes = pd.factorize(adata.obs[donor_key])[0]
+        n_donors = (
+            pd.DataFrame({"group": codes, "donor": donor_codes})
+            .query("group >= 0 and donor >= 0")
+            .drop_duplicates()
+            .groupby("group")
+            .size()
+            .reindex(range(n_groups), fill_value=0)
+            .to_numpy()
+        )
+        supported = (n_cells >= min_cells) & (n_donors >= min_donors)
+
+        n_genes = len(var_names)
+        label_by_var = dict(
+            zip(resolved.var_names, resolved.labels, strict=True)
+        )
+        return pd.DataFrame(
+            {
+                "groupby": groupby,
+                "group": np.repeat(categories.astype(str).to_numpy(), n_genes),
+                "gene": np.tile(
+                    [label_by_var[name] for name in var_names], n_groups
+                ),
+                "var_name": np.tile(var_names, n_groups),
+                "n_cells": np.repeat(n_cells, n_genes),
+                "n_donors": np.repeat(n_donors, n_genes),
+                "min_cells": min_cells,
+                "min_donors": min_donors,
+                "supported": np.repeat(supported, n_genes),
+                "mean_expression": (sums / n_cells[:, np.newaxis]).ravel(),
+                "fraction_detected": (
+                    detected / n_cells[:, np.newaxis]
+                ).ravel(),
+            }
+        )
+
+    def plot_specificity_dotplot(
+        self,
+        summary: pd.DataFrame,
+        *,
+        filename: str,
+        min_specificity: float = 0.6,
+        vmax: float = 1.5,
+        colorbar_title: str = "Mean expression\nin group",
+        cmap: Colormap | str | None = None,
+        group_cmap: str = "tab20c",
+        cell_w: float = 0.0675,
+        cell_h: float = 0.0825,
+        largest_dot: float = 4.5,
+        size_exponent: float = 1.0,
+        dot_edge_color: str = "0.5",
+        dot_edge_lw: float = 0.1,
+        header_height: float = 0.16,
+    ) -> pd.DataFrame:
+        """Save an absolute-scale dot plot ordered to expose stepwise patterns.
+
+        Shows the supported groups of a `summarize_gene_detection_by_obs`
+        table. Gene specificity is the tau index over group means (0 for
+        uniform, 1 for one group). Genes below `min_specificity` form a broad
+        block ordered from most uniform. Restricted genes follow the display
+        position of their peak group, most specific first within a group.
+        Groups are ordered by average-linkage clustering, with optimal leaf
+        ordering, of restricted-gene means scaled to each gene's peak. Genes
+        peaking in distinct groups therefore form a descending staircase.
+        Colour is the absolute group mean and dot area the fraction of cells
+        with detected expression. The view is descriptive (cell-level group
+        means), not donor-level inference.
+
+        Args:
+          summary: Long table from `summarize_gene_detection_by_obs`.
+          filename: Output stem under `output_dir`.
+          min_specificity: Tau threshold in [0, 1] separating broad from
+            restricted genes. It orders columns and never removes genes.
+          vmax: Upper colour limit in expression units; must be positive.
+            Higher means saturate and the colorbar gains an arrow.
+          colorbar_title: Colorbar title naming the expression scale.
+          cmap: Optional dot colormap override.
+          group_cmap: Colormap for the block bars.
+          cell_w: Gene column width in inches; must be positive.
+          cell_h: Group row height in inches; must be positive.
+          largest_dot: Marker diameter in points at full detection.
+          size_exponent: Exponent applied to detection before sizing.
+          dot_edge_color: Marker edge colour.
+          dot_edge_lw: Marker edge width in points.
+          header_height: Height of the block labels in inches.
+
+        Returns:
+          `summary` with display order (`group_order`, `gene_order`) and
+          per-gene `specificity_tau`, `specificity_block`, `peak_group` and
+          `peak_mean_expression`. Unsupported groups have no `group_order`.
+
+        Raises:
+          ValueError: If fewer than two groups are supported or a layout
+            control is invalid.
+
+        Example Usage:
+          >>> summary = plotter.summarize_gene_detection_by_obs(
+          ...     adata,
+          ...     ["AIM2", "CGAS", "TLR7"],
+          ...     groupby="cell_type",
+          ...     donor_key="donor_id",
+          ... )
+          >>> ordered = plotter.plot_specificity_dotplot(
+          ...     summary,
+          ...     filename="sensor_specificity_by_cell_type",
+          ...     vmax=1.5,
+          ...     cell_h=0.09,
+          ...     largest_dot=5.5,
+          ... )
+        """
+        if not 0 <= min_specificity <= 1:
+            raise ValueError(
+                f"min_specificity must lie in [0, 1], got {min_specificity}"
+            )
+        for name, value in (
+            ("vmax", vmax),
+            ("cell_w", cell_w),
+            ("cell_h", cell_h),
+            ("largest_dot", largest_dot),
+        ):
+            if not np.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+
+        displayed = summary.loc[summary["supported"]]
+        means = displayed.pivot(
+            index="group", columns="gene", values="mean_expression"
+        )
+        if len(means) < 2:
+            raise ValueError(
+                f"{filename}: specificity ordering needs at least two "
+                f"supported groups, found {len(means)}"
+            )
+        fractions = displayed.pivot(
+            index="group", columns="gene", values="fraction_detected"
+        )
+        group_order, genes = self._specificity_order(
+            means, min_specificity=min_specificity
+        )
+        gene_order = genes.index.tolist()
+        stats = _DotplotStats(
+            mean_exp=means.loc[group_order, gene_order],
+            frac_exp=fractions.loc[group_order, gene_order],
+            categories=group_order,
+        )
+        blocks = genes["specificity_block"].to_numpy()
+        block_names = list(dict.fromkeys(blocks))
+        block_positions = [
+            (
+                int(np.flatnonzero(blocks == name)[0]),
+                int(np.flatnonzero(blocks == name)[-1]),
+            )
+            for name in block_names
+        ]
+        block_labels = [
+            {
+                "broad": f"Broad\n(τ < {min_specificity:g})",
+                "restricted": f"Restricted\n(τ ≥ {min_specificity:g})",
+                "not_detected": "Not\ndetected",
+            }[name]
+            for name in block_names
+        ]
+
+        set_matplotlib_publication_parameters()
+        n_groups, n_genes = len(group_order), len(gene_order)
+        plot_w = n_genes * cell_w
+        plot_h = n_groups * cell_h
+        legend_gap = 0.10
+        legend_left = self.left_margin + plot_w + legend_gap
+        bar_y = self.bottom_margin + plot_h + self.bar_gap
+        header_y = bar_y + self.bar_h + self.annotation_gap
+        fig_w = legend_left + self.legend_w + 0.12
+        fig_h = header_y + header_height + 0.02
+        fig = plt.figure(figsize=(fig_w, fig_h))
+
+        scatter_ax = self._add_axes(
+            fig=fig,
+            fig_w=fig_w,
+            fig_h=fig_h,
+            x=self.left_margin,
+            y=self.bottom_margin,
+            w=plot_w,
+            h=plot_h,
+        )
+        scatter = self._draw_dotplot_scatter(
+            ax=scatter_ax,
+            stats=stats,
+            labels=gene_order,
+            cmap=cmap if cmap is not None else self.dotplot_cmap,
+            largest_dot=largest_dot,
+            size_exponent=size_exponent,
+            dot_edge_color=dot_edge_color,
+            dot_edge_lw=dot_edge_lw,
+            vmax=vmax,
+        )
+        for _, end in block_positions[:-1]:
+            scatter_ax.axvline(end + 0.5, color="0.75", linewidth=0.4)
+
+        bar_ax = self._add_axes(
+            fig=fig,
+            fig_w=fig_w,
+            fig_h=fig_h,
+            x=self.left_margin,
+            y=bar_y,
+            w=plot_w,
+            h=self.bar_h,
+        )
+        self._draw_dotplot_group_bars(
+            ax=bar_ax,
+            group_positions=block_positions,
+            group_colors=self._get_group_colors(block_labels, group_cmap) or [],
+            xlim=(-0.5, n_genes - 0.5),
+        )
+        header_ax = self._add_axes(
+            fig=fig,
+            fig_w=fig_w,
+            fig_h=fig_h,
+            x=self.left_margin,
+            y=header_y,
+            w=plot_w,
+            h=header_height,
+        )
+        self._draw_dotplot_group_headers(
+            hax=header_ax,
+            group_labels=block_labels,
+            group_positions=block_positions,
+            n_genes=n_genes,
+            rotation=0,
+        )
+
+        ticks = [
+            float(tick)
+            for tick in MaxNLocator(nbins=3).tick_values(0, vmax)
+            if tick <= vmax
+        ]
+        cbar_ax = self._draw_dotplot_legends(
+            fig=fig,
+            scat=scatter,
+            fig_w=fig_w,
+            fig_h=fig_h,
+            scatter_y=self.bottom_margin,
+            plot_h=plot_h,
+            legend_left=legend_left,
+            legend_w=self.legend_w,
+            size_legend_h=self.size_legend_h,
+            cbar_w=self.cbar_w,
+            cbar_h=self.cbar_h,
+            legend_inner_gap=self.legend_inner_gap,
+            largest_dot=largest_dot,
+            size_exponent=size_exponent,
+            dot_edge_color=dot_edge_color,
+            dot_edge_lw=dot_edge_lw,
+            colorbar_ticks=ticks,
+            colorbar_title=colorbar_title,
+            colorbar_extend=(
+                "max"
+                if bool((stats.mean_exp > vmax).any(axis=None))
+                else "neither"
+            ),
+        )
+        cbar_ax.set_xticks(ticks, [f"{tick:g}" for tick in ticks])
+        legend_bottom = cbar_ax.get_position().y0 * fig_h
+        fig.text(
+            legend_left / fig_w,
+            (legend_bottom - 0.15) / fig_h,
+            f"{n_groups} of {summary['group'].nunique()} "
+            f"{summary['groupby'].iloc[0]} groups\n"
+            f"with ≥{summary['min_cells'].iloc[0]} cells, "
+            f"≥{summary['min_donors'].iloc[0]} donors",
+            ha="left",
+            va="top",
+        )
+
+        out = self.output_dir / filename
+        fig.savefig(
+            f"{out}.png", dpi=self.dpi, bbox_inches="tight", pad_inches=0.02
+        )
+        plt.close(fig)
+        logger.info("[plot] specificity dotplot -> %s", out)
+
+        group_rank = pd.Series(np.arange(n_groups), index=group_order)
+        return (
+            summary.assign(group_order=summary["group"].map(group_rank))
+            .merge(
+                genes.assign(gene_order=np.arange(n_genes)),
+                left_on="gene",
+                right_index=True,
+                how="left",
+            )
+            .sort_values(["group_order", "gene_order"], kind="stable")
+            .reset_index(drop=True)
+        )
+
     @staticmethod
     def _get_dendrogram_order(
         *,
@@ -961,3 +1379,67 @@ class DotplotPlotter(_VisualizationGeneMixin, _PlotterBase):
 
         categories = adata.uns[dendro_key]["categories_ordered"]
         return [str(category) for category in categories]
+
+    @staticmethod
+    def _specificity_order(
+        means: pd.DataFrame,
+        *,
+        min_specificity: float,
+    ) -> tuple[list[str], pd.DataFrame]:
+        """Return the group order and specificity-ordered gene annotations.
+
+        Tau (Yanai et al., 2005) averages `1 - mean / peak` over the other
+        groups. Genes undetected in every group have no tau or peak group.
+        """
+        peak = means.max()
+        detected = peak > 0
+        relative = means / peak.where(detected)
+        tau = (1 - relative).sum(min_count=1) / (len(means) - 1)
+        block = pd.Series(
+            np.select(
+                [~detected.to_numpy(), (tau >= min_specificity).to_numpy()],
+                ["not_detected", "restricted"],
+                default="broad",
+            ),
+            index=means.columns,
+        )
+
+        # Cluster on restricted profiles so ubiquitous genes cannot mask the
+        # staircase; fall back to broad profiles when none are restricted.
+        restricted = block.eq("restricted")
+        profile_genes = block.index[
+            restricted if restricted.any() else block.eq("broad")
+        ]
+        group_order = means.index.tolist()
+        if len(profile_genes):
+            profiles = relative[profile_genes].to_numpy()
+            linkage = hierarchy.optimal_leaf_ordering(
+                hierarchy.linkage(profiles, method="average"), profiles
+            )
+            group_order = [
+                group_order[i] for i in hierarchy.leaves_list(linkage)
+            ]
+
+        peak_group = means.loc[group_order].idxmax().where(detected)
+        rank = pd.Series(np.arange(len(group_order)), index=group_order)
+        sort_keys = pd.DataFrame(
+            {
+                "block": block.map(
+                    {"broad": 0, "restricted": 1, "not_detected": 2}
+                ),
+                "position": peak_group.map(rank).where(restricted, tau),
+                "tie": (-tau).where(restricted, 0.0),
+            }
+        )
+        gene_order = sort_keys.sort_values(
+            ["block", "position", "tie"], kind="stable"
+        ).index
+        genes = pd.DataFrame(
+            {
+                "specificity_tau": tau,
+                "specificity_block": block,
+                "peak_group": peak_group,
+                "peak_mean_expression": peak,
+            }
+        )
+        return group_order, genes.loc[gene_order]

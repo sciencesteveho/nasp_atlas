@@ -82,6 +82,7 @@ from nasp_atlas.single_cell.reference_sets import reference_bundle_hash
 from nasp_atlas.single_cell.scprocessor import SCProcessor
 from nasp_atlas.single_cell.umap import UmapPanelSpec
 from nasp_atlas.single_cell.visualization import AssociationPlotter
+from nasp_atlas.single_cell.visualization import DotplotPlotter
 from nasp_atlas.single_cell.visualization import GroupedGeneExpression
 from nasp_atlas.single_cell.visualization import HeatmapPlotter
 from nasp_atlas.single_cell.visualization import SummaryPlotter
@@ -1948,6 +1949,17 @@ def tabula_sapiens_scoring_analysis(
         gene_symbol_column=gene_symbol_column,
         expression_layer=expression_layer,
         grouped_expression_by_obs=grouped_expression_by_obs,
+    )
+    scoring.plot_gene_specificity_dotplots(
+        adata=adata,
+        genes=sensors,
+        plotter=DotplotPlotter(output_dir=output_dir),
+        output_dir=output_dir,
+        filename_prefix="NA_SENSORS",
+        groupby_keys=tuple(dict.fromkeys((tissue_key, cell_type_key))),
+        donor_key=donor_key,
+        gene_symbol_column=gene_symbol_column,
+        expression_layer=expression_layer,
     )
 
     if plot_modules:

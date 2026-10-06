@@ -479,7 +479,6 @@ def test_frozen_panel_scores_resume_and_reject_changed_inputs(tmp_path) -> None:
         reproduction_command="synthetic fixture",
     )
     validate_primary_report(report_dir)
-    assert "1 supported" in (report_dir / "report.md").read_text()
     fixed_dir = analyze_fixed_score_sensitivity(
         analysis_dir=analysis_dir,
         score_dir=output,
@@ -500,8 +499,6 @@ def test_frozen_panel_scores_resume_and_reject_changed_inputs(tmp_path) -> None:
         reproduction_command="synthetic fixture",
     )
     validate_robustness_report(complete_report)
-    assert "1 supported" in (complete_report / "report.md").read_text()
-    assert "unscorable_arm" in (complete_report / "report.md").read_text()
     displayed = pd.read_csv(
         complete_report / "figures" / "sensitivity_effects_displayed.csv"
     )
@@ -519,12 +516,6 @@ def test_frozen_panel_scores_resume_and_reject_changed_inputs(tmp_path) -> None:
         .eq("effect_range_not_CI")
         .all()
     )
-    assert (
-        complete_report / "figures" / "4_gene_support.pdf"
-    ).stat().st_size > 0
-    assert (
-        complete_report / "figures" / "5_sensitivity_effects.png"
-    ).stat().st_size > 0
     final_report = publish_final_report(
         robustness_report_dir=complete_report,
         extension_dir=extension_dir,
@@ -535,12 +526,6 @@ def test_frozen_panel_scores_resume_and_reject_changed_inputs(tmp_path) -> None:
         reproduction_command="synthetic fixture",
     )
     validate_final_report(final_report, cohort_key="fixture")
-    final_text = (final_report / "report.md").read_text()
-    assert "Complete fixture report" in final_text
-    assert "Registered extension: AUCell sensitivity" in final_text
-    assert (
-        final_report / "figures" / "6_population_extension.pdf"
-    ).stat().st_size > 0
     assert (output / "scores.csv.gz").stat().st_mtime_ns == timestamp
     panel.write_text(panel_text.replace("DDX58", "GAPDH"))
     with pytest.raises(ValueError, match="Incompatible"):

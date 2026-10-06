@@ -55,7 +55,9 @@ venv.bak/
 
 # Private facing local directories
 AGENTS.md
+CLAUDE.md
 .agents/
+.claude/
 SKILL.md
 skill.md
 skills-lock.json

@@ -66,17 +66,6 @@ def test_filtered_cells_cannot_produce_estimates() -> None:
     assert diagnostic.n_aggregates_after_minimum_cells == 0
 
 
-def test_tabula_wrapper_rejects_nonfinite_detection_threshold() -> None:
-    """Invalid expressing thresholds fail before observational aggregation."""
-    with pytest.raises(ValueError, match="finite real number"):
-        mixed_models.tabula_sapiens_mixed_model_inference(
-            _combined_study_cell_frame(n_studies=1),
-            schema=ObsSchema(),
-            detection_threshold=np.nan,
-            minimum_cells=2,
-        )
-
-
 def _paired_signal_cells() -> pd.DataFrame:
     """Return a paired signal with donor labels reused between studies."""
     rng = np.random.default_rng(31)

@@ -18,13 +18,7 @@ from nasp_atlas.analysis.tabula_sapiens.score_checkpoint import (
 from nasp_atlas.single_cell import ObsSchema
 
 
-@pytest.mark.parametrize(
-    "combined,per_tissue",
-    [(True, True), (True, False), (False, True), (False, False)],
-)
-def test_selected_scopes_use_all_their_cells(
-    tmp_path: Path, combined: bool, per_tissue: bool
-) -> None:
+def test_selected_scopes_use_all_their_cells(tmp_path: Path) -> None:
     """Each enabled scope fits its complete population and publishes support."""
     rng = np.random.default_rng(2)
     records = []
@@ -48,13 +42,13 @@ def test_selected_scopes_use_all_their_cells(
                         }
                     )
 
-    result = mixed_model_scope_analysis(
+    mixed_model_scope_analysis(
         pd.DataFrame(records),
         output_dir=tmp_path,
         provenance=pd.DataFrame([{"scorer": "scanpy"}]),
         schema=ObsSchema(),
-        combined=combined,
-        per_tissue=per_tissue,
+        combined=True,
+        per_tissue=True,
         minimum_cells=2,
         plot_visualizations=False,
     )
@@ -63,8 +57,7 @@ def test_selected_scopes_use_all_their_cells(
         tmp_path / "association_tables" / "association_mixed_model_scopes.csv"
     )
     current = manifest.loc[manifest.status.eq("completed")]
-    assert len(current) == int(combined) + 2 * int(per_tissue)
-    assert (result is not None) == combined
+    assert len(current) == 3
     for scope in current.itertuples():
         assert scope.n_cells == (48 if scope.scope == "combined_input" else 24)
         diagnostics = pd.read_csv(

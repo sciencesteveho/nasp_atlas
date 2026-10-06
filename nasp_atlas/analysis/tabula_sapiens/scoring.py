@@ -33,6 +33,7 @@ from nasp_atlas.single_cell.score_diagnostics import (
 )
 from nasp_atlas.single_cell.umap import UmapPanelSpec
 from nasp_atlas.single_cell.visualization import ColorbarStyle
+from nasp_atlas.single_cell.visualization import DotplotPlotter
 from nasp_atlas.single_cell.visualization import GroupedGeneExpression
 from nasp_atlas.single_cell.visualization import HeatmapPlotter
 from nasp_atlas.single_cell.visualization import SummaryPlotter
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "module_scoring_outputs",
     "plot_gene_expression_heatmaps_by_obs",
+    "plot_gene_specificity_dotplots",
     "plot_reference_score_umaps",
     "plot_scorer_concordance_by_source",
     "safe_filename_token",
@@ -436,6 +438,69 @@ def plot_gene_expression_heatmaps_by_obs(
                 else None
             ),
         )
+
+
+def plot_gene_specificity_dotplots(
+    *,
+    adata: ad.AnnData,
+    genes: Sequence[str],
+    plotter: DotplotPlotter,
+    output_dir: str | Path,
+    filename_prefix: str,
+    groupby_keys: Sequence[str],
+    donor_key: str,
+    gene_symbol_column: str,
+    expression_layer: str | None,
+) -> None:
+    """Write a detection table and specificity dot plot per obs key.
+
+    Each `<prefix>_specificity_dotplot_by_<key>.csv` keeps every observed
+    group, including those below the plot's cell and donor support, with
+    the displayed order. A key with fewer than two supported groups, such as
+    tissue in a single-tissue run, keeps its table and skips the plot.
+
+    Example Usage:
+      >>> plot_gene_specificity_dotplots(
+      ...     adata=adata,
+      ...     genes=["AIM2", "CGAS", "TLR7"],
+      ...     plotter=plotter,
+      ...     output_dir="path/to/output",
+      ...     filename_prefix="NA_SENSORS",
+      ...     groupby_keys=["tissue_in_publication", "cell_type"],
+      ...     donor_key="donor_id",
+      ...     gene_symbol_column="feature_name",
+      ...     expression_layer=None,
+      ... )
+    """
+    gene_list = list(genes)
+    if not gene_list:
+        return
+
+    for groupby_key in groupby_keys:
+        stem = (
+            f"{filename_prefix}_specificity_dotplot_by_"
+            f"{safe_filename_token(groupby_key)}"
+        )
+        summary = plotter.summarize_gene_detection_by_obs(
+            adata,
+            gene_list,
+            groupby=groupby_key,
+            donor_key=donor_key,
+            gene_symbol_column=gene_symbol_column,
+            expression_layer=expression_layer,
+        )
+        n_supported = summary.loc[summary["supported"], "group"].nunique()
+        if n_supported < 2:
+            logger.warning(
+                "%s: %d supported %s groups; writing the table without a "
+                "dot plot",
+                stem,
+                n_supported,
+                groupby_key,
+            )
+        else:
+            summary = plotter.plot_specificity_dotplot(summary, filename=stem)
+        summary.to_csv(Path(output_dir) / f"{stem}.csv", index=False)
 
 
 def safe_filename_token(value: str) -> str:

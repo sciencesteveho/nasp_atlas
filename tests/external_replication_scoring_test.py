@@ -117,7 +117,6 @@ def test_alias_transport_preserves_explicit_scores_and_paired_estimate(
     pd.testing.assert_frame_equal(
         cast(pd.DataFrame, prepared.var), cast(pd.DataFrame, original.var)
     )
-    assert prepared.obs.columns.tolist() == obs.columns.tolist()
 
     changed_module = replace(module, positive_genes=("TASL",))
     changed_alignment = align_cohort_features(

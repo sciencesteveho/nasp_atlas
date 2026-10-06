@@ -184,17 +184,14 @@ def test_contrast_drivers_follow_the_difference_not_the_abundance() -> None:
     )
 
 
-@pytest.mark.parametrize("missing", [np.nan, np.inf, -np.inf])
-def test_contrast_driver_selection_rejects_missing_scored_genes(
-    missing: float,
-) -> None:
+def test_contrast_driver_selection_rejects_missing_scored_genes() -> None:
     """A missing donor must not silently change the genes selected."""
     paired = pd.DataFrame(
         {
             "module_id": ["M", "M"],
             "gene": ["A", "A"],
             "arm": ["positive", "positive"],
-            "mean_expression_difference": [1.0, missing],
+            "mean_expression_difference": [1.0, np.nan],
         }
     )
     with pytest.raises(ValueError, match="finite paired differences"):

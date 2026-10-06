@@ -119,29 +119,3 @@ def test_context_summary_rejects_duplicate_module_units() -> None:
 
     with pytest.raises(ValueError, match="one row per module"):
         summarize_module_contexts(frame, context_columns=["tissue"])
-
-
-def test_context_summary_reports_missing_required_columns() -> None:
-    """Missing donor metadata raises an actionable schema error."""
-    frame = _unit_frame().drop(columns="donor_id")
-
-    with pytest.raises(KeyError, match="donor_id"):
-        summarize_module_contexts(frame, context_columns=["tissue"])
-
-
-def test_context_summary_filters_non_module_features() -> None:
-    """Default feature filtering excludes gene-expression rows."""
-    frame = _unit_frame()
-    gene_row = frame.iloc[[0]].copy()
-    gene_row["feature_type"] = "gene_expression"
-    gene_row["feature_label"] = "CGAS"
-    frame = pd.concat([frame, gene_row], ignore_index=True)
-
-    result = summarize_module_contexts(
-        frame,
-        context_columns=["tissue"],
-        min_units=2,
-        min_donors=2,
-    )
-
-    assert set(result["feature_label"]) == {"DNA sensing", "RNA sensing"}

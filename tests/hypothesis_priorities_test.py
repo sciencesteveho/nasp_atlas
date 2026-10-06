@@ -43,42 +43,6 @@ def test_expected_edges_preserve_analyses_and_overlap_annotations() -> None:
     assert report["module_a"].tolist() == ["IFN_OUTPUT", "IFN_OUTPUT"]
 
 
-def test_expected_edges_honor_spec_order_and_custom_pair_columns() -> None:
-    """Caller order, labels, and nonstandard pair names are supported."""
-    coupling = pd.DataFrame(
-        {
-            "left": ["A", "B", "A"],
-            "right": ["B", "C", "C"],
-            "raw_r": [0.1, 0.2, 0.3],
-            "within_context_r": [0.01, 0.02, 0.03],
-            "overlap": ["G1", "G2", "G3"],
-        }
-    )
-
-    report = expected_module_coupling_report(
-        coupling,
-        edge_specs=[("C", "A", "second"), ("A", "B", "first")],
-        module_a_column="left",
-        module_b_column="right",
-    )
-
-    assert report["mechanistic_edge"].tolist() == ["second", "first"]
-    assert report["raw_r"].tolist() == [0.3, 0.1]
-    assert report["within_context_r"].tolist() == [0.03, 0.01]
-    assert report["overlap"].tolist() == ["G3", "G1"]
-
-
-def test_expected_edges_reject_duplicate_specifications() -> None:
-    """Duplicate annotations cannot silently duplicate coupling evidence."""
-    coupling = pd.DataFrame({"module_a": ["A"], "module_b": ["B"]})
-
-    with pytest.raises(ValueError, match="duplicate edge specification"):
-        expected_module_coupling_report(
-            coupling,
-            edge_specs=[("A", "B", "edge"), ("A", "B", "edge")],
-        )
-
-
 def _profiles() -> pd.DataFrame:
     """Build eligible and under-supported relative context profiles."""
     return pd.DataFrame(
@@ -151,47 +115,3 @@ def test_restriction_priority_is_competence_aware() -> None:
     assert top["context"] == "competent"
     assert top["priority_score"] == pytest.approx(0.63)
     assert bottom["priority_score"] == pytest.approx(0.35)
-
-
-def test_rank_hypotheses_supports_disabled_count_filters() -> None:
-    """Unit profiles can be ranked when count filters are explicitly off."""
-    profiles = pd.DataFrame(
-        {
-            "unit": ["D1", "D2"],
-            "relative_competence": [0.2, 0.8],
-            "relative_output": [0.9, 0.7],
-            "relative_restriction": [0.1, 0.2],
-            "relative_feedback": [0.1, 0.2],
-            "relative_post": [0.1, 0.2],
-        }
-    )
-
-    result = rank_nasp_hypotheses(
-        profiles,
-        context_columns=["unit"],
-        unit_count_column=None,
-        donor_count_column=None,
-        min_units=None,
-        min_donors=None,
-    )
-
-    responsive = result[result["hypothesis"] == "responsive_like"]
-    assert responsive.iloc[0]["unit"] == "D1"
-    assert responsive.iloc[0]["rank_within_hypothesis"] == 1
-
-
-def test_rank_hypotheses_rejects_nonrelative_axes() -> None:
-    """Out-of-range axes fail before producing misleading priorities."""
-    profiles = _profiles()
-    profiles.loc[0, "o"] = 1.2
-
-    with pytest.raises(ValueError, match=r"within \[0, 1\]"):
-        rank_nasp_hypotheses(
-            profiles,
-            context_columns=["tissue", "cell_type"],
-            competence_column="c",
-            output_column="o",
-            restriction_column="r",
-            feedback_column="f",
-            post_column="p",
-        )

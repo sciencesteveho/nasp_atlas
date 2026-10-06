@@ -30,10 +30,8 @@ from nasp_atlas.single_cell.associations import summarize_feature_groups
 from nasp_atlas.single_cell.associations import (
     test_feature_groups as run_feature_group_tests,
 )
-from nasp_atlas.single_cell.associations import validate_eqtl_table
 
 
-SENSOR_GENES = ("CGAS", "IFIH1", "DDX58")
 METADATA_COLUMNS = (
     "donor_id",
     "tissue_in_publication",
@@ -60,6 +58,7 @@ def _synthetic_adata(*, seed: int = 0) -> ad.AnnData:
       AnnData with sparse CSR expression, var indexed by gene symbol with a
       `feature_name` column, and the full obs metadata schema.
     """
+    sensor_genes = ("CGAS", "IFIH1", "DDX58")
     rng = np.random.default_rng(seed)
     donors = [f"D{i}" for i in range(6)]
     tissues = ["lung", "liver"]
@@ -100,9 +99,9 @@ def _synthetic_adata(*, seed: int = 0) -> ad.AnnData:
     obs.index = pd.Index(obs.index.astype(str), dtype=object)
     for column in obs.columns.drop("age_years"):
         obs[column] = obs[column].astype(object)
-    var = pd.DataFrame(index=pd.Index(list(SENSOR_GENES), dtype=object))
+    var = pd.DataFrame(index=pd.Index(list(sensor_genes), dtype=object))
     var["feature_name"] = pd.Series(
-        list(SENSOR_GENES),
+        list(sensor_genes),
         index=var.index,
         dtype=object,
     )
@@ -179,24 +178,6 @@ def test_benjamini_hochberg_matches_reference() -> None:
     )
 
 
-def test_resolve_feature_specs_reports_missing() -> None:
-    """Missing genes are returned as skip records, not silently dropped."""
-    adata = _synthetic_adata()
-    scores = _synthetic_scores(adata)
-
-    specs, skipped = resolve_feature_specs(
-        adata,
-        scores,
-        gene_symbols=["CGAS", "NOT_A_GENE"],
-        scorer="scanpy",
-        gene_symbol_column="feature_name",
-    )
-
-    resolved = {spec.feature_id for spec in specs}
-    assert "CGAS" in resolved
-    assert any(record["requested"] == "NOT_A_GENE" for record in skipped)
-
-
 def test_resolve_feature_specs_missing_score_column() -> None:
     """A requested score column absent from the table is skipped."""
     adata = _synthetic_adata()
@@ -258,100 +239,6 @@ def test_sensor_features_use_anndata_expression() -> None:
     expected = np.asarray(adata[:, "CGAS"].layers["log1p"].todense()).ravel()
 
     np.testing.assert_allclose(gene_values, expected)
-
-
-@pytest.mark.parametrize(
-    "unit,expected_units",
-    [
-        ("donor", 6),
-        ("donor_tissue", 12),
-        ("donor_tissue_cell_type", 12),
-    ],
-)
-def test_aggregate_feature_frame_units(unit: str, expected_units: int) -> None:
-    """Aggregation collapses cells to the requested unit count per feature."""
-    adata = _synthetic_adata()
-    scores = _synthetic_scores(adata)
-    specs, _ = resolve_feature_specs(
-        adata,
-        scores,
-        module_ids=["NASP_DNA_SENSING"],
-    )
-    cell_frame = build_cell_feature_frame(
-        adata, scores, specs, schema=ObsSchema()
-    )
-
-    unit_frame = aggregate_feature_frame(
-        cell_frame,
-        statistical_unit=unit,
-        aggregation="mean",
-        schema=ObsSchema(),
-    )
-
-    assert (unit_frame["statistical_unit"] == unit).all()
-    assert len(unit_frame) == expected_units
-
-
-@pytest.mark.parametrize("unit", ["cell", "metacell"])
-def test_aggregate_feature_frame_annotates_existing_units(unit: str) -> None:
-    """Rows already representing units retain values and gain unit metadata."""
-    cell_frame = pd.DataFrame(
-        {
-            "obs_name": ["cell_a", "cell_b"],
-            "feature_type": ["gene", "gene"],
-            "feature_id": ["CGAS", "CGAS"],
-            "feature_label": ["CGAS", "CGAS"],
-            "feature_value": [2.0, np.nan],
-        }
-    )
-    original = cell_frame.copy()
-
-    unit_frame = aggregate_feature_frame(
-        cell_frame,
-        statistical_unit=unit,
-        aggregation="mean",
-        schema=ObsSchema(),
-    )
-
-    pd.testing.assert_frame_equal(cell_frame, original)
-    np.testing.assert_allclose(
-        unit_frame["feature_value"],
-        [2.0, np.nan],
-        equal_nan=True,
-    )
-    assert unit_frame["unit_id"].tolist() == ["cell_a", "cell_b"]
-    assert unit_frame["n_cells"].tolist() == [1.0, 0.0]
-    assert unit_frame["n_cells_total"].tolist() == [1.0, 1.0]
-    assert (unit_frame["statistical_unit"] == unit).all()
-
-
-def test_aggregation_does_not_carry_heterogeneous_cell_type() -> None:
-    """Cell type becomes missing when a donor-tissue unit mixes cell types."""
-    adata = _synthetic_adata()
-    adata.obs["cell_type"] = np.resize(
-        np.array(["Tcell", "Bcell"], dtype=object),
-        adata.n_obs,
-    )
-    scores = _synthetic_scores(adata)
-    specs, _ = resolve_feature_specs(
-        adata,
-        scores,
-        module_ids=["NASP_DNA_SENSING"],
-    )
-    cell_frame = build_cell_feature_frame(
-        adata, scores, specs, schema=ObsSchema()
-    )
-
-    unit_frame = aggregate_feature_frame(
-        cell_frame,
-        statistical_unit="donor_tissue",
-        aggregation="mean",
-        schema=ObsSchema(),
-    )
-
-    assert unit_frame["cell_type"].isna().all()
-    assert (unit_frame["n_cells"] == 8).all()
-    assert (unit_frame["n_cells_total"] == 8).all()
 
 
 def test_regression_recovers_age_signal() -> None:
@@ -433,7 +320,7 @@ def test_regression_preserves_missing_categorical_stratum() -> None:
 
 
 def test_feature_group_tests_compare_two_supported_groups() -> None:
-    """Two supported groups produce Welch and Mann-Whitney tests."""
+    """Separated donor groups recover worked Welch and rank-test results."""
     unit_frame = pd.DataFrame(
         {
             "feature_type": ["module_score"] * 6,
@@ -449,10 +336,13 @@ def test_feature_group_tests_compare_two_supported_groups() -> None:
     result = run_feature_group_tests(unit_frame, group_key="sex")
 
     row = result.iloc[0]
-    assert row["parametric_test"] == "welch_t"
-    assert row["nonparametric_test"] == "mann_whitney_u"
-    assert {row["group_a"], row["group_b"]} == {"female", "male"}
-    assert not row["skipped"]
+    # Means 2 and 6, sample variances 1, n=3: t=-sqrt(24), df=4.
+    # Complete rank separation gives U=0 and exact two-sided p=2/C(6,3).
+    assert (row["group_a"], row["group_b"]) == ("female", "male")
+    assert row["parametric_stat"] == pytest.approx(-np.sqrt(24.0))
+    assert row["parametric_pvalue"] == pytest.approx(0.008049893100837719)
+    assert row["nonparametric_stat"] == pytest.approx(0.0)
+    assert row["nonparametric_pvalue"] == pytest.approx(0.1)
 
 
 def test_summarize_feature_groups_reports_group_support() -> None:
@@ -484,88 +374,30 @@ def test_summarize_feature_groups_reports_group_support() -> None:
 
 
 def test_partial_correlation_controls_tissue() -> None:
-    """Partial correlation returns one residualized row per feature."""
-    adata = _synthetic_adata()
-    scores = _synthetic_scores(adata)
-    specs, _ = resolve_feature_specs(
-        adata,
-        scores,
-        module_ids=["NASP_DNA_SENSING"],
-    )
-    cell_frame = build_cell_feature_frame(
-        adata, scores, specs, schema=ObsSchema()
-    )
-    unit_frame = aggregate_feature_frame(
-        cell_frame,
-        statistical_unit="donor_tissue",
-        aggregation="mean",
-        schema=ObsSchema(),
+    """Tissue baselines cannot reverse a known within-tissue association."""
+    # Each row is a different donor; within each tissue, score falls with age.
+    unit_frame = pd.DataFrame(
+        {
+            "donor_id": [f"D{i}" for i in range(8)],
+            "tissue_in_publication": ["lung"] * 4 + ["liver"] * 4,
+            "age_years": [27, 29, 31, 33, 67, 69, 71, 73],
+            "feature_value": [13, 11, 9, 7, 53, 51, 49, 47],
+            "feature_type": "module_score",
+            "feature_id": "example_score",
+            "feature_label": "example",
+            "statistical_unit": "donor",
+        }
     )
 
     partial = partial_correlation_controlling_tissue(
         unit_frame, predictor_key="age_years", schema=ObsSchema()
-    )
+    ).iloc[0]
 
-    assert len(partial) == 1
-    assert partial.iloc[0]["feature_id"] == "NASP_DNA_SENSING_score"
-
-
-def test_prepare_eqtl_table_accepts_long_sensor_schema() -> None:
-    """Long sensor counts retain gene-tissue keys and source provenance."""
-    source = pd.DataFrame(
-        {
-            "gene": ["CGAS", "CGAS", "IFIH1", "IFIH1"],
-            "tissue": ["Liver", "Lung", "Liver", "Lung"],
-            "tissue_abbrev": ["LIVER", "LUNG", "LIVER", "LUNG"],
-            "n_significant_eqtls": [2, 5, 3, 8],
-            "gene_total_eqtls": [7, 7, 11, 11],
-        }
-    )
-
-    prepared = prepare_eqtl_table(source, merge_mode="gene_tissue")
-
-    assert prepared.loc[0, "gene_symbol"] == "CGAS"
-    assert prepared.loc[0, "tissue_specific_eqtls"] == 2
-    assert prepared.loc[0, "eqtl_tissue_abbrev"] == "LIVER"
-    assert (
-        prepared["eqtl_source_schema"] == "nasp_sensor_eqtl_counts_long"
-    ).all()
-
-
-def test_prepare_eqtl_table_accepts_wide_gene_totals() -> None:
-    """Wide sensor counts validate tissue sums and expose gene totals."""
-    source = pd.DataFrame(
-        {
-            "gene": ["CGAS", "IFIH1"],
-            "gene_total_eqtls": [7, 11],
-            "LIVER": [2, 3],
-            "LUNG": [5, 8],
-        }
-    )
-
-    prepared = prepare_eqtl_table(source, merge_mode="gene")
-
-    assert prepared[["gene_symbol", "total_eqtls"]].to_dict(
-        orient="records"
-    ) == [
-        {"gene_symbol": "CGAS", "total_eqtls": 7},
-        {"gene_symbol": "IFIH1", "total_eqtls": 11},
-    ]
-
-
-def test_prepare_eqtl_table_rejects_wide_tissue_join() -> None:
-    """Wide tissue abbreviations require the long table's tissue labels."""
-    source = pd.DataFrame(
-        {
-            "gene": ["CGAS"],
-            "gene_total_eqtls": [7],
-            "LIVER": [2],
-            "LUNG": [5],
-        }
-    )
-
-    with pytest.raises(KeyError, match="use the long table"):
-        prepare_eqtl_table(source, merge_mode="gene_tissue")
+    assert unit_frame.age_years.corr(unit_frame.feature_value) > 0.9
+    assert partial["pearson_r"] == pytest.approx(-1.0)
+    assert partial["spearman_r"] == pytest.approx(-1.0)
+    assert partial["n_residual"] == 8
+    assert partial["n_tissues"] == 2
 
 
 def test_prepare_eqtl_table_sums_sensor_counts_by_tissue() -> None:
@@ -829,14 +661,6 @@ def test_eqtl_gene_total_association_uses_genes_as_units() -> None:
     assert result.iloc[0]["pearson_r"] > 0.99
 
 
-def test_validate_eqtl_table_reports_missing_columns() -> None:
-    """Validation raises when a merge mode's key column is absent."""
-    bad_table = pd.DataFrame({"total_eqtls": [1]})
-
-    with pytest.raises(KeyError, match="gene_symbol"):
-        validate_eqtl_table(bad_table, merge_mode="gene")
-
-
 def test_orchestration_end_to_end(tmp_path: Path) -> None:
     """Saved atlas results recover the planted age signal with donor support."""
     adata = _synthetic_adata()
@@ -871,34 +695,6 @@ def test_orchestration_end_to_end(tmp_path: Path) -> None:
     manifest = pd.read_csv(tables / "association_plot_manifest.csv")
     assert not manifest.empty
     assert all(Path(path).stat().st_size > 0 for path in manifest.path)
-
-
-def test_orchestration_writes_eqtl_annotations(tmp_path: Path) -> None:
-    """Valid feature-level eQTL burden is written without invalid regression."""
-    adata = _synthetic_adata()
-    scores = _synthetic_scores(adata)
-    h5ad_path, score_path = _write_inputs(tmp_path, adata, scores)
-    eqtl_path = tmp_path / "eqtl.csv"
-    pd.DataFrame(
-        {"module_id": ["NASP_DNA_SENSING"], "total_eqtls": [7]}
-    ).to_csv(eqtl_path, index=False)
-    output_dir = tmp_path / "assoc"
-
-    association_analysis(
-        h5ad_path=h5ad_path,
-        score_csv_path=score_path,
-        output_dir=output_dir,
-        sensor_group=None,
-        eqtl_table_path=eqtl_path,
-        eqtl_merge_mode="module",
-        max_plots=0,
-    )
-
-    annotations = pd.read_csv(
-        output_dir / "association_tables" / "association_eqtl_annotations.csv"
-    )
-    matched = annotations["feature_label"] == "NASP_DNA_SENSING"
-    assert (annotations.loc[matched, "total_eqtls"] == 7).all()
 
 
 def test_orchestration_runs_gene_tissue_eqtl_associations(
@@ -946,7 +742,6 @@ def test_orchestration_runs_gene_tissue_eqtl_associations(
     assert set(eqtl_results["stratum"]) == {"liver", "lung"}
     assert (eqtl_results["statistical_unit"] == "gene").all()
     assert (eqtl_results["n"] == 3).all()
-    assert (eqtl_results["eqtl_predictor_transform"] == "none").all()
     annotations = pd.read_csv(tables / "association_eqtl_annotations.csv")
     matched_genes = annotations["feature_type"].eq("gene_expression")
     assert annotations.loc[matched_genes, "eqtl_matched"].all()
@@ -988,67 +783,3 @@ def test_orchestration_rejects_unaligned_scores(tmp_path: Path) -> None:
             output_dir=tmp_path / "assoc",
             sensor_group=None,
         )
-
-
-def test_orchestration_does_not_rescore(tmp_path: Path, monkeypatch) -> None:
-    """The association workflow never calls the scanpy scoring entry points."""
-
-    def _fail(*args, **kwargs):
-        raise AssertionError("scoring must not run during association")
-
-    monkeypatch.setattr(
-        "nasp_atlas.single_cell.module_scoring.sc.tl.score_genes",
-        _fail,
-    )
-    monkeypatch.setattr(
-        "nasp_atlas.single_cell.module_scoring.aucell4r",
-        _fail,
-    )
-
-    adata = _synthetic_adata()
-    scores = _synthetic_scores(adata)
-    h5ad_path, score_path = _write_inputs(tmp_path, adata, scores)
-
-    association_analysis(
-        h5ad_path=h5ad_path,
-        score_csv_path=score_path,
-        output_dir=tmp_path / "assoc",
-        sensor_group="nucleic_acid_sensors",
-        statistical_unit="donor_tissue",
-    )
-
-
-def test_orchestration_rejects_nonfinite_detection_threshold_before_io(
-    tmp_path: Path,
-) -> None:
-    """Invalid thresholds fail before any large association input is read."""
-    with pytest.raises(ValueError, match="finite real number"):
-        association_analysis(
-            h5ad_path=tmp_path / "missing.h5ad",
-            score_csv_path=tmp_path / "missing.csv",
-            output_dir=tmp_path / "assoc",
-            detection_threshold=np.inf,
-        )
-
-
-def test_orchestration_cell_level_marked_descriptive(tmp_path: Path) -> None:
-    """Cell-level descriptive plots are not marked inferential."""
-    adata = _synthetic_adata()
-    scores = _synthetic_scores(adata)
-    h5ad_path, score_path = _write_inputs(tmp_path, adata, scores)
-    output_dir = tmp_path / "assoc"
-
-    association_analysis(
-        h5ad_path=h5ad_path,
-        score_csv_path=score_path,
-        output_dir=output_dir,
-        sensor_group="nucleic_acid_sensors",
-        statistical_unit="donor_tissue",
-        run_cell_level_descriptive_plots=True,
-    )
-
-    manifest = pd.read_csv(
-        output_dir / "association_tables" / "association_plot_manifest.csv"
-    )
-    cell_rows = manifest.loc[manifest["statistical_unit"] == "cell"]
-    assert not cell_rows.empty

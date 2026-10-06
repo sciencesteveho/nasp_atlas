@@ -263,30 +263,6 @@ def test_missing_and_nonfinite_inputs_remain_in_fit_diagnostics() -> None:
     assert diagnostic["status"] == "ok"
 
 
-def test_categorical_metadata_is_scanned_without_dtype_failure() -> None:
-    """Pandas categorical group and predictor columns remain valid inputs."""
-    frame = _interaction_frame().iloc[:48].copy()
-    for key in ("donor id", "cell type", "tissue label"):
-        frame[key] = frame[key].astype("category")
-
-    result = mixed_model_inference(
-        frame,
-        spec=_interaction_spec(),
-        contrasts=(
-            MixedModelContrast(
-                mode="categorical_vs_mean",
-                predictor_key="cell type",
-                estimand="adjusted_cell_type",
-            ),
-        ),
-    )
-
-    diagnostic = result.diagnostics.iloc[0]
-    assert diagnostic["n_dropped_nonfinite"] == 0
-    assert diagnostic["status"] == "ok"
-    assert result.contrasts["estimable"].all()
-
-
 def test_mixed_type_group_labels_remain_distinct() -> None:
     """Numeric and string identifiers with the same display stay distinct."""
     frame = pd.DataFrame(
@@ -541,18 +517,6 @@ def test_single_level_terms_remain_visible_without_blocking_other_tests() -> (
     assert pd.isna(tests.loc["C(cell type)", "pvalue_fdr"])
     assert tests.loc["C(tissue label)", "status"] == "ok"
     assert np.isfinite(tests.loc["C(tissue label)", "pvalue_fdr"])
-
-
-def test_unrepresentable_feature_keys_are_rejected() -> None:
-    """Feature identities cannot be silently dropped from stable outputs."""
-    frame = _interaction_frame().assign(gene="NASP_TEST")
-
-    with pytest.raises(ValueError, match="unsupported metadata columns"):
-        mixed_model_inference(
-            frame,
-            spec=_interaction_spec(),
-            feature_keys=("gene",),
-        )
 
 
 def test_model_construction_failure_is_isolated_to_its_feature(

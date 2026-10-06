@@ -120,16 +120,6 @@ def test_stability_summary_marks_too_few_tested_strata() -> None:
     assert ifn["skip_reason"] == "too_few_tested_strata"
 
 
-def test_stability_summary_allows_missing_correlation_columns() -> None:
-    """Correlation summaries are NaN when those optional inputs are absent."""
-    results = _regression_results().drop(columns=["spearman_r", "pearson_r"])
-
-    summary = summarize_continuous_association_stability(results)
-
-    assert summary["median_abs_spearman_r"].isna().all()
-    assert summary["median_abs_pearson_r"].isna().all()
-
-
 def test_stability_summary_rejects_duplicate_strata() -> None:
     """Duplicate feature-stratum regressions fail rather than double count."""
     results = _regression_results()

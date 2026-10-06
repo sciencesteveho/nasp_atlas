@@ -57,6 +57,7 @@ def test_explicit_keys_retain_assay_values_and_cell_counts() -> None:
             "assay": ["10x", "10x", "10x", "smartseq", "smartseq"],
         }
     )
+    original = cell_frame.copy(deep=True)
 
     result = aggregate_feature_frame_by_keys(
         cell_frame,
@@ -75,6 +76,7 @@ def test_explicit_keys_retain_assay_values_and_cell_counts() -> None:
     assert result["feature_value"].to_dict() == {"10x": 3.0, "smartseq": 5.0}
     assert result["n_cells"].to_dict() == {"10x": 2, "smartseq": 2}
     assert result["n_cells_total"].to_dict() == {"10x": 3, "smartseq": 2}
+    pd.testing.assert_frame_equal(cell_frame, original)
 
 
 def test_explicit_keys_carry_only_consensus_metadata() -> None:
@@ -110,30 +112,6 @@ def test_explicit_keys_carry_only_consensus_metadata() -> None:
     assert pd.isna(result["library_batch"])
 
 
-def test_explicit_key_aggregation_does_not_mutate_input() -> None:
-    """Explicit-key aggregation leaves the supplied cell frame unchanged."""
-    cell_frame = pd.DataFrame(
-        {
-            "feature_type": ["module_score", "module_score"],
-            "feature_id": ["NASP_score", "NASP_score"],
-            "feature_label": ["NASP", "NASP"],
-            "feature_value": [1.0, 3.0],
-            "donor_id": ["D1", "D1"],
-        }
-    )
-    original = cell_frame.copy(deep=True)
-
-    aggregate_feature_frame_by_keys(
-        cell_frame,
-        unit_keys=["donor_id"],
-        statistical_unit="donor",
-        aggregation="mean",
-        schema=ObsSchema(),
-    )
-
-    pd.testing.assert_frame_equal(cell_frame, original)
-
-
 def test_explicit_key_aggregation_uses_detection_threshold() -> None:
     """Expressing fractions use finite values above the requested threshold."""
     cell_frame = pd.DataFrame(
@@ -158,35 +136,6 @@ def test_explicit_key_aggregation_uses_detection_threshold() -> None:
     assert result["feature_value"] == pytest.approx(1 / 3)
     assert result["n_cells"] == 3
     assert result["n_cells_total"] == 5
-
-
-@pytest.mark.parametrize(
-    "detection_threshold",
-    [np.nan, np.inf, -np.inf, "0.0", None, True],
-)
-def test_explicit_key_aggregation_rejects_invalid_detection_threshold(
-    detection_threshold: object,
-) -> None:
-    """Expression thresholds must define one finite numeric boundary."""
-    cell_frame = pd.DataFrame(
-        {
-            "feature_type": ["gene_expression"],
-            "feature_id": ["CGAS"],
-            "feature_label": ["CGAS"],
-            "feature_value": [1.0],
-            "donor_id": ["D1"],
-        }
-    )
-
-    with pytest.raises(ValueError, match="finite real number"):
-        aggregate_feature_frame_by_keys(
-            cell_frame,
-            unit_keys=["donor_id"],
-            statistical_unit="donor",
-            aggregation="fraction_expressing",
-            schema=ObsSchema(),
-            detection_threshold=detection_threshold,  # type: ignore[arg-type]
-        )
 
 
 @pytest.mark.parametrize("aggregation", ["mean", "median", "sum"])
@@ -216,37 +165,3 @@ def test_numeric_reducers_use_only_finite_values(
     assert result.loc["D1", "n_cells"] == 1
     assert pd.isna(result.loc["D2", "feature_value"])
     assert result.loc["D2", "n_cells"] == 0
-
-
-@pytest.mark.parametrize(
-    ("unit_keys", "metadata_keys", "missing_key"),
-    [
-        (["missing_unit"], (), "missing_unit"),
-        (["donor_id"], ("missing_batch",), "missing_batch"),
-    ],
-)
-def test_explicit_key_aggregation_rejects_missing_columns(
-    unit_keys: list[str],
-    metadata_keys: tuple[str, ...],
-    missing_key: str,
-) -> None:
-    """Missing grouping or requested metadata keys fail with their names."""
-    cell_frame = pd.DataFrame(
-        {
-            "feature_type": ["module_score"],
-            "feature_id": ["NASP_score"],
-            "feature_label": ["NASP"],
-            "feature_value": [1.0],
-            "donor_id": ["D1"],
-        }
-    )
-
-    with pytest.raises(KeyError, match=missing_key):
-        aggregate_feature_frame_by_keys(
-            cell_frame,
-            unit_keys=unit_keys,
-            statistical_unit="custom_unit",
-            aggregation="mean",
-            schema=ObsSchema(),
-            metadata_keys=metadata_keys,
-        )

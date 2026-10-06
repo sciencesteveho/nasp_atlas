@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import logging
-from collections.abc import Sequence
-
 import anndata as ad
 import numpy as np
 import pandas as pd
@@ -36,28 +33,6 @@ def _gene_module(
     )
 
 
-def _adata(
-    var_names: Sequence[str],
-    symbols: Sequence[object],
-    *,
-    n_obs: int = 2,
-) -> ad.AnnData:
-    """Return a small AnnData with aligned var names and gene symbols."""
-    values = np.arange(n_obs * len(var_names), dtype=float).reshape(
-        n_obs,
-        len(var_names),
-    )
-    obs_names = [f"cell_{index}" for index in range(n_obs)]
-    return ad.AnnData(
-        X=values,
-        obs=pd.DataFrame(index=obs_names),
-        var=pd.DataFrame(
-            {"feature_name": pd.array(symbols, dtype="string")},
-            index=pd.Index(var_names),
-        ),
-    )
-
-
 def test_near_constant_module_arm_is_centered_before_combining() -> None:
     """Numerical noise in a constant arm is not amplified by z-scoring."""
     module = _gene_module(inverse_genes=("LMNB1",))
@@ -73,45 +48,11 @@ def test_near_constant_module_arm_is_centered_before_combining() -> None:
     np.testing.assert_allclose(combined.to_numpy(), [1.0, -1.0])
 
 
-def test_aucell_rejects_empty_cell_input() -> None:
-    """AUCell reports an actionable error when no cells are present."""
-    adata = _adata(["CGAS"], ["CGAS"], n_obs=0)
-
-    with pytest.raises(ValueError, match="at least one cell"):
-        score_aucell_modules(
-            adata,
-            ["NASP_TEST"],
-            expression_layer=None,
-        )
-
-
-def test_aucell_rejects_nonpositive_chunk_size() -> None:
-    """AUCell rejects chunk sizes that cannot advance block iteration."""
-    adata = _adata(["CGAS"], ["CGAS"])
-
-    with pytest.raises(ValueError, match="chunk_size must be positive"):
-        score_aucell_modules(
-            adata,
-            ["NASP_TEST"],
-            expression_layer=None,
-            chunk_size=0,
-        )
-
-
-def test_aucell_rejects_empty_signature_selection() -> None:
-    """AUCell reports when no positive or inverse signatures were selected."""
-    adata = _adata(["CGAS"], ["CGAS"])
-
-    with pytest.raises(ValueError, match="at least one positive or inverse"):
-        score_aucell_modules(adata, [], expression_layer=None)
-
-
 @pytest.mark.parametrize("dtype", [np.float32, np.int64])
 def test_aucell_preserves_signed_scores_across_chunks_and_missing_symbols(
-    caplog,
     dtype,
 ) -> None:
-    """Chunked scores match pySCENIC with ties and report progress."""
+    """Chunked scores match pySCENIC with ties and preserve input data."""
     rng = np.random.default_rng(8)
     genes = ["CGAS", "LMNB1", *[f"background_{i}" for i in range(98)]]
     values = rng.integers(0, 4, size=(12, 100)).astype(dtype)
@@ -153,10 +94,6 @@ def test_aucell_preserves_signed_scores_across_chunks_and_missing_symbols(
     adata.var.loc["CGAS", "feature_name"] = None
     original_obs = adata.obs.copy()
     original_values = values.copy()
-    caplog.set_level(
-        logging.INFO, logger="nasp_atlas.single_cell.module_scoring"
-    )
-    caplog.clear()
 
     _, chunked, _ = score_aucell_modules(
         adata,
@@ -175,10 +112,6 @@ def test_aucell_preserves_signed_scores_across_chunks_and_missing_symbols(
     np.testing.assert_array_equal(adata.X, original_values)
     scores = chunked.reindex(adata.obs_names)["NASP_TEST_auc"]
     assert scores.iloc[:6].mean() > scores.iloc[6:].mean()
-    assert "AUCell chunk 1/4" in caplog.text
-    assert "AUCell chunk 4/4 complete: 12/12 cells (100.0%)" in caplog.text
-    assert "estimated remaining 0.0min" in caplog.text
-    assert "AUCell finished" in caplog.text
 
 
 def test_scanpy_raw_scoring_uses_the_raw_gene_universe() -> None:

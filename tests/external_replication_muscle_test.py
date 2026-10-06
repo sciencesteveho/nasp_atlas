@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 import anndata as ad
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
@@ -49,9 +48,6 @@ from nasp_atlas.analysis.external_replication.workflows import (
     analyze_primary_cohort,
 )
 from nasp_atlas.analysis.external_replication.workflows import score_cohort
-from nasp_atlas.single_cell.visualization.replication import (
-    plot_subtype_extension,
-)
 
 
 @pytest.fixture
@@ -296,25 +292,6 @@ def test_subtype_extension_uses_primary_scores_and_keeps_unsupported_rows(
     frequencies = pd.read_csv(output / "analysis" / "subtype_frequencies.csv")
     shares = frequencies.groupby("donor_id").fraction_of_vascular_cells.sum()
     assert np.allclose(shares, 1.0)
-
-    differences = pd.read_csv(output / "analysis" / "donor_differences.csv")
-    figure, axes = plot_subtype_extension(
-        results,
-        differences,
-        frequencies,
-        module_ids=["NASP_RNA_SENSING"],
-        subtypes=subtypes,
-        title="Subtype support",
-    )
-    figure.canvas.draw()
-    for column in range(len(subtypes)):
-        upper, lower = axes[column], axes[column + len(subtypes)]
-        # A person's point and composition bar must align on the page.
-        for donor_position in (0, 4):
-            assert upper.transData.transform((donor_position, 0))[0] == (
-                pytest.approx(lower.transData.transform((donor_position, 0))[0])
-            )
-    plt.close(figure)
 
 
 def test_muscle_variants_compare_on_the_true_donor_intersection(

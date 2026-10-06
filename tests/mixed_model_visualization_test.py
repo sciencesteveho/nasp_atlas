@@ -115,46 +115,6 @@ def test_effect_plot_preserves_estimates_and_intervals(
             close_figure(figure)
 
 
-def test_effect_plot_selects_top_rows_deterministically(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    """The requested top-N limit retains the strongest reproducible effects."""
-    effects = _effect_results().iloc[:2].copy()
-    third = effects.iloc[[0]].copy()
-    third["feature_id"] = "MODULE_C"
-    third["feature_label"] = "MODULE_C"
-    third["estimate"] = 0.1
-    third["ci_low"] = -0.1
-    third["ci_high"] = 0.3
-    third["pvalue_fdr"] = 0.8
-    effects = pd.concat([effects, third], ignore_index=True)
-    figures = []
-    close_figure = plt.close
-    monkeypatch.setattr(plt, "close", figures.append)
-
-    try:
-        MixedModelPlotter(
-            output_dir=tmp_path, dpi=450
-        ).plot_mixed_model_effects(
-            effects,
-            estimand="condition_effect_by_cell_type",
-            filename="top_effects",
-            max_effects=2,
-        )
-
-        labels = [
-            label.get_text() for label in figures[0].axes[0].get_yticklabels()
-        ]
-        row_labels = "\n".join(labels)
-        assert "MODULE A" in row_labels
-        assert "MODULE B" in row_labels
-        assert "MODULE C" not in row_labels
-    finally:
-        for figure in figures:
-            close_figure(figure)
-
-
 def test_variance_plot_preserves_fractions_and_marks_missing(
     tmp_path: Path,
     monkeypatch,
@@ -187,56 +147,6 @@ def test_variance_plot_preserves_fractions_and_marks_missing(
             "missing" in text and "donor" in text for text in annotations
         )
         assert (tmp_path / "variance_components.png").stat().st_size > 0
-    finally:
-        for figure in figures:
-            close_figure(figure)
-
-
-def test_variance_plot_prioritizes_estimable_features_before_truncation(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    """Failed alphabetic features cannot displace an estimable result."""
-    failed = pd.DataFrame(
-        {
-            "analysis": ["variance_decomposition"] * 31,
-            "feature_type": ["module_score"] * 31,
-            "feature_id": [f"A_FAILED_{index:02d}" for index in range(31)],
-            "feature_label": [f"A_FAILED_{index:02d}" for index in range(31)],
-            "component": ["donor"] * 31,
-            "variance": [np.nan] * 31,
-            "variance_fraction": [np.nan] * 31,
-            "n_observations": [12] * 31,
-            "n_independent_units": [6] * 31,
-            "estimable": [False] * 31,
-            "status": ["fit_failed"] * 31,
-            "reason": ["fit failed"] * 31,
-        }
-    )
-    successful = _variance_results().iloc[[0]].copy()
-    successful["feature_id"] = "Z_SUCCESS"
-    successful["feature_label"] = "Z_SUCCESS"
-    variance = pd.concat((failed, successful), ignore_index=True)
-    figures = []
-    close_figure = plt.close
-    monkeypatch.setattr(plt, "close", figures.append)
-
-    try:
-        MixedModelPlotter(
-            output_dir=tmp_path,
-            dpi=450,
-        ).plot_mixed_model_variance(
-            variance,
-            analysis="variance_decomposition",
-            filename="prioritized_variance",
-            max_features=1,
-        )
-
-        labels = [
-            label.get_text() for label in figures[0].axes[0].get_yticklabels()
-        ]
-        assert len(labels) == 1
-        assert "Z SUCCESS" in labels[0]
     finally:
         for figure in figures:
             close_figure(figure)

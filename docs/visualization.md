@@ -72,6 +72,8 @@ accepts `output_dir` and an optional keyword-only `dpi`.
 | --- | --- |
 | `plot_marker_dotplot(...)` | Plot expression and detection for genes or named marker groups. |
 | `plot_rank_genes_dotplot(...)` | Plot top genes from an existing Scanpy rank result. |
+| `summarize_gene_detection_by_obs(...)` | Prepare sparse-aware group means, detection fractions and donor support. |
+| `plot_specificity_dotplot(...)` | Plot a summary on an absolute scale, ordered to expose stepwise group-restricted expression. |
 
 ### `SummaryPlotter`
 
@@ -317,6 +319,24 @@ group_summary = summary_plotter.plot_grouped_obs_score_barplot(
     groupby="cell_type",
     filename="dna_sensing_by_cell_type",
     stat_test="kruskal",
+)
+```
+
+Order every requested gene so that group-restricted expression forms a
+staircase. Colour stays on an absolute scale:
+
+```python
+summary = dotplot_plotter.summarize_gene_detection_by_obs(
+    adata,
+    ["AIM2", "CGAS", "TLR7", "ZBP1"],
+    groupby="cell_type",
+    donor_key="donor_id",
+    gene_symbol_column="feature_name",
+)
+ordered = dotplot_plotter.plot_specificity_dotplot(
+    summary,
+    filename="sensor_specificity_by_cell_type",
+    vmax=1.5,
 )
 ```
 

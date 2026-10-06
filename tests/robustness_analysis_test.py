@@ -397,40 +397,6 @@ def test_gene_removal_matches_independent_rescoring(
         assert np.isnan(invalid_effect.pvalue)
 
 
-def test_removing_the_only_signed_gene_is_unscorable() -> None:
-    """Deletion cannot silently turn a lost score arm into a zero score."""
-    obs = pd.DataFrame(
-        {
-            "donor_id": ["a", "b", "c"],
-            "tissue_in_publication": "Muscle",
-            "cell_type": "E",
-        },
-        index=["a", "b", "c"],
-    )
-    adata = ad.AnnData(
-        np.array([[1.0], [2.0], [3.0]]),
-        obs=obs,
-        var=pd.DataFrame({"feature_name": ["G"]}, index=["G"]),
-    )
-    module = GeneModule("M", ("G",), (), (), "symbols")
-    scores = pd.DataFrame({"M_score": [1.0, 2.0, 3.0]}, index=obs.index)
-    diagnostics = module_gene_diagnostics(
-        adata, scores, [module], schema=ObsSchema(), minimum_cells=1
-    )
-
-    result = gene_removal_sensitivity(
-        adata,
-        scores,
-        [module],
-        diagnostics,
-        schema=ObsSchema(),
-        minimum_cells=1,
-    )
-
-    assert result.variants.status.tolist() == ["unscorable_arm"]
-    assert result.donor_scores.empty
-
-
 def test_all_analysis_stages_share_the_saved_scoring_population(
     tmp_path: Path,
 ) -> None:

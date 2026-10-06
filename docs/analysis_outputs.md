@@ -35,6 +35,7 @@ The tissue workflow keeps Scanpy and AUCell results separate:
 │   ├── tabula_sapiens_scorer_concordance.csv
 │   ├── tabula_sapiens_cross_scorer_module_correlations.csv
 │   ├── tabula_sapiens_scorer_concordance.png
+│   ├── NA_SENSORS_specificity_dotplot_by_<key>.csv
 │   └── *.png
 └── associations/
     ├── scanpy/
@@ -55,6 +56,23 @@ The sensor and optional per-module gene-expression UMAPs use one shared scale
 per figure from 0.0 to the exact highest finite expression value among that
 figure's genes. A shared scale makes color comparable within the figure; each
 separate sensor or module figure resolves its own maximum.
+
+`NA_SENSORS_specificity_dotplot_by_<key>.png` shows every resolved
+nucleic-acid sensor by tissue and by cell type. Groups need at least 50 cells
+and 3 donors. Color is the absolute mean of the analyzed expression source
+(zeros included), capped at 1.5 with an arrow. Dot area is the fraction of
+cells with a positive value. Sensors are split by the tau specificity index
+over group means. Broad sensors (tau < 0.6) come first. Restricted sensors
+follow the position of their peak group. Groups are ordered by clustering the
+restricted sensors' peak-scaled profiles. Sensors that peak in distinct groups
+therefore form a descending staircase. The figure is descriptive (cell-level
+means), so a step is a hypothesis about where a sensor is expressed. It is not
+donor-level inference, and tissue rows also reflect cell-type composition.
+The companion CSV keeps every observed group, including unsupported ones, with
+`n_cells`, `n_donors`, `supported`, `mean_expression`, `fraction_detected`,
+display order, `specificity_tau`, `specificity_block` and `peak_group`. A key
+with fewer than two supported groups, such as tissue in a single-tissue run,
+writes the CSV without a figure.
 
 Each enabled scorer writes one module-score UMAP with separate, native-scale
 colorbars (`tabula_sapiens_scanpy_module_umaps.png` or

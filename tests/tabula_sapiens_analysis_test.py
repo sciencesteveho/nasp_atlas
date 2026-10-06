@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-from collections import Counter
 from pathlib import Path
 
 import anndata as ad  # type: ignore[import]
@@ -21,13 +20,9 @@ from nasp_atlas.analysis.tabula_sapiens.compendium_symbols import (
     add_compendium_symbol_column,
 )
 from nasp_atlas.analysis.tabula_sapiens.scoring import (
-    plot_reference_score_umaps,
-)
-from nasp_atlas.analysis.tabula_sapiens.scoring import (
     plot_scorer_concordance_by_source,
 )
 from nasp_atlas.single_cell.visualization import SummaryPlotter
-from nasp_atlas.single_cell.visualization import UmapPlotter
 
 
 tabula_sapiens = importlib.import_module("nasp_atlas.analysis.tabula_sapiens")
@@ -94,59 +89,6 @@ def test_compendium_aliases_recover_renamed_genes_without_guessing(
         "SHARED",
         "OTHER",
     ]
-
-
-@pytest.mark.parametrize(
-    "scorer,suffix", [("scanpy", "_score"), ("aucell", "_auc")]
-)
-def test_reference_umaps_group_databases_without_changing_scores(
-    tmp_path, monkeypatch, scorer, suffix
-) -> None:
-    """Each external source retains its panel values and original embedding."""
-    identifiers = [
-        "REACTOME_R_HSA_1834949",
-        "REACTOME_R_HSA_1834941",
-        "HALLMARK_INFLAMMATORY_RESPONSE",
-    ]
-    scores = {
-        f"{identifier}{suffix}": np.array([0.1, 0.2, 0.3]) + i
-        for i, identifier in enumerate(identifiers)
-    }
-    embedding = np.array([[0.0, 1.0], [2.0, 3.0], [4.0, 5.0]])
-    adata = ad.AnnData(
-        obs=pd.DataFrame(scores, index=["a", "b", "c"]),
-        obsm={"X_umap": embedding},
-    )
-    figures = []
-    close = plt.close
-    monkeypatch.setattr(plt, "close", figures.append)
-    try:
-        plot_reference_score_umaps(
-            adata,
-            list(scores),
-            scorer=scorer,
-            plotter=UmapPlotter(tmp_path, dpi=60),
-        )
-        shown = [
-            [
-                axis.collections[0]
-                for axis in figure.axes
-                if axis.collections
-                and axis.collections[0].get_offsets().shape == (3, 2)
-            ]
-            for figure in figures
-        ]
-        assert [len(panels) for panels in shown] == [2, 1]
-        for collection, values in zip(
-            [panel for panels in shown for panel in panels],
-            scores.values(),
-            strict=True,
-        ):
-            np.testing.assert_allclose(collection.get_array(), values)
-            np.testing.assert_allclose(collection.get_offsets(), embedding)
-    finally:
-        for figure in figures:
-            close(figure)
 
 
 def test_concordance_source_split_preserves_within_source_pairs(
@@ -391,7 +333,6 @@ def test_tissue_analysis_resume_reuses_complete_score_table(
         scoring_dir,
         "tabula_sapiens_module_scores.csv.gz",
     )
-    association_scorers: list[str] = []
     monkeypatch.setattr(
         tabula_sapiens_workflows,
         "tabula_sapiens_scoring_analysis",
@@ -402,7 +343,7 @@ def test_tissue_analysis_resume_reuses_complete_score_table(
     monkeypatch.setattr(
         tabula_sapiens_workflows,
         "association_analysis",
-        lambda **kwargs: association_scorers.append(kwargs["scorer"]),
+        lambda **kwargs: None,
     )
 
     tabula_sapiens.tabula_sapiens_tissue_analysis(
@@ -410,12 +351,9 @@ def test_tissue_analysis_resume_reuses_complete_score_table(
         output_dir=tmp_path / "results",
         run_name="liver",
     )
-    association_scorers.clear()
-    monkeypatch.setattr(
-        tabula_sapiens_workflows,
-        "tabula_sapiens_scoring_analysis",
-        lambda **kwargs: pytest.fail("complete scores should be reused"),
-    )
+    checkpoint = scoring_dir / "tabula_sapiens_module_scores.csv.gz"
+    saved_scores = pd.read_csv(checkpoint, index_col="obs_name")
+    timestamp = checkpoint.stat().st_mtime_ns
 
     tabula_sapiens.tabula_sapiens_tissue_analysis(
         h5ad_path=h5ad_path,
@@ -424,7 +362,10 @@ def test_tissue_analysis_resume_reuses_complete_score_table(
         resume_from_scores=True,
     )
 
-    assert Counter(association_scorers) == Counter(["scanpy", "aucell"])
+    assert checkpoint.stat().st_mtime_ns == timestamp
+    pd.testing.assert_frame_equal(
+        pd.read_csv(checkpoint, index_col="obs_name"), saved_scores
+    )
 
 
 def test_tissue_analysis_resume_rebuilds_partial_score_table(

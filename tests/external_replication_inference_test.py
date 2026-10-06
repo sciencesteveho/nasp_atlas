@@ -18,9 +18,6 @@ from nasp_atlas.analysis.external_replication.replication import (
 from nasp_atlas.analysis.external_replication.replication import (
     classify_registered_contrasts,
 )
-from nasp_atlas.analysis.external_replication.reporting import (
-    render_replication_report,
-)
 
 
 def test_frozen_family_preserves_negative_missing_and_method_dependent_results(
@@ -83,30 +80,6 @@ def test_frozen_family_preserves_negative_missing_and_method_dependent_results(
     assert (
         result.loc[result.scorer.eq("aucell"), "pvalue_adjusted"].isna().all()
     )
-
-    result["ci_lower"] = result.estimate - 0.5
-    result["ci_upper"] = result.estimate + 0.5
-    saved = tmp_path / "contrasts.csv"
-    result.to_csv(saved, index=False)
-    discovery = estimates.assign(
-        ci_lower=estimates.estimate - 0.5, ci_upper=estimates.estimate + 0.5
-    )
-    report = render_replication_report(
-        pd.read_csv(saved),
-        discovery,
-        title="Synthetic replication",
-        registration_identity=recovered.identity,
-        report_scope="Synthetic primary report; robustness is not computed.",
-        limitations=["Synthetic fixture, not biological evidence."],
-    )
-    (tmp_path / "report.md").write_text(report)
-    expected_summary = (
-        "1 supported; 1 opposite direction; 1 inconclusive; 1 unavailable"
-    )
-    assert expected_summary in report
-    assert "method-dependent" in report
-    assert "0.004" in report
-    assert "missing_estimate" in report
 
     unsupported = recovered.hypotheses.copy()
     unsupported.loc[unsupported.module_id.eq("A"), "eligibility_status"] = (

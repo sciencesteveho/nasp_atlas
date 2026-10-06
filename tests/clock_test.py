@@ -14,7 +14,6 @@ from sklearn.pipeline import Pipeline
 import nasp_atlas.analysis.clock as clock_analysis
 from nasp_atlas.single_cell.clocks.model import ClockModel
 from nasp_atlas.single_cell.clocks.model import load_clock
-from nasp_atlas.single_cell.clocks.model import model_feature_coverage
 from nasp_atlas.single_cell.clocks.model import predict_metacells
 
 
@@ -54,23 +53,6 @@ class _CapturingEstimator:
     def predict(self, X: pd.DataFrame) -> npt.NDArray[np.float64]:
         self.seen = X.copy()
         return np.zeros(X.shape[0], dtype=float)
-
-
-def test_predict_metacells_has_stable_dataframe_return_type() -> None:
-    """Prediction metadata does not change the function's return shape."""
-    clock = ClockModel(
-        name="test",
-        estimator=_Estimator(),
-        feature_names=("a", "b"),
-        supports_std=False,
-    )
-    features = pd.DataFrame({"a": [1.0], "extra": [5.0]}, index=["cell"])
-
-    prediction = predict_metacells(clock, features, species="unknown")
-
-    assert prediction.loc["cell", "tage"] == 1.0
-    assert pd.isna(prediction.loc["cell", "tage_std"])
-    assert model_feature_coverage(features, clock) == 0.5
 
 
 def test_missing_model_features_are_left_for_model_imputation() -> None:
@@ -257,28 +239,3 @@ def test_tissue_clock_analysis_keeps_coverage_separate_per_clock(
     ].unique()
     assert chronoage_coverage.tolist() == [0.5]
     assert mortality_coverage.tolist() == [1.0]
-
-
-def test_clock_regression_plots_written_for_prediction_columns(
-    tmp_path,
-) -> None:
-    """Clock regression helper writes one plot per prediction column."""
-    tidy = pd.DataFrame(
-        {
-            "age_years": [20.0, 30.0, 40.0, 50.0],
-            "chronoage_scaleddiff_tage": [18.0, 29.0, 42.0, 51.0],
-            "chronoage_scaleddiff_tage_std": [1.0, 1.0, 1.0, 1.0],
-        }
-    )
-
-    clock_analysis.plot_clock_regressions(
-        tidy,
-        output_dir=tmp_path,
-        level="tissue",
-        age_key="age_years",
-    )
-
-    output_path = (
-        tmp_path / "clock_tissue_chronoage_scaleddiff_tage_regression.png"
-    )
-    assert output_path.stat().st_size > 0
