@@ -6,11 +6,6 @@ import numpy as np
 import pandas as pd
 
 
-__all__ = [
-    "summarize_continuous_association_stability",
-]
-
-
 def summarize_continuous_association_stability(
     regression_results: pd.DataFrame,
     *,

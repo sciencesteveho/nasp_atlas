@@ -7,9 +7,6 @@ import pandas as pd
 from statsmodels.stats.multitest import multipletests
 
 
-__all__ = ["adjust_registered_families", "classify_registered_contrasts"]
-
-
 def classify_registered_contrasts(
     hypotheses: pd.DataFrame,
     estimates: pd.DataFrame,

@@ -1,0 +1,73 @@
+cohort_id: t2d_rem
+population_id: adipose_remission
+source_notes: >-
+  Internal T2D_REM Phase 2 adipose-tissue object (not public), on cx3 at
+  lms-scott-raw/live/T2D_REM/Phase_2/objects/t2d_simplified_20260930.h5ad;
+  the same object and sample definition as t2d_rem_adipose_baseline. This
+  population holds both visits (baseline and weightloss) of T2D-study
+  participants with a remission call in Remission_2021: remission (Yes)
+  versus no remission (No); prediabetic participants (NA_-_PreDM) and the
+  WL study are excluded. Remission is a donor-level outcome, so each donor
+  stays in one arm. The primary estimand is the weight-loss change within
+  donor (weightloss minus baseline units of the same cell type, adjusted
+  for the paired depth difference) in remitters minus that in
+  non-remitters, a difference in differences. Stable donor traits cancel
+  within each donor, and visit effects shared by both arms, such as
+  follow-up libraries pooling remitters with non-remitters, cancel between
+  arms. A larger change can still follow from a different starting level
+  or a different amount of weight lost, neither of which is adjusted. The
+  per-arm changes come from the within-donor stage (AB5); the arm contrast
+  averages each donor's two visits and is secondary. Leave this population
+  out of target evidence: remission is an outcome within T2D, not a
+  disease contrast. Raw counts are in layers/raw; var names are gene
+  symbols, with Ensembl IDs in ENSEMBL_ID. Cell types are
+  cell_type_level2; level 1 is kept as lineage and cell_state as the fine
+  cell type.
+input_filename: t2d_simplified_20260930.h5ad
+# Internal data: no public download. Its SHA-256 identifies the file; set it
+# from `sha256sum t2d_simplified_20260930.h5ad` on cx3 before the first run.
+source_url: null
+input_sha256: "SET_FROM_sha256sum_ON_CX3"
+counts_source: layers/raw
+gene_id_column: ENSEMBL_ID
+gene_symbol_column: _index
+modality: nuclei
+sample_columns: [sample, SeqID]
+obs_columns:
+  donor_id: Donor
+  cell_type: cell_type_level2
+  lineage: cell_type_level1
+  fine_cell_type: cell_state
+  assay: Chemistry
+  sex: sex
+  development_stage: Age
+  age: Age
+  timepoint: condition
+obs_constants:
+  tissue: adipose tissue
+filters:
+  study: [T2D]
+  condition: [baseline, weightloss]
+  # Quote "No"/"Yes": YAML reads them unquoted as booleans.
+  Remission_2021: ["No", "Yes"]
+condition:
+  column: Remission_2021
+  levels:
+    no_remission: ["No"]
+    remission: ["Yes"]
+  reference: no_remission
+covariates:
+  age_years: {column: age, kind: numeric}
+  sex: {column: sex, kind: categorical}
+  chemistry: {column: assay, kind: categorical}
+contrasts:
+  # Visit-averaged group difference.
+  - {estimand: remission_vs_no_remission, target: remission, reference: no_remission, role: secondary}
+cell_state:
+  # Weight loss within donor: weightloss minus baseline visit, per arm.
+  column: timepoint
+  reference: baseline
+  altered: [weightloss]
+state_contrasts:
+  # Does the weight-loss change differ in those who remitted?
+  - {estimand: remission_vs_no_remission_weight_loss_change, target: remission, reference: no_remission, role: primary}

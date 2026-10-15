@@ -1,0 +1,15 @@
+# AB8: Allen Immunobiology of Aging CMV-negative donors versus Tabula
+# Sapiens blood (10x 3' v3 only). Cell-type matches were declared from labels
+# alone, before any sensor value was compared. Descriptive: donors and
+# chemistry (Allen 10x Flex probes) differ; TS blood has one donor with pDC,
+# so that match is expected to be non-estimable.
+atlas_id: tabula_sapiens
+input_filename: 1c88f927-bcbb-4bb1-9881-281842945a2d.h5ad
+input_sha256: "9ac3d9391bd6211f28454ddd1d7bff0706c286c0cacb909179dd0f9cde68275a"
+tissue: blood
+assays: ["10x 3' v3"]
+gene_symbol_column: feature_name
+cell_types:
+  CD14 monocyte: ["classical monocyte"]
+  CD16 monocyte: ["non-classical monocyte"]
+  pDC: ["plasmacytoid dendritic cell"]

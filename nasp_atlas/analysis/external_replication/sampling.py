@@ -9,9 +9,6 @@ from nasp_atlas.analysis.external_replication.specification import (
 )
 
 
-__all__ = ["select_balanced_cells"]
-
-
 def select_balanced_cells(
     selected_obs: pd.DataFrame,
     comparison: ComparisonSpec,

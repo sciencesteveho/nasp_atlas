@@ -36,6 +36,9 @@ from nasp_atlas.single_cell.config import EmbeddingConfig
 from nasp_atlas.single_cell.context_summary import summarize_module_contexts
 from nasp_atlas.single_cell.donor_sensitivity import DonorSensitivityResults
 from nasp_atlas.single_cell.donor_sensitivity import donor_sensitivity
+from nasp_atlas.single_cell.expression_percentiles import (
+    gene_expression_percentiles,
+)
 from nasp_atlas.single_cell.gene_diagnostics import GeneDiagnosticResults
 from nasp_atlas.single_cell.gene_diagnostics import module_gene_diagnostics
 from nasp_atlas.single_cell.gene_sensitivity import GeneSensitivityResults
@@ -66,6 +69,8 @@ from nasp_atlas.single_cell.module_scoring import positive_module_score_name
 from nasp_atlas.single_cell.module_scoring import score_aucell_modules
 from nasp_atlas.single_cell.module_scoring import score_scanpy_module
 from nasp_atlas.single_cell.module_scoring import score_scanpy_modules
+from nasp_atlas.single_cell.sample_coupling import SampleCouplingResults
+from nasp_atlas.single_cell.sample_coupling import sample_coupling
 from nasp_atlas.single_cell.score_diagnostics import compare_module_scorers
 from nasp_atlas.single_cell.score_diagnostics import (
     cross_scorer_module_correlations,
@@ -98,6 +103,7 @@ __all__ = [
     "RoleAssignment",
     "SCProcessor",
     "SCUtils",
+    "SampleCouplingResults",
     "ScorerName",
     "StatisticalUnit",
     "UmapPanelSpec",
@@ -116,6 +122,7 @@ __all__ = [
     "donor_sensitivity",
     "expected_module_coupling_report",
     "expression_matrix",
+    "gene_expression_percentiles",
     "gene_removal_sensitivity",
     "inverse_module_score_name",
     "merge_eqtl_counts",
@@ -137,6 +144,7 @@ __all__ = [
     "regress_features_on_continuous",
     "relative_nasp_evidence_profiles",
     "resolve_feature_specs",
+    "sample_coupling",
     "score_aucell_modules",
     "score_scanpy_module",
     "score_scanpy_modules",

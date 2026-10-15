@@ -8,14 +8,6 @@ from collections.abc import Mapping
 import pandas as pd
 
 
-__all__ = [
-    "RescoredVariantLabel",
-    "gene_support_summary",
-    "sensitivity_display_table",
-    "variant_label",
-]
-
-
 @dataclasses.dataclass(frozen=True)
 class RescoredVariantLabel:
     """Names for one rescored selection variant in prose and in a figure.

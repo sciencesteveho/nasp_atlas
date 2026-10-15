@@ -24,8 +24,6 @@ from nasp_atlas.single_cell.visualization.robustness import RobustnessPlotter
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["robustness_analysis"]
-
 
 def robustness_analysis(
     adata: ad.AnnData,

@@ -1,0 +1,54 @@
+cohort_id: ibdverse
+population_id: ileum_epithelial_stromal
+source_notes: >-
+  IBDverse multitissue atlasing cohort (Alegbe et al., Nature 2026,
+  doi:10.1038/s41586-026-10627-z; CELLxGENE dataset
+  0e5c75da-7bc9-4a2c-83fc-ef1e378bd5f9), 10x 3' v3 scRNA-seq of blood, ileal
+  and rectal biopsies. This population keeps the epithelial and stromal
+  compartment (enterocyte, secretory, stem, colonocyte and mesenchymal author
+  categories) of terminal-ileum biopsies; the immune compartment is a
+  separate population of the same input, because the whole ileum (3.3
+  billion non-zero counts) is too large for one local job and
+  compartment-wise composition is not driven by biopsy depth. Each donor gave one ileal biopsy, so no donor has both inflamed and
+  non-inflamed tissue and the inflamed versus non-inflamed comparison is
+  between donors. Arms join disease and author_inflammation_status. Patients
+  with Crohn's disease are younger (mean age bins 40 to 44 versus 49), so age
+  (author decade bins) and sex are covariates. Reagent lots vary across
+  samples without a declared design and are not modelled. Cell types are the
+  CELLxGENE ontology labels; author labels are kept as fine cell types. Raw
+  counts are in raw/X.
+input_filename: e3460364-c300-4616-9923-3a0224894998.h5ad
+source_url: https://datasets.cellxgene.cziscience.com/e3460364-c300-4616-9923-3a0224894998.h5ad
+input_sha256: "e93b382b74a53205813afaf875189052051582fde47921bd07f8e6fb3a2ab71c"
+counts_source: raw/X
+gene_id_column: _index
+gene_symbol_column: feature_name
+modality: cells
+sample_columns: [sample_id]
+obs_columns:
+  donor_id: donor_id
+  cell_type: cell_type
+  fine_cell_type: author_cell_type
+  assay: assay
+  tissue: tissue
+  sex: sex
+  development_stage: development_stage
+  age_decade: author_age_binned_10
+filters:
+  is_primary_data: [true]
+  tissue: [ileum]
+  author_cell_type_category: [Enterocyte, Secretory, Stem, Colonocyte, Mesenchymal]
+condition:
+  column: [disease, author_inflammation_status]
+  levels:
+    control: ["normal | uninflamed"]
+    cd_uninflamed: ["Crohn disease | uninflamed"]
+    cd_inflamed: ["Crohn disease | inflamed"]
+  reference: control
+covariates:
+  age_years: {column: age_decade, kind: numeric}
+  sex: {column: sex, kind: categorical}
+contrasts:
+  - {estimand: cd_inflamed_vs_control, target: cd_inflamed, reference: control, role: primary}
+  - {estimand: cd_uninflamed_vs_control, target: cd_uninflamed, reference: control, role: primary}
+  - {estimand: cd_inflamed_vs_uninflamed, target: cd_inflamed, reference: cd_uninflamed, role: secondary}

@@ -17,16 +17,6 @@ from nasp_atlas.single_cell.visualization import NaspPlotter
 from nasp_atlas.single_cell.visualization import UmapPlotter
 
 
-__all__ = [
-    "metadata_umap_panels",
-    "plot_global_nasp_visualizations",
-    "plot_nasp_association_visualizations",
-    "plot_tabula_sapiens_metadata_umaps",
-    "plot_tabula_sapiens_mixed_model_inference",
-    "resolve_tissue_color_map",
-]
-
-
 def plot_tabula_sapiens_mixed_model_inference(
     *,
     output_dir: str | Path,

@@ -27,6 +27,7 @@ from nasp_atlas.analysis.tabula_sapiens.compendium_symbols import (
     add_compendium_symbol_column,
 )
 from nasp_atlas.analysis.tabula_sapiens.mechanisms import mechanism_analysis
+from nasp_atlas.analysis.tabula_sapiens.mixed_model_scopes import _atomic_table
 from nasp_atlas.analysis.tabula_sapiens.mixed_model_scopes import (
     mixed_model_scope_analysis,
 )
@@ -37,6 +38,9 @@ from nasp_atlas.analysis.tabula_sapiens.mixed_models import (
     TabulaMixedModelResults,
 )
 from nasp_atlas.analysis.tabula_sapiens.robustness import robustness_analysis
+from nasp_atlas.analysis.tabula_sapiens.sample_coupling import (
+    sample_coupling_analysis,
+)
 from nasp_atlas.analysis.tabula_sapiens.score_checkpoint import (
     score_checkpoint_matches,
 )
@@ -60,15 +64,15 @@ from nasp_atlas.single_cell.associations import StatisticalUnit
 from nasp_atlas.single_cell.associations import aggregate_feature_frame
 from nasp_atlas.single_cell.associations import build_cell_feature_frame
 from nasp_atlas.single_cell.associations import metadata_columns
-from nasp_atlas.single_cell.associations import (
-    partial_correlation_controlling_tissue,
-)
 from nasp_atlas.single_cell.associations import regress_features_on_continuous
 from nasp_atlas.single_cell.associations import resolve_feature_specs
 from nasp_atlas.single_cell.associations import (
     summarize_continuous_association_stability,
 )
 from nasp_atlas.single_cell.context_summary import summarize_module_contexts
+from nasp_atlas.single_cell.expression_percentiles import (
+    gene_expression_percentiles,
+)
 from nasp_atlas.single_cell.hypothesis_priorities import (
     expected_module_coupling_report,
 )
@@ -90,12 +94,6 @@ from nasp_atlas.single_cell.visualization import UmapPlotter
 
 
 logger = logging.getLogger(__name__)
-
-__all__ = [
-    "association_analysis",
-    "tabula_sapiens_scoring_analysis",
-    "tabula_sapiens_tissue_analysis",
-]
 
 
 @dataclass(slots=True)
@@ -250,16 +248,18 @@ def association_analysis(
     mixed_model_min_donors: int = 3,
     mixed_model_min_studies: int = 3,
     mixed_model_min_repeated_contexts: int = 3,
-    max_plots: int | None = 200,
+    max_plots: int | None = 400,
     plot_nasp_visualizations: bool = True,
     mixed_models_combined: bool = True,
     mixed_models_per_tissue: bool = False,
+    run_age_group_associations: bool = True,
     run_donor_sensitivity: bool = False,
     run_gene_diagnostics: bool = False,
     run_gene_removal_sensitivity: bool = False,
     sensitivity_dominant_genes: int = 1,
     run_mechanism_diagnostics: bool = False,
     include_reference_sets: bool = False,
+    run_sample_coupling: bool = False,
 ) -> None:
     """Run donor-aware NASP associations over precomputed module scores.
 
@@ -268,11 +268,17 @@ def association_analysis(
     Donor-aware regression stages state their independent unit explicitly.
     `mixed_models_combined` fits all scored cells together; independently,
     `mixed_models_per_tissue` fits every tissue using the same saved scores.
+    `run_age_group_associations` adds age regressions and tissue/cell-type
+    comparisons at donor-tissue and donor-tissue-cell-type units, plus the
+    unit tables needed to replot them; pooled views are descriptive because
+    donors recur across their points and groups.
     `run_donor_aware_tests=False` disables both mixed-model scopes. The three
     `run_*sensitivity`/`run_gene_diagnostics` switches enable descriptive donor
     deletion, donor/assay gene diagnostics, and actual gene-removal rescoring.
     `sensitivity_dominant_genes` selects the number of driver genes removed
     separately per module; gene removal also produces its gene diagnostics.
+    `run_sample_coupling` separates donor-tissue-shared from within-sample
+    sensor-output coupling at the mixed-model units.
     """
     _validate_association_options(
         statistical_unit=statistical_unit,
@@ -366,10 +372,12 @@ def association_analysis(
     provenance = provenance.assign(
         mixed_models_combined=mixed_models_combined,
         mixed_models_per_tissue=mixed_models_per_tissue,
+        run_age_group_associations=run_age_group_associations,
         run_donor_sensitivity=run_donor_sensitivity,
         run_gene_diagnostics=run_gene_diagnostics,
         run_gene_removal_sensitivity=run_gene_removal_sensitivity,
         sensitivity_dominant_genes=sensitivity_dominant_genes,
+        run_sample_coupling=run_sample_coupling,
     )
     associations._write_association_table(
         provenance,
@@ -501,6 +509,27 @@ def association_analysis(
         minimum_donors=mixed_model_min_donors,
         detection_threshold=detection_threshold,
     )
+    sample_coupling_analysis(
+        cell_frame,
+        output_dir=output_path / "sample_coupling",
+        provenance=provenance,
+        schema=association_plan.obs_schema,
+        run_sample_coupling=run_sample_coupling,
+        plot_visualizations=plot_nasp_visualizations,
+        aggregation=association_plan.aggregation,
+        detection_threshold=association_plan.detection_threshold,
+        minimum_cells=association_plan.mixed_model_min_cells,
+        minimum_donors=association_plan.mixed_model_min_donors,
+    )
+    if run_age_group_associations:
+        _run_age_group_associations(
+            cell_frame,
+            nasp_results.profile_unit_frame,
+            workflow_state=workflow_state,
+            layout=layout,
+            association_plan=association_plan,
+            max_plots=max_plots,
+        )
     if eqtl_table_path is not None:
         eqtl_unit_frame = unit_frame
         if eqtl_merge_mode in {"gene_tissue", "tissue"}:
@@ -544,6 +573,7 @@ def association_analysis(
         layout=layout,
         association_plan=association_plan,
         plot_nasp_visualizations=plot_nasp_visualizations,
+        age_group_associations=run_age_group_associations,
     )
     logger.info(
         "[tabula_sapiens] association analysis complete -> %s",
@@ -795,6 +825,8 @@ def _reconcile_association_outputs(
         "association_regression_results.csv",
         "association_eqtl_annotations.csv",
         "association_plot_manifest.csv",
+        "association_plot_data_donor_tissue.csv.gz",
+        "association_plot_data_donor_tissue_cell_type.csv.gz",
         "nasp_evidence_profiles.csv",
         "nasp_context_summary.csv",
         "nasp_hypothesis_priorities.csv",
@@ -1145,9 +1177,8 @@ def _build_nasp_profile_results(
     )
 
 
-def _run_age_associations(
+def _run_age_group_associations(
     cell_frame: pd.DataFrame,
-    unit_frame: pd.DataFrame,
     profile_unit_frame: pd.DataFrame | None,
     *,
     workflow_state: _AssociationWorkflowState,
@@ -1155,136 +1186,165 @@ def _run_age_associations(
     association_plan: _AssociationPlan,
     max_plots: int | None,
 ) -> None:
-    """Run global and context-specific donor-aware age analyses."""
-    schema = association_plan.obs_schema
-    donor_key = schema.donor_key
-    tissue_key = schema.tissue_key
-    cell_type_key = schema.cell_type_key
-    sex_key = schema.sex_key
-    age_key = schema.age_key
-    plotter = AssociationPlotter(output_dir=str(layout.regression_plots_dir))
-    scope = (
-        "global_donor"
-        if association_plan.statistical_unit == "donor"
-        else f"pooled_{association_plan.statistical_unit}"
-    )
-    workflow_state.plot_count = associations._run_continuous_associations(
-        unit_frame,
-        predictor_key=age_key,
-        plotter=plotter,
-        statistical_unit=association_plan.statistical_unit,
+    """Run age and group views at donor-context units and save their data.
+
+    Each point is one donor in one tissue (donor-tissue) or in one
+    tissue-cell-type context (donor-tissue-cell-type); there is no
+    donor-only analysis. Both unit tables are saved whole, for every feature,
+    so any plotted bar, box or regression can be redrawn and subset locally.
+    """
+    if profile_unit_frame is None:
+        logger.warning(
+            "[tabula_sapiens] age and group associations skipped; they need "
+            "donor, tissue and cell-type metadata"
+        )
+        return
+
+    donor_tissue_frame = aggregate_feature_frame(
+        cell_frame,
+        statistical_unit="donor_tissue",
         aggregation=association_plan.aggregation,
-        manifest=workflow_state.manifest,
-        regression_tables=workflow_state.regression_tables,
-        plot_count=workflow_state.plot_count,
+        schema=association_plan.obs_schema,
+        detection_threshold=association_plan.detection_threshold,
+    )
+    if association_plan.obs_schema.age_key in profile_unit_frame.columns:
+        _run_age_associations(
+            donor_tissue_frame,
+            profile_unit_frame,
+            workflow_state=workflow_state,
+            layout=layout,
+            association_plan=association_plan,
+            max_plots=max_plots,
+        )
+    _run_group_associations(
+        donor_tissue_frame,
+        profile_unit_frame,
+        workflow_state=workflow_state,
+        layout=layout,
+        association_plan=association_plan,
         max_plots=max_plots,
-        stratify_key=None,
-        analysis_scope=scope,
     )
 
-    if (
-        sex_key in unit_frame.columns
-        and unit_frame[sex_key].dropna().nunique() >= 2
+    for statistical_unit, unit_frame in (
+        ("donor_tissue", donor_tissue_frame),
+        ("donor_tissue_cell_type", profile_unit_frame),
     ):
-        workflow_state.plot_count = associations._run_continuous_associations(
-            unit_frame,
-            predictor_key=age_key,
-            plotter=plotter,
-            statistical_unit=association_plan.statistical_unit,
-            aggregation=association_plan.aggregation,
-            manifest=workflow_state.manifest,
-            regression_tables=workflow_state.regression_tables,
-            plot_count=workflow_state.plot_count,
-            max_plots=max_plots,
-            stratify_key=sex_key,
-            analysis_scope=f"within_sex_{association_plan.statistical_unit}",
-        )
-
-    if donor_key in cell_frame.columns and tissue_key in cell_frame.columns:
-        donor_tissue_frame = aggregate_feature_frame(
-            cell_frame,
-            statistical_unit="donor_tissue",
-            aggregation=association_plan.aggregation,
-            schema=schema,
-            detection_threshold=association_plan.detection_threshold,
-        )
-        age_by_tissue = regress_features_on_continuous(
-            donor_tissue_frame,
-            predictor_key=age_key,
-            stratify_key=tissue_key,
-        )
-        age_by_tissue["analysis_scope"] = "within_tissue"
-        workflow_state.regression_tables.append(age_by_tissue)
-
-    if profile_unit_frame is not None:
-        context_key = "tissue_cell_type_context"
-        context_frame = profile_unit_frame.copy()
-        context_frame[context_key] = (
-            context_frame[tissue_key].astype(str)
-            + "::"
-            + context_frame[cell_type_key].astype(str)
-        )
-        age_by_context = regress_features_on_continuous(
-            context_frame,
-            predictor_key=age_key,
-            stratify_key=context_key,
-        )
-        age_by_context["analysis_scope"] = "within_tissue_cell_type"
-        workflow_state.regression_tables.append(age_by_context)
-
-    if (
-        tissue_key in unit_frame.columns
-        and unit_frame[tissue_key].dropna().nunique() >= 2
-    ):
-        partial = partial_correlation_controlling_tissue(
-            unit_frame,
-            predictor_key=age_key,
-            schema=schema,
-        )
         associations._write_association_table(
-            partial,
-            layout.tables_dir / "association_partial_correlation_age.csv",
+            unit_frame,
+            layout.tables_dir
+            / f"association_plot_data_{statistical_unit}.csv.gz",
         )
 
 
-def _run_group_associations(
-    cell_frame: pd.DataFrame,
-    unit_frame: pd.DataFrame,
+def _run_age_associations(
+    donor_tissue_frame: pd.DataFrame,
+    profile_unit_frame: pd.DataFrame,
     *,
     workflow_state: _AssociationWorkflowState,
     layout: associations._AssociationOutputLayout,
     association_plan: _AssociationPlan,
     max_plots: int | None,
 ) -> None:
-    """Run categorical tests supported by the selected statistical unit."""
+    """Run pooled and within-context age regressions at donor-context units.
+
+    Pooled fits, overall and within sex, plot every donor-tissue-cell-type
+    unit. Donors recur across those points, so the fits are descriptive.
+    Within-tissue and within-tissue-cell-type fits have one point per donor
+    in each stratum and are written as tables only.
+    """
     schema = association_plan.obs_schema
     tissue_key = schema.tissue_key
     cell_type_key = schema.cell_type_key
     sex_key = schema.sex_key
+    age_key = schema.age_key
+    plotter = AssociationPlotter(output_dir=str(layout.regression_plots_dir))
+    pooled_unit = "donor_tissue_cell_type"
+    workflow_state.plot_count = associations._run_continuous_associations(
+        profile_unit_frame,
+        predictor_key=age_key,
+        plotter=plotter,
+        statistical_unit=pooled_unit,
+        aggregation=association_plan.aggregation,
+        manifest=workflow_state.manifest,
+        regression_tables=workflow_state.regression_tables,
+        plot_count=workflow_state.plot_count,
+        max_plots=max_plots,
+        stratify_key=None,
+        analysis_scope=f"pooled_{pooled_unit}",
+        descriptive=True,
+    )
+
     if (
-        cell_type_key in unit_frame.columns
-        and unit_frame[cell_type_key].dropna().nunique() < 2
-        and cell_type_key in cell_frame.columns
-        and cell_frame[cell_type_key].dropna().nunique() >= 2
+        sex_key in profile_unit_frame.columns
+        and profile_unit_frame[sex_key].dropna().nunique() >= 2
     ):
-        logger.warning(
-            "[tabula_sapiens] skipping cell-type tests because %s "
-            "does not preserve cell type; use "
-            "statistical_unit='donor_tissue_cell_type'",
-            association_plan.statistical_unit,
+        workflow_state.plot_count = associations._run_continuous_associations(
+            profile_unit_frame,
+            predictor_key=age_key,
+            plotter=plotter,
+            statistical_unit=pooled_unit,
+            aggregation=association_plan.aggregation,
+            manifest=workflow_state.manifest,
+            regression_tables=workflow_state.regression_tables,
+            plot_count=workflow_state.plot_count,
+            max_plots=max_plots,
+            stratify_key=sex_key,
+            analysis_scope=f"within_sex_{pooled_unit}",
+            descriptive=True,
         )
 
-    group_keys = [
-        key
-        for key in (sex_key, tissue_key, cell_type_key)
-        if key in unit_frame.columns and unit_frame[key].dropna().nunique() >= 2
-    ]
-    for group_key in group_keys:
-        plot_results = group_key != sex_key
+    age_by_tissue = regress_features_on_continuous(
+        donor_tissue_frame,
+        predictor_key=age_key,
+        stratify_key=tissue_key,
+    )
+    age_by_tissue["analysis_scope"] = "within_tissue"
+    workflow_state.regression_tables.append(age_by_tissue)
+
+    context_key = "tissue_cell_type_context"
+    context_frame = profile_unit_frame.copy()
+    context_frame[context_key] = (
+        context_frame[tissue_key].astype(str)
+        + "::"
+        + context_frame[cell_type_key].astype(str)
+    )
+    age_by_context = regress_features_on_continuous(
+        context_frame,
+        predictor_key=age_key,
+        stratify_key=context_key,
+    )
+    age_by_context["analysis_scope"] = "within_tissue_cell_type"
+    workflow_state.regression_tables.append(age_by_context)
+
+
+def _run_group_associations(
+    donor_tissue_frame: pd.DataFrame,
+    profile_unit_frame: pd.DataFrame,
+    *,
+    workflow_state: _AssociationWorkflowState,
+    layout: associations._AssociationOutputLayout,
+    association_plan: _AssociationPlan,
+    max_plots: int | None,
+) -> None:
+    """Compare features across tissues and cell types, split by sex.
+
+    Tissue bars use donor-tissue units and cell-type boxes use
+    donor-tissue-cell-type units. Donors recur across these groups, so the
+    unpaired tests are descriptive; the repeated-donor mixed models provide
+    the inference for these comparisons.
+    """
+    schema = association_plan.obs_schema
+    sex_key = schema.sex_key
+    for group_key, statistical_unit, unit_frame in (
+        (schema.tissue_key, "donor_tissue", donor_tissue_frame),
+        (schema.cell_type_key, "donor_tissue_cell_type", profile_unit_frame),
+    ):
+        if unit_frame[group_key].dropna().nunique() < 2:
+            continue
+
         stratify_key = (
             sex_key
-            if plot_results
-            and sex_key in unit_frame.columns
+            if sex_key in unit_frame.columns
             and unit_frame[sex_key].dropna().nunique() > 0
             else None
         )
@@ -1296,21 +1356,22 @@ def _run_group_associations(
             barplot_plotter=AssociationPlotter(
                 output_dir=str(layout.barplots_dir)
             ),
-            statistical_unit=association_plan.statistical_unit,
+            statistical_unit=statistical_unit,
             aggregation=association_plan.aggregation,
-            tissue_key=tissue_key,
+            tissue_key=schema.tissue_key,
             stratify_key=stratify_key,
             stratify_colors=(
                 {"male": "#d2e7ef", "female": "#f9bebc"}
                 if stratify_key is not None
                 else None
             ),
-            plot_results=plot_results,
+            plot_results=True,
             manifest=workflow_state.manifest,
             group_test_tables=workflow_state.group_test_tables,
             group_summary_tables=workflow_state.group_summary_tables,
             plot_count=workflow_state.plot_count,
             max_plots=max_plots,
+            descriptive=True,
         )
 
 
@@ -1342,23 +1403,37 @@ def _write_association_results(
     layout: associations._AssociationOutputLayout,
     association_plan: _AssociationPlan,
     plot_nasp_visualizations: bool,
+    age_group_associations: bool,
 ) -> None:
     """Finalize mixed-model tables, retained analyses, and figures."""
     schema = association_plan.obs_schema
     regression_results = workflow_state.regression_results()
+    age_stability = _age_stability_table(regression_results)
     eqtl_annotations = workflow_state.eqtl_annotations()
     if mixed_model_results is None:
         write_mixed_model_tables(
             TabulaMixedModelResults.empty(), layout.tables_dir
         )
 
-    for filename, table in (
+    tables = [
         ("association_regression_results.csv", regression_results),
-        (
-            "association_eqtl_annotations.csv",
-            eqtl_annotations,
-        ),
-    ):
+        ("association_eqtl_annotations.csv", eqtl_annotations),
+    ]
+    if age_group_associations:
+        tables += [
+            ("association_age_stability.csv", age_stability),
+            (
+                "association_group_test_results.csv",
+                associations._concat_or_empty(workflow_state.group_test_tables),
+            ),
+            (
+                "association_group_summary.csv",
+                associations._concat_or_empty(
+                    workflow_state.group_summary_tables
+                ),
+            ),
+        ]
+    for filename, table in tables:
         associations._write_association_table(
             table,
             layout.tables_dir / filename,
@@ -1371,8 +1446,8 @@ def _write_association_results(
             context_summary=nasp_results.context_summary,
             hypothesis_priorities=nasp_results.hypothesis_priorities,
             sensor_output_coupling=nasp_results.sensor_output_coupling,
-            regression_results=pd.DataFrame(),
-            age_stability=pd.DataFrame(),
+            regression_results=regression_results,
+            age_stability=age_stability,
             mechanistic_edges=nasp_results.mechanistic_edges,
             tissue_key=schema.tissue_key,
             cell_type_key=schema.cell_type_key,
@@ -1508,16 +1583,19 @@ def tabula_sapiens_tissue_analysis(
     mixed_model_min_donors: int = 3,
     mixed_model_min_studies: int = 3,
     mixed_model_min_repeated_contexts: int = 3,
-    max_plots: int | None = 200,
+    max_plots: int | None = 400,
     plot_nasp_visualizations: bool = True,
     mixed_models_combined: bool = True,
     mixed_models_per_tissue: bool = False,
+    run_age_group_associations: bool = True,
+    run_gene_expression_percentiles: bool = True,
     run_donor_sensitivity: bool = False,
     run_gene_diagnostics: bool = False,
     run_gene_removal_sensitivity: bool = False,
     sensitivity_dominant_genes: int = 1,
     run_mechanism_diagnostics: bool = False,
     include_reference_sets: bool = False,
+    run_sample_coupling: bool = False,
     sensor_specs: Sequence[Path] | None = None,
     sensor_panel_path: Path | None = None,
 ) -> dict[str, Path]:
@@ -1582,6 +1660,12 @@ def tabula_sapiens_tissue_analysis(
       plot_nasp_visualizations: Whether to render mechanistic NASP summaries.
       mixed_models_combined: Fit every scored cell together (default True).
       mixed_models_per_tissue: Also fit each tissue separately (default False).
+      run_age_group_associations: Regress features on age and compare them
+        across tissues and cell types at donor-context units, with plots and
+        their plotted data (default True).
+      run_gene_expression_percentiles: Write every gene's median expression
+        percentile bin across supported tissue-cell-type contexts of the
+        scored cells, once per run (default True).
       run_donor_sensitivity: Write donor scores, deletion ranks and matched
         cell-type tissue differences, using mean cell-to-donor aggregation.
       run_gene_diagnostics: Write donor/assay expression and gene-score checks.
@@ -1593,10 +1677,13 @@ def tabula_sapiens_tissue_analysis(
         and OAS/RNase L components with donor-supported figures.
       include_reference_sets: Add bundled Reactome/Hallmark scores, separate
         UMAPs and curated-score comparisons; no runtime downloads.
+      run_sample_coupling: Partition feature variance into donor and
+        donor-tissue sample components, and split sensor-output slopes into
+        within- and between-sample parts.
 
     Returns:
-      Paths for the run directory, score table, and each scorer's association
-      output directory.
+      Paths for the run directory, score table, optional gene expression
+      percentile table, and each scorer's association output directory.
 
     Raises:
       FileNotFoundError: If the input h5ad or completed score table is absent.
@@ -1702,6 +1789,17 @@ def tabula_sapiens_tissue_analysis(
         "run_dir": run_dir,
         "score_table": score_path,
     }
+    if run_gene_expression_percentiles:
+        outputs["gene_expression_percentiles"] = (
+            _write_gene_expression_percentiles(
+                h5ad_path=input_path,
+                score_path=score_path,
+                output_dir=run_dir / "expression",
+                schema=schema,
+                gene_symbol_column=gene_symbol_column,
+                expression_layer=expression_layer,
+            )
+        )
     for scorer_name in selected_scorers:
         association_dir = run_dir / "associations" / scorer_name
         association_analysis(
@@ -1736,12 +1834,14 @@ def tabula_sapiens_tissue_analysis(
             plot_nasp_visualizations=plot_nasp_visualizations,
             mixed_models_combined=mixed_models_combined,
             mixed_models_per_tissue=mixed_models_per_tissue,
+            run_age_group_associations=run_age_group_associations,
             run_donor_sensitivity=run_donor_sensitivity,
             run_gene_diagnostics=run_gene_diagnostics,
             run_gene_removal_sensitivity=run_gene_removal_sensitivity,
             sensitivity_dominant_genes=sensitivity_dominant_genes,
             run_mechanism_diagnostics=run_mechanism_diagnostics,
             include_reference_sets=include_reference_sets,
+            run_sample_coupling=run_sample_coupling,
         )
         outputs[f"association_{scorer_name}"] = association_dir
     for spec_path in sensor_specs or ():
@@ -1854,6 +1954,7 @@ def tabula_sapiens_scoring_analysis(
     gene_symbol_column = COMPENDIUM_SYMBOL_COLUMN
     umap_plotter = UmapPlotter(output_dir=output_dir)
     heatmap_plotter = HeatmapPlotter(output_dir=output_dir)
+    dotplot_plotter = DotplotPlotter(output_dir=output_dir)
     summary_plotter = SummaryPlotter(output_dir=output_dir)
     plot_tabula_sapiens_metadata_umaps(
         adata,
@@ -1953,7 +2054,7 @@ def tabula_sapiens_scoring_analysis(
     scoring.plot_gene_specificity_dotplots(
         adata=adata,
         genes=sensors,
-        plotter=DotplotPlotter(output_dir=output_dir),
+        plotter=dotplot_plotter,
         output_dir=output_dir,
         filename_prefix="NA_SENSORS",
         groupby_keys=tuple(dict.fromkeys((tissue_key, cell_type_key))),
@@ -1980,6 +2081,16 @@ def tabula_sapiens_scoring_analysis(
             gene_symbol_column=gene_symbol_column,
             expression_layer=expression_layer,
             grouped_expression_by_obs=grouped_expression_by_obs,
+        )
+        _plot_module_specificity_dotplots(
+            adata=adata,
+            module_genes_by_id=module_genes_by_id,
+            plotter=dotplot_plotter,
+            output_dir=output_dir,
+            tissue_key=tissue_key,
+            donor_key=donor_key,
+            gene_symbol_column=gene_symbol_column,
+            expression_layer=expression_layer,
         )
 
     scoring.module_scoring_outputs(
@@ -2064,6 +2175,110 @@ def _load_scoring_adata(
         point_size /= 4
 
     return adata, point_size
+
+
+def _write_gene_expression_percentiles(
+    *,
+    h5ad_path: Path,
+    score_path: Path,
+    output_dir: Path,
+    schema: ObsSchema,
+    gene_symbol_column: str,
+    expression_layer: str | None,
+    n_bins: int = 100,
+    min_cells: int = 50,
+    min_donors: int = 3,
+) -> Path:
+    """Write each gene's median expression percentile over the scored cells.
+
+    Genes are ranked within every supported tissue-cell-type context of the
+    score-table population, so a tissue or fraction selection carries over.
+    The gene table, its context support and a one-row provenance record are
+    each published atomically, with provenance written last.
+
+    Returns:
+      Path to the gene percentile table.
+    """
+    obs_names = pd.read_csv(score_path, usecols=["obs_name"])["obs_name"]
+    logger.info(
+        "[tabula_sapiens] ranking gene expression over %d scored cells",
+        len(obs_names),
+    )
+    adata = read_h5ad_rows(
+        h5ad_path,
+        obs_names.astype(str).tolist(),
+        layer_keys=() if expression_layer is None else (expression_layer,),
+        read_x=expression_layer is None,
+    )
+    symbol_aliases = add_compendium_symbol_column(
+        adata, source_column=gene_symbol_column
+    )
+
+    context_keys = (schema.tissue_key, schema.cell_type_key)
+    genes, contexts = gene_expression_percentiles(
+        adata,
+        context_keys=context_keys,
+        donor_key=schema.donor_key,
+        n_bins=n_bins,
+        min_cells=min_cells,
+        min_donors=min_donors,
+        expression_layer=expression_layer,
+        gene_symbol_column=gene_symbol_column,
+    )
+    # Place the compendium-matching symbol beside the source gene symbol.
+    genes.insert(
+        2,
+        COMPENDIUM_SYMBOL_COLUMN,
+        adata.var[COMPENDIUM_SYMBOL_COLUMN].to_numpy(),
+    )
+
+    marker_path = GeneModules.default_panel_path().resolve()
+    supported = contexts["supported"]
+    provenance = pd.DataFrame.from_records(
+        [
+            {
+                **_file_identity("h5ad", h5ad_path),
+                **_file_identity("score_csv", score_path),
+                "expression_source": expression_layer or "X",
+                "gene_symbol_column": gene_symbol_column,
+                "compendium_symbol_aliases": json.dumps(
+                    symbol_aliases, sort_keys=True
+                ),
+                "compendium_marker_panel_path": str(marker_path),
+                "compendium_marker_panel_sha256": hashlib.sha256(
+                    marker_path.read_bytes()
+                ).hexdigest(),
+                "context_keys": _json_sequence(context_keys),
+                "donor_key": schema.donor_key,
+                "n_bins": n_bins,
+                "min_cells": min_cells,
+                "min_donors": min_donors,
+                "n_cells": adata.n_obs,
+                "n_cells_in_supported_contexts": int(
+                    contexts.loc[supported, "n_cells"].sum()
+                ),
+                "n_genes": len(genes),
+                "n_contexts_observed": len(contexts),
+                "n_contexts_supported": int(supported.sum()),
+            }
+        ]
+    )
+
+    genes_path = output_dir / "tabula_sapiens_gene_expression_percentiles.csv"
+    _atomic_table(genes, genes_path)
+    _atomic_table(
+        contexts,
+        output_dir / "tabula_sapiens_gene_expression_percentile_contexts.csv",
+    )
+    _atomic_table(
+        provenance,
+        output_dir / "tabula_sapiens_gene_expression_percentile_provenance.csv",
+    )
+    logger.info(
+        "[tabula_sapiens] gene expression percentiles -> %s",
+        genes_path,
+    )
+    return genes_path
 
 
 def _module_genes_by_id(
@@ -2154,4 +2369,34 @@ def _plot_module_gene_heatmaps_by_obs(
             gene_symbol_column=gene_symbol_column,
             expression_layer=expression_layer,
             grouped_expression_by_obs=grouped_expression_by_obs,
+        )
+
+
+def _plot_module_specificity_dotplots(
+    *,
+    adata: ad.AnnData,
+    module_genes_by_id: Mapping[str, Sequence[str]],
+    plotter: DotplotPlotter,
+    output_dir: str | Path,
+    tissue_key: str,
+    donor_key: str,
+    gene_symbol_column: str,
+    expression_layer: str | None,
+) -> None:
+    """Write one tissue specificity dot plot and table per NASP module."""
+    for module_id, module_genes in module_genes_by_id.items():
+        if not module_genes:
+            logger.info("%s: no matched genes; skipping dot plots", module_id)
+            continue
+
+        scoring.plot_gene_specificity_dotplots(
+            adata=adata,
+            genes=module_genes,
+            plotter=plotter,
+            output_dir=output_dir,
+            filename_prefix=module_id,
+            groupby_keys=(tissue_key,),
+            donor_key=donor_key,
+            gene_symbol_column=gene_symbol_column,
+            expression_layer=expression_layer,
         )

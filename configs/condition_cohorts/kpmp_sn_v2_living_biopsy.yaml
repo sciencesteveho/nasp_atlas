@@ -1,0 +1,80 @@
+cohort_id: kpmp_sn_v2
+population_id: living_biopsy
+source_notes: >-
+  KPMP/HuBMAP Human Kidney Atlas v2.0 single-nucleus RNA-seq, CELLxGENE
+  dataset 7ff0197b-d175-49bf-b4fa-150fe0995d93 (collection
+  9c9d04c4-8899-417f-bb6f-6107dcadf14f; preprint doi:10.1101/2025.09.26.678707),
+  the expanded release of Lake et al., Nature 2023. The population keeps
+  biopsies of living kidneys: percutaneous needle biopsies (all disease arms
+  and 12 references) and living-donor transplant pre-perfusion biopsies (22
+  references). It excludes tumour and deceased-donor nephrectomies and
+  intra-operative stone biopsies. Pooling the two reference collection
+  methods assumes no material procurement difference; the reference-only
+  procurement contrast tests that assumption. Condition comes from
+  Conditions.Subtype because CELLxGENE disease labels diabetic-resilient
+  donors as chronic kidney disease. Raw counts are in raw/X.
+input_filename: 06b8d9c2-0bde-48bd-88d9-730993fc95e2.h5ad
+source_url: https://datasets.cellxgene.cziscience.com/06b8d9c2-0bde-48bd-88d9-730993fc95e2.h5ad
+input_sha256: "3e61b954c8101cd2c1b379cb3f210068177622a83e6e7457d4945292f78f8eab"
+counts_source: raw/X
+gene_id_column: _index
+gene_symbol_column: feature_name
+modality: nuclei
+sample_columns: [library]
+obs_columns:
+  donor_id: donor_id
+  cell_type: SubclassLevel1
+  fine_cell_type: SubclassLevel2
+  cell_state: CellStateLevel1
+  ontology_cell_type: cell_type
+  assay: assay
+  collection: TissueCollection
+  region: region
+  sex: sex
+  development_stage: development_stage
+  age_bin: Age
+  egfr_bin: "Baseline eGFR (ml/min/1.73m2) (Binned)"
+obs_constants:
+  tissue: kidney
+filters:
+  is_primary_data: [true]
+  TissueCollection:
+    - Percutaneous Needle Biopsy
+    - Transplant Pre-perfusion Biopsy
+condition:
+  column: Conditions.Subtype
+  levels:
+    reference:
+      - Healthy Reference Tissue
+      - Living Donor Healthy Reference Tissue (KPMP)
+    ckd:
+      - Diabetic Kidney Disease
+      - Hypertensive Chronic Kidney Disease
+      - Chronic Kidney Disease
+    aki:
+      - Acute Kidney Injury
+      - Acute Kidney Injury - COVID
+    dm_resilient:
+      - Diabetes Mellitus - Resilient
+  reference: reference
+covariates:
+  age_years: {column: age_bin, kind: binned}
+  sex: {column: sex, kind: categorical}
+  assay: {column: assay, kind: categorical}
+  region: {column: region, kind: categorical}
+contrasts:
+  - {estimand: ckd_vs_reference, target: ckd, reference: reference, role: primary}
+  - {estimand: aki_vs_reference, target: aki, reference: reference, role: primary}
+  - {estimand: aki_vs_ckd, target: aki, reference: ckd, role: secondary}
+  - {estimand: dm_resilient_vs_reference, target: dm_resilient, reference: reference, role: secondary}
+continuous_contrasts:
+  # Severity: change per 10 ml/min/1.73 m2 of baseline eGFR within CKD and
+  # AKI; donors without a parsable bin (">60", "Not available") leave this
+  # slope only.
+  - {estimand: egfr_slope, column: egfr_bin, kind: binned, arms: [ckd, aki], step: 10, role: secondary}
+cell_state:
+  # Altered (adaptive, degenerative, cycling, transitioning) versus
+  # reference states of each lineage, compared within donor.
+  column: cell_state
+  reference: reference
+  altered: [altered]

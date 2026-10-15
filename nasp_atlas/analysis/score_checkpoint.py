@@ -11,15 +11,12 @@ from tempfile import NamedTemporaryFile
 import pandas as pd
 
 
-__all__ = ["score_checkpoint_matches", "write_score_checkpoint"]
-
-
 def score_checkpoint_matches(
     score_path: Path,
     request: Mapping[str, object],
 ) -> bool:
     """Accept completed scores matching input, selection and settings."""
-    checkpoint = score_path.with_name(score_path.name + ".manifest.json")
+    checkpoint = score_checkpoint_path(score_path)
     if not score_path.is_file() or not checkpoint.is_file():
         return False
 
@@ -36,6 +33,11 @@ def score_checkpoint_matches(
     )
 
 
+def score_checkpoint_path(score_path: Path) -> Path:
+    """Return the completion checkpoint written beside `score_path`."""
+    return score_path.with_name(score_path.name + ".manifest.json")
+
+
 def write_score_checkpoint(
     score_path: Path,
     request: Mapping[str, object],
@@ -49,7 +51,7 @@ def write_score_checkpoint(
     ):
         raise ValueError(f"Incomplete score table: {score_path}")
 
-    checkpoint = score_path.with_name(score_path.name + ".manifest.json")
+    checkpoint = score_checkpoint_path(score_path)
     record = {
         "status": "completed",
         "request": dict(request),

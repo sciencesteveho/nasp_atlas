@@ -14,11 +14,20 @@ For each input h5ad, the worker:
 1. optionally subsets one tissue and recomputes its embedding;
 2. scores compendium modules with Scanpy, AUCell, or both;
 3. writes one shared cell-level score table;
-4. runs the selected combined-input and/or per-tissue mixed models for each
-   scorer, reusing the same scores; and
-5. writes model tables and, when NASP visualizations are enabled, up to five
+4. writes every gene's median expression percentile bin across the scored
+   tissue–cell-type contexts, once per run;
+5. runs the selected combined-input and/or per-tissue mixed models for each
+   scorer, reusing the same scores;
+6. runs descriptive age regressions and tissue/cell-type comparisons at
+   donor-context units, saving the data behind every plot; and
+7. writes model tables and, when NASP visualizations are enabled, up to five
    estimable contrast figures, a variance figure, and descriptive NASP
    summaries.
+
+With `PLOT_MODULES=1`, scoring also writes a tissue specificity dot plot and
+table for every module, beside the existing nucleic-acid-sensor dot plots.
+Like other scoring figures, they are drawn only when scores are computed, not
+when `RESUME=1` reuses a compatible score checkpoint.
 
 Optional donor sensitivity, gene diagnostics and gene-removal sensitivity run
 after the models, independently for each scorer. These produce tables under
@@ -29,6 +38,13 @@ by default (`MECHANISM_DIAGNOSTICS=1`, `REFERENCE_SETS=1`). Both use the same
 full scored population unless you explicitly request a subset. Python/CLI
 callers opt in with `--mechanism-diagnostics --reference-sets`. Either PBS
 setting can independently be set to `0`; no separate analysis job is needed.
+
+PBS also enables sample coupling by default (`SAMPLE_COUPLING=1`; CLI
+`--sample-coupling`). It reuses the mixed-model donor-context units to report
+how much each feature varies together within a donor's tissue, and splits
+each sensor-output slope into within- and between-sample parts, under
+`associations/<scorer>/sample_coupling/`. Set `SAMPLE_COUPLING=0` to skip it.
+See [Sample-shared and within-sample coupling](../docs/analysis_outputs.md#sample-shared-and-within-sample-coupling).
 
 Reference scoring adds the shipped Reactome/Hallmark sets to the requested
 Scanpy/AUCell pass, with one separate UMAP per reference and scorer under
@@ -110,17 +126,20 @@ Common options:
 | `--resume` | Reuse completed scores only with a matching input/settings manifest and file checksum. |
 | `--mixed-models-combined` / `--no-mixed-models-combined` | Fit all scored cells together; enabled by default. |
 | `--mixed-models-per-tissue` / `--no-mixed-models-per-tissue` | Independently fit every tissue using all its scored cells; disabled by default. |
+| `--age-group-associations` / `--no-age-group-associations` | Descriptive age regressions, tissue barplots and cell-type boxplots at donor-context units, with their plotted data; enabled by default. |
+| `--gene-expression-percentiles` / `--no-gene-expression-percentiles` | Every gene's median expression percentile bin across tissue–cell-type contexts; enabled by default. |
 | `--donor-sensitivity` | Write donor scores, leave-one-donor-out rankings and directly paired tissue differences within matching cell types. |
 | `--gene-diagnostics` | Write module-gene expression, detection and descriptive gene-score correlations by donor, tissue, cell type and assay. |
 | `--gene-removal-sensitivity` | Rescore dominant-gene deletions and shared-gene exclusions for the prespecified mechanistic module pairs; also runs gene diagnostics. |
 | `--sensitivity-dominant-genes 1` | Number of candidate driver genes removed separately per module. |
 | `--mechanism-diagnostics` | Regulator/output coupling, IFN components, and OAS/RNase L pilot; reuses gene diagnostics when available. |
 | `--reference-sets` | Add offline Reactome/Hallmark signatures, individual score UMAPs, and curated/reference comparisons. |
+| `--sample-coupling` | Donor and donor-tissue variance shares per feature, and within- versus between-sample sensor-output slopes. |
 | `--dry-run` | Print resolved worker options without loading data or writing outputs. |
 | `--tissue-label Liver` | Subset an exact tissue label and recompute its embedding; omit for the complete atlas. |
 | `--single-tissue-use-rep X_scvi` | AnnData representation used for the recomputed neighbors and UMAP. |
 | `--single-tissue-use-x` | Use `adata.X` instead of a named representation. |
-| `--statistical-unit donor` | Unit used by retained non-mixed stages, including optional eQTL analysis; mixed-model rows use their prespecified unit below. |
+| `--statistical-unit donor` | Unit used by optional eQTL analysis; mixed-model rows and age/group views use their own prespecified units. |
 | `--aggregation mean` | Cell-to-unit aggregation. |
 | `--detection-threshold 0.0` | Finite per-cell expression floor for fraction/percent aggregations. |
 | `--condition-key disease` | Observation column identifying biological condition. |
@@ -133,7 +152,7 @@ Common options:
 | `--subset-fraction 0.1` | Deterministic exploratory cell subset. |
 | `--no-plot-modules` | Skip per-module marker plots. |
 | `--no-nasp-visualizations` | Skip the fixed mixed-model and descriptive NASP figure sets; model tables are still written. |
-| `--max-plots 200` | Cap general association plots per scorer. |
+| `--max-plots 400` | Cap general association plots per scorer. |
 
 `--detection-threshold` must be finite. `--mixed-model-min-cells` must be at
 least 1. The donor, study, and repeated-context thresholds must each be at
@@ -218,6 +237,8 @@ Values are passed with `qsub -v` as comma-separated `NAME=value` pairs.
 | `RESUME` | `0` | Reuse a complete compatible score table. |
 | `MIXED_MODELS_COMBINED` | `1` | Fit all scored cells together. |
 | `MIXED_MODELS_PER_TISSUE` | `0` | Also fit each observed tissue separately. |
+| `AGE_GROUP_ASSOCIATIONS` | `1` | Descriptive age regressions and tissue/cell-type plots, with their plotted data. |
+| `GENE_EXPRESSION_PERCENTILES` | `1` | Median within-context expression percentile bin for every gene. |
 | `DONOR_SENSITIVITY` | `0` | Donor deletion rankings and matched-cell-type tissue differences. |
 | `GENE_DIAGNOSTICS` | `0` | Donor/assay gene expression and detection diagnostics. |
 | `GENE_REMOVAL_SENSITIVITY` | `0` | Dominant-gene and shared-gene removal rescoring. |
@@ -238,7 +259,7 @@ Values are passed with `qsub -v` as comma-separated `NAME=value` pairs.
 | `MIXED_MODEL_MIN_DONORS` | `3` | Minimum independent donors supporting the model and each focal level or pair. |
 | `MIXED_MODEL_MIN_STUDIES` | `3` | Minimum studies supporting a study random intercept. |
 | `MIXED_MODEL_MIN_REPEATED_CONTEXTS` | `3` | Minimum repeated assay contexts supporting a context random effect. |
-| `MAX_PLOTS` | `200` | Maximum general association plots per scorer. |
+| `MAX_PLOTS` | `400` | Maximum general association plots per scorer. |
 | `RANDOM_STATE` | `42` | Seed for subsetting, embedding, and scoring. |
 | `AUCELL_CHUNK_SIZE` | `1000` | Cells processed in each AUCell block. |
 | `AUCELL_NUM_WORKERS` | `8` | AUCell worker processes per block. |
@@ -272,18 +293,31 @@ Each run is isolated under `<OUT_DIR>/<run-name>`:
 <run-name>/
 ├── scoring/
 │   └── tabula_sapiens_module_scores.csv.gz
+├── expression/
+│   └── tabula_sapiens_gene_expression_percentiles.csv
 └── associations/
     ├── scanpy/
     │   ├── association_tables/
     │   └── association_plots/
     │       ├── mixed_models/
+    │       ├── regressions/
+    │       ├── barplots/
+    │       ├── boxplots/
     │       └── nasp/
     └── aucell/
         ├── association_tables/
         └── association_plots/
             ├── mixed_models/
+            ├── regressions/
+            ├── barplots/
+            ├── boxplots/
             └── nasp/
 ```
+
+The expression percentiles run once per run, outside the scorer loop, over the
+same scored cells; they rerun on resume like the inference stages. See
+[Analysis outputs](../docs/analysis_outputs.md#gene-expression-percentiles)
+for their definition and the replottable association plot data.
 
 Use distinct run names for concurrent inputs. `RESUME=1` validates a score
 completion sidecar (`<score-table>.manifest.json`) against input identity,
@@ -340,3 +374,85 @@ unsupported or failed models remain explicit and are not interpreted as zero
 or as evidence for no association. `association_provenance.csv` ties these
 outputs to the input files, score-generation metadata, resolved features,
 compendium marker-panel hash, and analysis configuration.
+
+## Condition cohorts
+
+`condition_cohorts.py` prepares and analyzes one disease-versus-reference
+population declared by a YAML spec in `configs/condition_cohorts/`.
+`fetch_cohort_input.py` downloads and verifies a spec's input,
+`atlas_calibration.py` compares a finished run's reference arm with a healthy
+atlas, and `target_evidence.py` combines finished runs into assay tiers.
+`condition_cohorts.sh` and `target_evidence.sh` are the PBS wrappers.
+Outputs, estimands and interpretation are documented in the
+`nasp_atlas.analysis.condition_cohorts` module docstrings.
+
+```bash
+# Download the input once; its SHA-256 must match the spec.
+python run_scripts/fetch_cohort_input.py \
+  --spec configs/condition_cohorts/sle_perez_female.yaml --data-dir data/cohorts
+
+# Audit arms, donor support, covariate balance and estimability only.
+python run_scripts/condition_cohorts.py \
+  --spec configs/condition_cohorts/kpmp_sn_v2_living_biopsy.yaml \
+  --data-dir data/cohorts --dry-run
+
+# Full local run; rerunning reuses stages whose request and artifacts match.
+python run_scripts/condition_cohorts.py \
+  --spec configs/condition_cohorts/sle_perez_female.yaml --data-dir data/cohorts
+
+# PBS: inputs are read from ${PROJECT_DIR}/data by file name. One job per
+# spec; FETCH_INPUT=1 downloads and verifies the input on first use.
+qsub -v SPEC=kpmp_sn_v2_living_biopsy.yaml,FETCH_INPUT=1 condition_cohorts.sh
+qsub -v SPEC=sle_perez_female.yaml,FETCH_INPUT=1,CALIBRATION=sle_perez_female_ts_blood_calibration.yaml \
+  condition_cohorts.sh
+qsub -v SPEC=allen_ioa_myeloid.yaml,FETCH_INPUT=1,CALIBRATION=allen_ioa_myeloid_ts_blood_calibration.yaml \
+  condition_cohorts.sh
+qsub -v SPEC=onek1k_pbmc_age.yaml,FETCH_INPUT=1,CALIBRATION=onek1k_pbmc_age_ts_blood_calibration.yaml \
+  condition_cohorts.sh
+qsub -v SPEC=psychad_myeloid_ad.yaml,FETCH_INPUT=1 condition_cohorts.sh
+qsub -v SPEC=psychad_fresh_myeloid_ad.yaml,FETCH_INPUT=1 condition_cohorts.sh
+# Specs that share an input: submit the second job once the first has
+# fetched and verified it (IBDverse compartments; KPMP sensitivity runs).
+qsub -v SPEC=ibdverse_ileum_immune.yaml,FETCH_INPUT=1 condition_cohorts.sh
+qsub -v SPEC=ibdverse_ileum_epithelial_stromal.yaml condition_cohorts.sh
+qsub -v SPEC=kpmp_sn_v2_all_collections.yaml condition_cohorts.sh
+qsub -v SPEC=kpmp_sn_v2_reference_procurement.yaml condition_cohorts.sh
+qsub -v SPEC=kpmp_sn_v2_living_biopsy.yaml,DEVELOPMENT_DONORS_PER_ARM=10 \
+  condition_cohorts.sh
+qsub -v RUNS=kpmp_sn_v2/living_biopsy:sle_perez/female:allen_ioa/myeloid:ibdverse/ileum_immune:ibdverse/ileum_epithelial_stromal:psychad/myeloid_ad:psychad/fresh_myeloid_ad \
+  target_evidence.sh
+DRY_RUN=1 SPEC=sle_perez_female.yaml bash condition_cohorts.sh
+# Internal input read in place (no download): point DATA_DIR at its folder.
+T2D_DATA=/rds/general/user/sho3/projects/lms-scott-raw/live/T2D_REM/Phase_2/objects
+qsub -v SPEC=t2d_rem_adipose_baseline.yaml,DATA_DIR="${T2D_DATA}",AUDIT_ONLY=1 \
+  condition_cohorts.sh
+qsub -v SPEC=t2d_rem_adipose_baseline.yaml,DATA_DIR="${T2D_DATA}" condition_cohorts.sh
+qsub -v SPEC=t2d_rem_adipose_weight_loss.yaml,DATA_DIR="${T2D_DATA}" condition_cohorts.sh
+qsub -v SPEC=t2d_rem_adipose_remission.yaml,DATA_DIR="${T2D_DATA}" condition_cohorts.sh
+```
+
+| `condition_cohorts.sh` variable | Default | Meaning |
+| --- | --- | --- |
+| `SPEC` | required | Spec filename under `configs/condition_cohorts/` or an absolute path |
+| `DATA_DIR` | `${PROJECT_DIR}/data` | Directory holding the spec's `input_filename`, such as an internal object's own folder |
+| `OUT_DIR` | `${PROJECT_DIR}/results/condition_cohorts` | Results root; use a new one to rerun after a compendium update |
+| `FETCH_INPUT` | `0` | Download and verify the spec's input into `DATA_DIR` first (needs outbound HTTPS) |
+| `CALIBRATION` | unset | Calibration spec; runs `atlas_calibration.py` after the cohort run |
+| `SCORERS` | `scanpy:aucell` | Colon-separated scorers; all arms are scored together |
+| `MINIMUM_CELLS`, `MINIMUM_DONORS` | `10`, `3` | Unit support and donors needed per arm |
+| `MINIMUM_STATE_PAIRS` | `6` | Donors with both states for a cell-state contrast |
+| `N_BOOTSTRAP` | `1000` | Donor resamples for the composition split |
+| `AUCELL_CHUNK_SIZE`, `AUCELL_NUM_WORKERS` | `5000`, `1` | AUCell blocks; one worker avoids per-block process start-up |
+| `DEVELOPMENT_DONORS_PER_ARM` | unset | Whole-donor development subset under `<population>_dev<N>` |
+| `VISUALIZATIONS` | `1` | Render every stage's figures |
+| `AUDIT_ONLY` | `0` | Run the metadata audit only |
+| `DRY_RUN` | `0` | Print the worker commands without running them |
+
+| `target_evidence.sh` variable | Default | Meaning |
+| --- | --- | --- |
+| `RUNS` | required | Colon-separated `<cohort_id>/<population_id>` runs under `RUN_ROOT` |
+| `RUN_ROOT` | `${PROJECT_DIR}/results/condition_cohorts` | Results root holding the runs; the output goes there too |
+| `OUTPUT_NAME` | `target_evidence` | Output directory under `RUN_ROOT` |
+| `ANNOTATION_PANEL` | installed panel | Compendium `marker_genes.tsv` with essentiality columns |
+| `ALPHA`, `SIRNA_DETECTION`, `CRISPRI_DETECTION`, `DONOR_FRACTION` | `0.05`, `0.10`, `0.25`, `0.75` | Evidence thresholds |
+| `DRY_RUN` | `0` | Print the worker command without running it |

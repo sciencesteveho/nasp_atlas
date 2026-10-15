@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 
 import pandas as pd
 
-from nasp_atlas.analysis.external_replication.provenance import file_identity
-from nasp_atlas.analysis.external_replication.provenance import request_identity
+from nasp_atlas.analysis.stage_artifacts import file_identity
+from nasp_atlas.analysis.stage_artifacts import publish_stage_tables
+from nasp_atlas.analysis.stage_artifacts import read_stage_manifest
+from nasp_atlas.analysis.stage_artifacts import request_identity
 
 
 __all__ = [
@@ -50,51 +51,6 @@ def write_analysis_artifacts(
     partial.write_text(json.dumps(manifest, indent=2, allow_nan=False) + "\n")
     partial.replace(output_dir / "analysis_manifest.json")
     return output_dir
-
-
-def publish_stage_tables(
-    analysis_dir: Path,
-    request: Mapping[str, object],
-    tables: Mapping[str, pd.DataFrame],
-    *,
-    status: str,
-    manifest_name: str,
-) -> None:
-    """Write every table, then publish the completion manifest atomically.
-
-    Exclusive directory creation claims a single writer; a failed attempt
-    leaves an inspectable directory and needs a new output location.
-    """
-    analysis_dir.mkdir(parents=True, exist_ok=False)
-    for name, table in tables.items():
-        table.to_csv(analysis_dir / name, index=False)
-    record = {
-        "status": status,
-        "request": dict(request),
-        "identity": request_identity(request),
-        "artifacts": {
-            name: file_identity(analysis_dir / name) for name in tables
-        },
-    }
-    partial = analysis_dir / f"{manifest_name}.partial"
-    partial.write_text(json.dumps(record, indent=2, allow_nan=False) + "\n")
-    partial.replace(analysis_dir / manifest_name)
-
-
-def read_stage_manifest(path: Path, *, stage: str) -> dict[str, Any]:
-    """Read a completion manifest or explain why the stage is unusable.
-
-    A stage publishes its manifest last, so a missing or unreadable one means
-    the output is an incomplete or failed attempt and cannot be reused.
-    """
-    try:
-        return json.loads(path.read_text())
-    except (OSError, ValueError) as error:
-        raise ValueError(
-            f"Missing or invalid {stage} manifest: {path}. If this output is "
-            "an incomplete or failed attempt, do not reuse it; write to a new "
-            "output directory. Otherwise check that the path is correct."
-        ) from error
 
 
 def validate_analysis_artifacts(

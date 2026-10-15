@@ -37,9 +37,6 @@ from nasp_atlas.analysis.external_replication.workflows import (
 from nasp_atlas.single_cell.associations import paired
 
 
-__all__ = ["analyze_fixed_score_sensitivity", "validate_fixed_sensitivity"]
-
-
 def analyze_fixed_score_sensitivity(
     *,
     analysis_dir: Path,

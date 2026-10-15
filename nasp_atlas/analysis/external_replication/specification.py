@@ -10,14 +10,6 @@ from typing import Literal
 import yaml  # type: ignore[import]
 
 
-__all__ = [
-    "CohortSpec",
-    "ComparisonSpec",
-    "PopulationSpec",
-    "read_cohort_spec",
-]
-
-
 @dataclass(frozen=True, kw_only=True)
 class ComparisonSpec:
     """Two contexts and required support for one donor-paired estimand."""

@@ -39,19 +39,6 @@ EqtlMergeMode = Literal[
 MIN_UNITS_FOR_TEST: int = 3
 DESCRIPTIVE_UNITS: tuple[StatisticalUnit, ...] = ("cell", "metacell")
 
-__all__ = [
-    "DESCRIPTIVE_UNITS",
-    "MIN_UNITS_FOR_TEST",
-    "Aggregation",
-    "EqtlMergeMode",
-    "FeatureSpec",
-    "FeatureType",
-    "ObsSchema",
-    "StatisticalUnit",
-    "benjamini_hochberg",
-    "metadata_columns",
-]
-
 
 def _statistic_pvalue(result: object) -> tuple[float, float]:
     """Return statistic and p-value from a SciPy test result."""

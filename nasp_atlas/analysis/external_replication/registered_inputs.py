@@ -40,9 +40,6 @@ from nasp_atlas.analysis.external_replication.specification import (
 )
 
 
-__all__ = ["RegisteredPrimary", "prepare_registered_primary"]
-
-
 @dataclass(frozen=True, kw_only=True)
 class RegisteredPrimary:
     """Verified inputs that travel through scoring and donor inference."""

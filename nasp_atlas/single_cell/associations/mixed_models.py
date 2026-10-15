@@ -32,13 +32,6 @@ ContrastMode = Literal[
     "continuous_slope",
 ]
 
-__all__ = [
-    "MixedModelContrast",
-    "MixedModelInferenceResult",
-    "MixedModelSpec",
-    "mixed_model_inference",
-]
-
 
 @dataclass(frozen=True, kw_only=True)
 class MixedModelSpec:

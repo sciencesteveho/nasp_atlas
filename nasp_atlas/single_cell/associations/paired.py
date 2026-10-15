@@ -10,9 +10,6 @@ import pandas as pd
 import scipy.stats as stats  # type: ignore[import]
 
 
-__all__ = ["PairedContrastResult", "paired_feature_contrasts"]
-
-
 @dataclass(frozen=True)
 class PairedContrastResult:
     """Feature estimates and all matched/unmatched unit diagnostics."""

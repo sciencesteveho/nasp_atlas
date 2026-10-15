@@ -8,19 +8,11 @@ import anndata as ad  # type: ignore[import]
 import h5py  # type: ignore[import]
 import numpy as np
 import pandas as pd
-import scipy.sparse as sp  # type: ignore[import]
 from anndata.io import read_elem  # type: ignore[import]
 
 from nasp_atlas.analysis.external_replication.specification import CohortSpec
+from nasp_atlas.single_cell.count_normalization import log_normalize_counts
 from nasp_atlas.single_cell.io import read_h5ad_rows
-
-
-__all__ = [
-    "CohortIntake",
-    "prepare_cohort_counts",
-    "read_cohort_metadata",
-    "select_cohort",
-]
 
 
 @dataclass(frozen=True)
@@ -181,37 +173,19 @@ def prepare_cohort_counts(
         matrix, var = source.layers[layer], source.var
     if not isinstance(var, pd.DataFrame):
         raise TypeError("Selective reading must return in-memory var")
-    if not sp.issparse(matrix):
-        raise TypeError("This cohort workflow requires sparse count storage")
-    counts = sp.csr_matrix(matrix, copy=True)
-    values = counts.data
-    if (
-        not np.isfinite(values).all()
-        or (values < 0).any()
-        or not np.equal(values, np.floor(values)).all()
-    ):
-        raise ValueError(
-            f"Invalid counts in declared source {spec.counts_source}"
-        )
-    totals = np.asarray(counts.sum(axis=1), dtype=float).ravel()
-    if not np.isfinite(totals).all() or (totals <= 0).any():
-        raise ValueError(
-            "Selected cells have nonfinite or zero count libraries"
-        )
-
-    expression = (
-        counts.astype(np.float64)
-        .multiply((target_sum / totals)[:, None])
-        .tocsr()
+    normalized = log_normalize_counts(
+        matrix,
+        target_sum=target_sum,
+        source=f"declared source {spec.counts_source}",
     )
-    expression.data = np.log1p(expression.data)
+
     prepared = ad.AnnData(
-        X=expression,
+        X=normalized.expression,
         obs=selected_obs.copy(),
         var=var.copy(),
-        layers={"counts": counts},
+        layers={"counts": normalized.counts},
     )
-    prepared.obs["normalization_total_counts"] = totals
+    prepared.obs["normalization_total_counts"] = normalized.totals
     prepared.uns["expression_preparation"] = {
         "counts_source": spec.counts_source,
         "normalization": "library_size_log1p",

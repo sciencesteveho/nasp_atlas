@@ -40,9 +40,6 @@ from nasp_atlas.single_cell.associations import paired
 from nasp_atlas.single_cell.visualization import sensors
 
 
-__all__ = ["analyze_replication_sensors", "analyze_sensor_reference"]
-
-
 def analyze_sensor_reference(
     *,
     spec_path: Path,

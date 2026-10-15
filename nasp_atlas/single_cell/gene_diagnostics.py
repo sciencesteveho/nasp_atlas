@@ -18,9 +18,6 @@ from nasp_atlas.single_cell.module_scoring import module_score_name
 from nasp_atlas.single_cell.utils import expression_matrix
 
 
-__all__ = ["GeneDiagnosticResults", "module_gene_diagnostics"]
-
-
 @dataclass(frozen=True)
 class GeneDiagnosticResults:
     """Expression/detection per donor and descriptive gene-score coupling."""

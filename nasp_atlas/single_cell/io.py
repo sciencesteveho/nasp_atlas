@@ -270,6 +270,38 @@ def read_h5ad_rows(
     return adata
 
 
+def read_h5ad_metadata(
+    path: str | Path,
+    *,
+    use_raw_var: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Read obs and var from an h5ad without reading expression matrices.
+
+    Args:
+      path: Source H5AD path.
+      use_raw_var: Read `raw/var`, which describes `raw/X`, instead of `var`.
+
+    Returns:
+      The obs and var DataFrames.
+
+    Raises:
+      KeyError: If `raw/var` is requested but the file has no raw matrix.
+      ValueError: If observation or feature names are not unique.
+    """
+    with h5py.File(path, "r") as h5:
+        if use_raw_var and not _has_group_key(
+            parent=h5, group_key="raw", key="var"
+        ):
+            raise KeyError(f"No raw/var in {path}; use the top-level var")
+        obs = _read_dataframe(h5, "obs")
+        var = _read_dataframe(h5, "raw/var" if use_raw_var else "var")
+    if not obs.index.is_unique or not var.index.is_unique:
+        raise ValueError(
+            f"Observation and feature names must be unique in {path}"
+        )
+    return obs, var
+
+
 def random_cell_subset(
     adata: ad.AnnData,
     *,

@@ -1,0 +1,19 @@
+# AB8: lupus control donors versus Tabula Sapiens blood (10x 3' v3 only,
+# 9 donors). Cell-type matches were declared from labels alone, before any
+# sensor value was compared. Descriptive: donors, chemistry (lupus 10x 3' v2)
+# and processing differ.
+atlas_id: tabula_sapiens
+input_filename: 1c88f927-bcbb-4bb1-9881-281842945a2d.h5ad
+input_sha256: "9ac3d9391bd6211f28454ddd1d7bff0706c286c0cacb909179dd0f9cde68275a"
+tissue: blood
+assays: ["10x 3' v3"]
+gene_symbol_column: feature_name
+cell_types:
+  cM: ["classical monocyte"]
+  ncM: ["non-classical monocyte"]
+  T4: ["CD4-positive, alpha-beta T cell", "naive thymus-derived CD4-positive, alpha-beta T cell"]
+  T8: ["CD8-positive, alpha-beta T cell"]
+  B: ["B cell"]
+  NK: ["natural killer cell"]
+  pDC: ["plasmacytoid dendritic cell"]
+  PB: ["plasma cell"]

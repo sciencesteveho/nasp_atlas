@@ -12,9 +12,6 @@ from nasp_atlas.single_cell.associations import PairedContrastResult
 from nasp_atlas.single_cell.associations import paired_feature_contrasts
 
 
-__all__ = ["estimate_module_contrasts", "resolve_discovery_eligibility"]
-
-
 def estimate_module_contrasts(
     donor_scores: pd.DataFrame,
     measurement_eligibility: pd.DataFrame,

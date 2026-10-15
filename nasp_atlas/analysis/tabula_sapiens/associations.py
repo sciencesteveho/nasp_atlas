@@ -470,7 +470,7 @@ def _association_plot_filename(
     aggregation: str,
     stratum: str | None = None,
 ) -> str:
-    """Build a safe snake_case filename for an association plot.
+    """Build a safe snake_case filename stem for an association plot.
 
     Args:
       kind: Plot kind token, e.g. "regression" or "boxplot".
@@ -481,7 +481,7 @@ def _association_plot_filename(
       stratum: Optional stratum label appended to the filename.
 
     Returns:
-      A filename ending in `.png` with safe filename tokens.
+      A filename stem with safe filename tokens; plotters append `.png`.
     """
     parts = [
         kind,
@@ -492,7 +492,7 @@ def _association_plot_filename(
     ]
     if stratum is not None:
         parts.append(scoring.safe_filename_token(stratum))
-    return "_".join(parts) + ".png"
+    return "_".join(parts)
 
 
 def _scored_module_ids_from_scores(
@@ -565,6 +565,7 @@ def _run_continuous_associations(
     max_plots: int | None,
     stratify_key: str | None,
     analysis_scope: str = "requested_unit",
+    descriptive: bool = False,
 ) -> int:
     """Run continuous regressions and emit per-feature regression plots.
 
@@ -580,6 +581,9 @@ def _run_continuous_associations(
       max_plots: Optional cap on plots emitted across association outputs.
       stratify_key: Optional stratifying column for per-stratum regressions.
       analysis_scope: Label identifying the biological scope of the result.
+      descriptive: Whether one donor can contribute several units, so points
+        are not independent. Rows are then labeled descriptive and plots keep
+        the fit line without a p-value.
 
     Returns:
       Updated number of emitted plots.
@@ -590,6 +594,8 @@ def _run_continuous_associations(
         stratify_key=stratify_key,
     )
     result["analysis_scope"] = analysis_scope
+    if descriptive:
+        result["analysis_role"] = "descriptive"
     regression_tables.append(result)
     for _, row in result.iterrows():
         if bool(row.get("skipped", False)):
@@ -616,7 +622,10 @@ def _run_continuous_associations(
             feature_id=str(row["feature_id"]),
             predictor_key=predictor_key,
             filename=filename,
-            result_row=row,
+            # Without a p-value the plotter draws the fit but no test result.
+            result_row=row.drop(labels="pearson_pvalue")
+            if descriptive
+            else row,
             feature_label=str(row.get("feature_label", row["feature_id"])),
         )
         plot_count += 1
@@ -629,7 +638,7 @@ def _run_continuous_associations(
                 "aggregation": aggregation,
                 "stratum": stratum_label,
                 "analysis_scope": analysis_scope,
-                "path": str(plotter.output_dir / filename),
+                "path": f"{plotter.output_dir / filename}.png",
             }
         )
     return plot_count
@@ -653,6 +662,7 @@ def _run_group_associations(
     group_summary_tables: list[pd.DataFrame],
     plot_count: int,
     max_plots: int | None,
+    descriptive: bool = False,
 ) -> int:
     """Run categorical group tests and optionally emit grouped plots.
 
@@ -673,6 +683,8 @@ def _run_group_associations(
       group_summary_tables: Mutable list of group-summary frames.
       plot_count: Number of plots already emitted.
       max_plots: Optional cap on plots emitted across association outputs.
+      descriptive: Whether donors recur across groups. Rows are then labeled
+        descriptive and plots omit the unpaired-test p-value.
 
     Returns:
       Updated number of emitted plots.
@@ -680,8 +692,11 @@ def _run_group_associations(
     summary = summarize_feature_groups(
         unit_frame, group_key=group_key, schema=schema
     )
-    group_summary_tables.append(summary)
     result = test_feature_groups(unit_frame, group_key=group_key)
+    if descriptive:
+        summary["analysis_role"] = "descriptive"
+        result["analysis_role"] = "descriptive"
+    group_summary_tables.append(summary)
     group_test_tables.append(result)
     if not plot_results:
         return plot_count
@@ -689,7 +704,7 @@ def _run_group_associations(
     is_tissue = group_key == tissue_key
     for feature_id in unit_frame["feature_id"].drop_duplicates():
         subframe = unit_frame[unit_frame["feature_id"] == feature_id]
-        row = _first_omnibus_row(result, feature_id)
+        row = None if descriptive else _first_omnibus_row(result, feature_id)
         if not _plot_allowed(plot_count, max_plots):
             continue
         target = barplot_plotter if is_tissue else plotter
@@ -724,7 +739,7 @@ def _run_group_associations(
                 "statistical_unit": statistical_unit,
                 "aggregation": aggregation,
                 "stratum": None,
-                "path": str(target.output_dir / filename),
+                "path": f"{target.output_dir / filename}.png",
             }
         )
     return plot_count
@@ -867,7 +882,7 @@ def _run_cell_level_descriptive_plots(
                 "statistical_unit": "cell",
                 "aggregation": aggregation,
                 "stratum": None,
-                "path": str(plotter.output_dir / filename),
+                "path": f"{plotter.output_dir / filename}.png",
             }
         )
     return plot_count

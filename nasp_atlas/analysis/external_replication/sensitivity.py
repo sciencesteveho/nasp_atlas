@@ -18,9 +18,6 @@ from nasp_atlas.analysis.external_replication.specification import (
 from nasp_atlas.single_cell.associations import PairedContrastResult
 
 
-__all__ = ["fixed_score_sensitivities", "matched_donor_effects"]
-
-
 def fixed_score_sensitivities(
     donor_scores: pd.DataFrame,
     measurement_eligibility: pd.DataFrame,

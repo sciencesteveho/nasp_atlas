@@ -12,6 +12,7 @@ from typing import Any, Literal
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from matplotlib.axes import Axes
 from matplotlib.colors import Colormap
 from matplotlib.colors import LinearSegmentedColormap
@@ -73,6 +74,27 @@ class _PlotterBase:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.dpi = dpi
+
+    def _save_with_data(
+        self,
+        figure: Figure,
+        displayed: pd.DataFrame,
+        filename: str,
+    ) -> list[Path]:
+        """Save a figure as PNG and vector PDF plus the rows it displays.
+
+        The figure stays open; the caller owns closing it.
+        """
+        paths = []
+        for extension in ("png", "pdf"):
+            path = self.output_dir / f"{filename}.{extension}"
+            figure.savefig(path, dpi=self.dpi)
+            paths.append(path)
+
+        data_path = self.output_dir / f"{filename}_displayed.csv"
+        displayed.to_csv(data_path, index=False)
+        paths.append(data_path)
+        return paths
 
     def _save_figure_and_log(
         self,

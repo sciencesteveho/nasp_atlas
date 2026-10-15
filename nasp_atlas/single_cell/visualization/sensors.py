@@ -11,9 +11,6 @@ from matplotlib.figure import Figure
 from nasp_atlas.visualization import set_matplotlib_publication_parameters
 
 
-__all__ = ["plot_sensor_effects", "plot_sensor_measurements"]
-
-
 def plot_sensor_effects(
     estimates: pd.DataFrame,
     *,

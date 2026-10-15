@@ -72,14 +72,6 @@ _OVERLAP_COLUMNS = (
     "context_shared_genes",
 )
 
-__all__ = [
-    "EvidenceRole",
-    "RoleAssignment",
-    "module_gene_overlap",
-    "pairwise_module_correlations",
-    "relative_nasp_evidence_profiles",
-]
-
 
 def pairwise_module_correlations(
     unit_frame: pd.DataFrame,

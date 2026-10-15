@@ -1,0 +1,67 @@
+cohort_id: allen_ioa
+population_id: myeloid
+source_notes: >-
+  Allen Institute Immunobiology of Aging cohort (Nature 2025,
+  doi:10.1038/s41586-025-09686-5; CELLxGENE collection
+  60a2676d-9f37-46cc-9b02-c7370a53be9c): 10x Flex (probe-based) scRNA-seq of
+  PBMCs from 234 healthy adults aged 40 to 89+, one Day-0 draw each. This
+  population is the "Monocyte and dendritic cells" lineage file (dataset
+  c0ee763d-fc9e-44e1-bd1f-bebcde1240d9), a partition of the primary "All
+  cells" dataset ff4235bb-1cdf-4dcf-a13a-dc4f32244400 (3.76M cells, too large
+  for one job); its cells are flagged is_primary_data false for that reason
+  only and are not filtered on it. CMV is a latent DNA virus of CD14
+  monocytes. Arms come from the author serology column subject.cmv; one
+  Equivocal donor is in no arm. The probe panel measures 18,063 genes, so
+  sensors without probes (RPSA) are reported as not measured. Nine donors
+  aged "89+" (eight CMV-positive) have no exact age and are excluded. CMV
+  positivity is more frequent in Asian donors and in women, so ancestry and
+  sex are covariates, as is the processing batch (17 batch-pools, both arms
+  in each). A sample is one specimen; one donor has two specimens in
+  different batches. Raw counts are in raw/X.
+input_filename: 6f7a06a8-6d30-4cbc-8102-a2af2b31967c.h5ad
+source_url: https://datasets.cellxgene.cziscience.com/6f7a06a8-6d30-4cbc-8102-a2af2b31967c.h5ad
+input_sha256: "67a3b7420a0da6c130e83ef7c6d9d1742ee318ec33660033655cc5081f3ce807"
+counts_source: raw/X
+gene_id_column: _index
+gene_symbol_column: feature_name
+modality: cells
+sample_columns: [specimen.specimenGuid]
+obs_columns:
+  donor_id: donor_id
+  cell_type: AIFI_L2
+  fine_cell_type: AIFI_L3
+  cell_state: AIFI_L3
+  ontology_cell_type: cell_type
+  assay: assay
+  tissue: tissue
+  sex: sex
+  development_stage: development_stage
+  age: sample.subjectAgeAtDraw
+  ancestry: subject.race
+  batch: batch_id
+filters:
+  sex: [female, male]
+condition:
+  column: subject.cmv
+  levels:
+    cmv_negative: [Negative]
+    cmv_positive: [Positive]
+  reference: cmv_negative
+covariates:
+  age_years: {column: age, kind: numeric}
+  sex: {column: sex, kind: categorical}
+  ancestry: {column: ancestry, kind: categorical}
+  batch: {column: batch, kind: categorical}
+contrasts:
+  - {estimand: cmv_positive_vs_negative, target: cmv_positive, reference: cmv_negative, role: primary}
+continuous_contrasts:
+  # Inflammaging: change per decade of age at draw within both serostatus
+  # arms (age is the measurement here, so it is not also a covariate).
+  - {estimand: age_slope, column: age, kind: numeric, arms: [cmv_negative, cmv_positive], step: 10, role: secondary}
+cell_state:
+  # ISG+ versus core CD14 monocytes of the same donor: which sensors move
+  # with the in vivo interferon-response state. ISG+ cells were defined
+  # from interferon-stimulated genes, so ISG sensors are expected to differ.
+  column: cell_state
+  reference: Core CD14 monocyte
+  altered: [ISG+ CD14 monocyte]

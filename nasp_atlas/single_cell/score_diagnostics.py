@@ -11,12 +11,6 @@ from scipy import stats  # type: ignore[import]
 from nasp_atlas.single_cell.associations.core import benjamini_hochberg
 
 
-__all__ = [
-    "compare_module_scorers",
-    "cross_scorer_module_correlations",
-]
-
-
 def compare_module_scorers(
     scores: pd.DataFrame,
     module_ids: Sequence[str],

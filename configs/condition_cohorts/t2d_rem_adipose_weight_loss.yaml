@@ -1,0 +1,74 @@
+cohort_id: t2d_rem
+population_id: adipose_weight_loss
+source_notes: >-
+  Internal T2D_REM Phase 2 adipose-tissue object (not public), on cx3 at
+  lms-scott-raw/live/T2D_REM/Phase_2/objects/t2d_simplified_20260930.h5ad;
+  the same object, studies and sample definition as
+  t2d_rem_adipose_baseline. This population holds both visits (baseline
+  and weightloss) of the weight-loss participants: the T2D study (type 2
+  diabetes, prediabetic participants excluded) and the WL study (taken to
+  be people with obesity without diabetes); lean controls are excluded.
+  Arms are the studies, so each donor stays in one arm. Its purpose is the
+  paired weight-loss change: the within-donor stage (AB5, cell_state)
+  compares each donor's weightloss units with its baseline units of the
+  same cell type, per arm, adjusted for the paired depth difference. Each
+  donor is its own control, so stable donor traits cancel, but anything
+  that changed with the visit (library batch, chemistry) does not; check
+  chemistry by visit before reading it. Donors with one visit leave only
+  that stage. The primary estimand compares that change between arms (T2D
+  minus obese, a difference in differences); visit effects specific to one
+  study's libraries do not cancel there. The arm contrast averages each
+  donor's two visits and is secondary. The baseline population carries the
+  disease contrasts, so leave this population out of target evidence. Raw counts
+  are in layers/raw; var names are gene symbols, with Ensembl IDs in
+  ENSEMBL_ID. Cell types are cell_type_level2; level 1 is kept as lineage
+  and cell_state as the fine cell type.
+input_filename: t2d_simplified_20260930.h5ad
+# Internal data: no public download. Its SHA-256 identifies the file; set it
+# from `sha256sum t2d_simplified_20260930.h5ad` on cx3 before the first run.
+source_url: null
+input_sha256: "SET_FROM_sha256sum_ON_CX3"
+counts_source: layers/raw
+gene_id_column: ENSEMBL_ID
+gene_symbol_column: _index
+modality: nuclei
+sample_columns: [sample, SeqID]
+obs_columns:
+  donor_id: Donor
+  cell_type: cell_type_level2
+  lineage: cell_type_level1
+  fine_cell_type: cell_state
+  assay: Chemistry
+  sex: sex
+  development_stage: Age
+  age: Age
+  timepoint: condition
+obs_constants:
+  tissue: adipose tissue
+filters:
+  condition: [baseline, weightloss]
+  # Drops prediabetic T2D-study participants; WL-study cells have no
+  # remission value and are kept by null. Quote "No"/"Yes": YAML reads them
+  # unquoted as booleans.
+  Remission_2021: ["No", "Yes", null]
+condition:
+  column: study
+  levels:
+    obese: [WL]
+    t2d: [T2D]
+  reference: obese
+covariates:
+  age_years: {column: age, kind: numeric}
+  sex: {column: sex, kind: categorical}
+  chemistry: {column: assay, kind: categorical}
+contrasts:
+  # Visit-averaged group difference.
+  - {estimand: t2d_vs_obese, target: t2d, reference: obese, role: secondary}
+cell_state:
+  # Weight loss within donor: weightloss minus baseline visit, per arm.
+  column: timepoint
+  reference: baseline
+  altered: [weightloss]
+state_contrasts:
+  # Does the weight-loss change differ with diabetes?
+  - {estimand: t2d_vs_obese_weight_loss_change, target: t2d, reference: obese, role: primary}

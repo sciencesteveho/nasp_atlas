@@ -7,7 +7,7 @@ import importlib.metadata
 import inspect
 import json
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import asdict
 from pathlib import Path
 
@@ -21,36 +21,14 @@ from nasp_atlas.analysis.external_replication import cohort
 from nasp_atlas.analysis.external_replication import feature_mapping
 from nasp_atlas.analysis.external_replication import scoring
 from nasp_atlas.analysis.external_replication.specification import CohortSpec
+from nasp_atlas.analysis.stage_artifacts import file_identity
+from nasp_atlas.analysis.stage_artifacts import request_identity
 from nasp_atlas.single_cell import io
 from nasp_atlas.single_cell import module_scoring
 from nasp_atlas.single_cell import utils as expression_utils
 
 
 __all__ = ["file_identity", "request_identity", "scoring_request"]
-
-
-def file_identity(path: Path) -> dict[str, str | int]:
-    """Hash source bytes; fail if a writer changes the file during reading."""
-    before = path.stat()
-    with path.open("rb") as handle:
-        digest = hashlib.file_digest(handle, "sha256").hexdigest()
-    after = path.stat()
-    if (before.st_size, before.st_mtime_ns) != (
-        after.st_size,
-        after.st_mtime_ns,
-    ):
-        raise RuntimeError(f"Input changed during hashing: {path}")
-    return {
-        "path": str(path.resolve()),
-        "bytes": after.st_size,
-        "sha256": digest,
-    }
-
-
-def request_identity(request: Mapping[str, object]) -> str:
-    """Identify a JSON-compatible scientific request without hidden defaults."""
-    payload = json.dumps(request, sort_keys=True, allow_nan=False)
-    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def scoring_request(

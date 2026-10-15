@@ -26,8 +26,6 @@ from nasp_atlas.single_cell.associations import ObsSchema
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["mixed_model_scope_analysis", "write_mixed_model_tables"]
-
 
 def write_mixed_model_tables(
     results: TabulaMixedModelResults,

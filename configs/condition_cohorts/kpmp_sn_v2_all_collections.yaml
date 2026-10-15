@@ -1,0 +1,62 @@
+cohort_id: kpmp_sn_v2
+population_id: all_collections
+source_notes: >-
+  KPMP/HuBMAP Human Kidney Atlas v2.0 single-nucleus RNA-seq, CELLxGENE
+  dataset 7ff0197b-d175-49bf-b4fa-150fe0995d93. Secondary sensitivity
+  population with every collection method and the 88 references whose status
+  is known healthy, adjusted for collection method. Condition effects are
+  identified within collection methods that contain both arms (needle
+  biopsies; tumour and deceased-donor nephrectomies), so they rest on the
+  modelled collection adjustment. Compare with the living-biopsy primary.
+  Condition comes from Conditions.Subtype; unknown-status and non-healthy
+  references are not mapped and are listed in the crosswalk.
+input_filename: 06b8d9c2-0bde-48bd-88d9-730993fc95e2.h5ad
+source_url: https://datasets.cellxgene.cziscience.com/06b8d9c2-0bde-48bd-88d9-730993fc95e2.h5ad
+input_sha256: "3e61b954c8101cd2c1b379cb3f210068177622a83e6e7457d4945292f78f8eab"
+counts_source: raw/X
+gene_id_column: _index
+gene_symbol_column: feature_name
+modality: nuclei
+sample_columns: [library]
+obs_columns:
+  donor_id: donor_id
+  cell_type: SubclassLevel1
+  ontology_cell_type: cell_type
+  assay: assay
+  collection: TissueCollection
+  region: region
+  sex: sex
+  development_stage: development_stage
+  age_bin: Age
+obs_constants:
+  tissue: kidney
+filters:
+  is_primary_data: [true]
+condition:
+  column: Conditions.Subtype
+  levels:
+    reference:
+      - Healthy Reference Tissue
+      - Living Donor Healthy Reference Tissue (KPMP)
+      - Healthy Reference Tissue - Stone
+    ckd:
+      - Diabetic Kidney Disease
+      - Hypertensive Chronic Kidney Disease
+      - Chronic Kidney Disease
+    aki:
+      - Acute Kidney Injury
+      - Acute Kidney Injury - COVID
+    dm_resilient:
+      - Diabetes Mellitus - Resilient
+  reference: reference
+covariates:
+  age_years: {column: age_bin, kind: binned}
+  sex: {column: sex, kind: categorical}
+  assay: {column: assay, kind: categorical}
+  region: {column: region, kind: categorical}
+  collection: {column: collection, kind: categorical}
+contrasts:
+  - {estimand: ckd_vs_reference, target: ckd, reference: reference, role: primary}
+  - {estimand: aki_vs_reference, target: aki, reference: reference, role: primary}
+  - {estimand: aki_vs_ckd, target: aki, reference: ckd, role: secondary}
+  - {estimand: dm_resilient_vs_reference, target: dm_resilient, reference: reference, role: secondary}

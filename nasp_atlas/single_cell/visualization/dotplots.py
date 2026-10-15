@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -319,6 +320,30 @@ class DotplotPlotter(_VisualizationGeneMixin, _PlotterBase):
                 clip_on=False,
                 color="black",
             )
+
+    @staticmethod
+    def _separate_overlapping_headers(
+        hax: Axes,
+        *,
+        gap_points: float = 4.0,
+    ) -> None:
+        """Shift block labels right only as far as needed to stop overlaps.
+
+        Labels stay centered on their blocks unless a narrow block makes
+        adjacent text collide, as in modules with only a few genes.
+        """
+        gap = gap_points * hax.figure.dpi / 72.0
+        to_data = hax.transData.inverted()
+        labels = sorted(hax.texts, key=lambda text: text.get_position()[0])
+        for left, right in itertools.pairwise(labels):
+            overlap = (
+                left.get_window_extent().x1 + gap - right.get_window_extent().x0
+            )
+            if overlap <= 0:
+                continue
+
+            x_display, y_display = hax.transData.transform(right.get_position())
+            right.set_x(to_data.transform((x_display + overlap, y_display))[0])
 
     @staticmethod
     def _draw_dotplot_group_bars(
@@ -1302,6 +1327,7 @@ class DotplotPlotter(_VisualizationGeneMixin, _PlotterBase):
             n_genes=n_genes,
             rotation=0,
         )
+        self._separate_overlapping_headers(header_ax)
 
         ticks = [
             float(tick)

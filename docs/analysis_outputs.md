@@ -36,13 +36,20 @@ The tissue workflow keeps Scanpy and AUCell results separate:
 │   ├── tabula_sapiens_cross_scorer_module_correlations.csv
 │   ├── tabula_sapiens_scorer_concordance.png
 │   ├── NA_SENSORS_specificity_dotplot_by_<key>.csv
+│   ├── <MODULE_ID>_specificity_dotplot_by_<tissue-key>.csv
 │   └── *.png
+├── expression/
+│   ├── tabula_sapiens_gene_expression_percentiles.csv
+│   ├── tabula_sapiens_gene_expression_percentile_contexts.csv
+│   └── tabula_sapiens_gene_expression_percentile_provenance.csv
 └── associations/
     ├── scanpy/
     │   ├── association_tables/
     │   └── association_plots/
     │       ├── mixed_models/
     │       ├── regressions/
+    │       ├── barplots/
+    │       ├── boxplots/
     │       └── nasp/
     └── aucell/
         ├── association_tables/
@@ -74,6 +81,14 @@ display order, `specificity_tau`, `specificity_block` and `peak_group`. A key
 with fewer than two supported groups, such as tissue in a single-tissue run,
 writes the CSV without a figure.
 
+With `plot_modules=True` (PBS: `PLOT_MODULES=1`), every compendium module
+gets the same figure and table by tissue only:
+`<MODULE_ID>_specificity_dotplot_by_<tissue-key>.png`. Each shows the module's
+matched marker genes, using the same rules, support thresholds and colour
+scale as the sensor plots. Like the module UMAPs and heatmaps, it includes
+inverse-arm and context-dependent genes without marking their scoring role. It
+shows where each gene is expressed, not how the module score is computed.
+
 Each enabled scorer writes one module-score UMAP with separate, native-scale
 colorbars (`tabula_sapiens_scanpy_module_umaps.png` or
 `tabula_sapiens_aucell_module_umaps.png`). No plot-only standardization is
@@ -85,6 +100,45 @@ interpreted against that panel's own colorbar.
 Scanpy-module/AUCell-module Spearman correlation used by the square concordance
 heatmap. Off-diagonal correlations can reflect shared genes or biological
 covariation and are not, by themselves, evidence of scorer disagreement.
+
+## Gene expression percentiles
+
+`run_gene_expression_percentiles=True` (PBS: `GENE_EXPRESSION_PERCENTILES=1`,
+the default) ranks every gene in the input once per run, over the scored cells.
+A tissue or fraction selection therefore carries over. The rule is:
+
+1. Each tissue–cell-type context with at least 50 cells and 3 donors is
+   supported. Unsupported or unlabelled contexts are listed but not ranked.
+2. Within each supported context, the mean of the analyzed expression source
+   (`adata.X` unless a layer is requested) is taken over all cells, zeros
+   included.
+3. A gene's percentile is 100 times the fraction of all genes with a strictly
+   lower context mean. Bin = floor(percentile), 0–99, with 99 the most highly
+   expressed genes. Tied genes share the lower bin, so a gene with zero mean
+   is in bin 0.
+4. `median_percentile_bin` is the median over supported contexts, each
+   weighted equally regardless of cell count. With an even number of contexts
+   a median between two bins is rounded up, so every value is a whole bin.
+
+`expression/tabula_sapiens_gene_expression_percentiles.csv` has one row per
+gene in var order. It holds `var_name`, the source `gene_symbol`, the
+`compendium_symbol` used for compendium matching, `median_percentile_bin`,
+`n_contexts` (ranked contexts) and `n_contexts_detected` (contexts with a
+positive mean). Bin 0 with `n_contexts_detected` of 0 means the gene was
+never detected; a low nonzero bin means it was detected but ranks low.
+`..._percentile_contexts.csv` lists every observed context with `n_cells`,
+`n_donors` and `supported`. `..._percentile_provenance.csv` records the input
+h5ad and score-table identities, expression source, thresholds, counts, and
+the compendium panel and aliases used. It is written last, after the other
+two tables.
+
+Percentiles are relative to the genes and contexts of this input. They
+describe typical expression rank across Tabula Sapiens cell populations and are
+not donor-level inference. Contexts are weighted equally, so a gene expressed
+only in a few cell types can have a low median bin despite high expression
+where it occurs. Compare the matching module specificity dot plot before
+treating a low bin as undetectable. The table is computed here for annotating
+the compendium; it never edits the compendium itself.
 
 ## Association tables
 
@@ -102,14 +156,74 @@ stage, available inputs, and model support.
 | `association_mixed_model_variance_components.csv` | Conditional study, donor, repeated-context, and residual variance estimates and fractions when estimable. |
 | `association_mixed_model_diagnostics.csv` | Per-feature formulas, support, exclusions, design rank, optimizer warnings, convergence, software version, and fit status. |
 | `association_mixed_model_availability.csv` | Dataset-level availability of all five planned contrast families, variance decomposition, and the multi-study random-effects structure, including explicit non-estimability reasons. |
-| `association_regression_results.csv` | Retained optional eQTL regressions; this stable table is empty when no eQTL input is requested. |
+| `association_regression_results.csv` | Age regressions (with `run_age_group_associations`) and optional eQTL regressions, distinguished by `analysis_scope`. |
+| `association_age_stability.csv` | Direction and strength of within-tissue and within-tissue–cell-type age slopes across strata. |
+| `association_group_test_results.csv` | Descriptive unpaired tissue and cell-type tests (Welch/ANOVA and Mann–Whitney/Kruskal–Wallis). |
+| `association_group_summary.csv` | Per-group mean, median, spread, unit and donor counts behind the tissue and cell-type plots. |
+| `association_plot_data_donor_tissue.csv.gz` | Every feature's donor–tissue values behind the tissue barplots and within-tissue regressions. |
+| `association_plot_data_donor_tissue_cell_type.csv.gz` | Every feature's donor–tissue–cell-type values behind the cell-type boxplots and pooled age regressions. |
 | `association_eqtl_annotations.csv` | Optional canonical eQTL counts joined to analyzed units, including match status, merge mode, source identifiers, count units, predictor transformation, and input path. |
 | `association_plot_manifest.csv` | Generated association plots and the analysis settings represented by each file. |
 
-The former stratum-wise OLS age, age-stability, tissue-adjusted partial
-correlation, and unpaired categorical-test outputs are not called by the
-Tabula Sapiens workflow. Their questions are covered by the repeated-donor
-models below without treating multiple rows from one donor as independent.
+### Age regressions and tissue/cell-type comparisons
+
+`run_age_group_associations=True` (PBS: `AGE_GROUP_ASSOCIATIONS=1`, the
+default) restores ordinary-least-squares age regressions and grouped
+comparisons as descriptive companions to the mixed models. Nothing is analyzed
+at the donor level, because Tabula Sapiens has only 24 donors and half of them
+contributed a single tissue. Every point is one donor in one tissue
+(`donor_tissue`) or in one tissue–cell-type context
+(`donor_tissue_cell_type`), using the configured `aggregation`.
+
+| `analysis_scope` | Points and role |
+| --- | --- |
+| `pooled_donor_tissue_cell_type` | All donor–tissue–cell-type units; one regression plot per feature. Descriptive. |
+| `within_sex_donor_tissue_cell_type` | The same units split by sex; one plot per feature and sex. Descriptive. |
+| `within_tissue` | Donor–tissue units within each tissue, one point per donor; table only. |
+| `within_tissue_cell_type` | Donor–tissue–cell-type units within each context, one point per donor; table only. Feeds the NASP age-effect figures and `association_age_stability.csv`. |
+
+Tissue barplots use donor–tissue units and cell-type boxplots use
+donor–tissue–cell-type units, both split by sex. A donor can contribute
+several points to a pooled regression and appears in several tissue and
+cell-type groups. Those regressions and unpaired tests are therefore labeled
+`analysis_role = "descriptive"`, and their plots show the fitted line or boxes
+without a p-value. The adjusted repeated-donor mixed models below remain the
+inference for age, tissue and cell-type effects. Pooled slopes also mix tissue
+and cell-type composition with age; prefer the within-context rows and
+`age_by_cell_type` contrasts. The tissue-adjusted partial correlation is no
+longer computed.
+
+### Replot from the saved data
+
+The two `association_plot_data_*.csv.gz` tables hold every feature, not only
+the plotted ones, so any subset of boxes can be redrawn locally:
+
+```python
+import pandas as pd
+
+from nasp_atlas.single_cell.visualization import AssociationPlotter
+
+
+tables = "results/atlas/associations/scanpy/association_tables"
+units = pd.read_csv(
+    f"{tables}/association_plot_data_donor_tissue_cell_type.csv.gz"
+)
+selected = units.loc[
+    units["tissue_in_publication"].eq("Lung")
+    & units["cell_type"].isin(["macrophage", "pulmonary alveolar type 2 cell"])
+]
+AssociationPlotter(output_dir="figures").plot_feature_group_boxplot(
+    selected,
+    feature_id="IFN_I_OUTPUT_score",
+    group_key="cell_type",
+    filename="lung_ifn_output_by_cell_type",
+    stratify_key="sex",
+    stratify_colors={"male": "#d2e7ef", "female": "#f9bebc"},
+)
+```
+
+Use `plot_feature_group_barplot` with the donor–tissue table for tissue bars,
+and `plot_feature_regression(..., predictor_key="age_years")` for age plots.
 
 ### Planned mixed-model analyses
 
@@ -339,9 +453,15 @@ When NASP visualizations are enabled, `association_plots/nasp/` may contain:
 | `nasp_ranked_hypotheses` | Highest-priority context-hypothesis combinations. |
 | `nasp_sensor_output_mismatch` | Sensor-expression and output-module coupling. |
 | `nasp_mechanistic_edge_network` | Prespecified directional hypotheses overlaid with symmetric module-pair correlations. |
+| `nasp_age_effects_by_cell_type`, `nasp_sensor_age_effects_by_cell_type` | Within-tissue–cell-type OLS age slopes for modules and sensor genes. |
+| `nasp_age_effect_consistency_across_cell_types`, `nasp_sensor_age_effect_consistency_across_cell_types` | Direction consistency of those slopes across contexts. |
 
-The regression directory is reserved for explicitly requested cell-level
-descriptive plots. Such plots are QC views, not mixed-model inference.
+The age-effect figures need `run_age_group_associations=True`. With it,
+`regressions/`, `barplots/` and `boxplots/` hold the descriptive age and
+tissue/cell-type plots described above, up to `max_plots` (default 400) per
+scorer; the plot manifest lists the current files. Explicitly requested
+cell-level descriptive plots also go to `regressions/`. All of these are QC and
+exploration views, not mixed-model inference.
 
 ## Scientific interpretation
 
@@ -368,8 +488,9 @@ unless the supported multi-study structure places study above nested donors.
 Cell counts measure precision and filtering support, not biological
 replication.
 
-`statistical_unit` continues to configure retained non-mixed stages such as
-optional eQTL analysis; it does not change this prespecified mixed-model unit.
+`statistical_unit` continues to configure the optional eQTL analysis; it does
+not change this prespecified mixed-model unit or the donor-context units of the
+age and group views.
 The primary estimands are the marginal contrasts and simple slopes in
 `association_mixed_model_contrasts.csv`, not raw treatment-coded coefficients
 or cell-level differences.
@@ -487,3 +608,56 @@ The compact figures in `mechanisms/figures/` export PNG, vector PDF and their
 displayed data. Component overviews prioritize donor-supported contexts and
 use within-gene z-scores across displayed contexts, not cross-gene expression
 comparisons. The complete unscaled values remain in the table.
+
+## Sample-shared and within-sample coupling
+
+`run_sample_coupling=True` (CLI `--sample-coupling`; on by default in PBS as
+`SAMPLE_COUPLING=1`) writes `associations/<scorer>/sample_coupling/`. It asks
+whether a sensor's association with an output program is shared by the cell
+types of one donor's tissue, as a paracrine, circulating, processing or
+ambient signal would be, or differs between cell types within that tissue.
+
+Units are the mixed-model observations: one equally weighted aggregate per
+donor (study-qualified when available), tissue, cell type and assay with at
+least `mixed_model_min_cells` cells. A sample is one donor's tissue. Each
+feature is centered on its tissue–cell-type–assay mean over contexts seen in
+at least `mixed_model_min_donors` donors, so cell-type baselines drive no
+estimate. Units in sparser contexts are counted in the diagnostics, not used.
+
+| File | Contents |
+| --- | --- |
+| `sample_variance_partition.csv` | For every module score and sensor gene, the donor (`independent_donor`), donor–tissue (`donor_tissue_sample`) and residual variance of the centered values, from an intercept-only mixed model. |
+| `sensor_output_sample_coupling.csv` | For every sensor and output module (`IFN_I_OUTPUT`, `NFKB_CYTOKINE_OUTPUT`, `ISR`, `INFLAMMASOME`): `within_sample_slope`, `between_sample_slope` and `sample_contextual_slope` (between minus within), each with a 95% interval, raw p and BH FDR across pairs, plus unit, sample and donor support. A sensor in the output module is `excluded`, not fitted. |
+| `sample_coupling_diagnostics.csv` | Per-feature centering support (input, non-finite, sparse-context and centered units) and per-model fit diagnostics. |
+| `sample_coupling_provenance.csv` | Association provenance plus units, centering contexts, thresholds, output modules and excluded-pair count. |
+| `sample_coupling_manifest.csv` | Stage status and current artifacts; disabled or failed runs list none. |
+| `figures/sensor_output_sample_coupling.{png,pdf}` | With `plot_nasp_visualizations=True`: within- and between-sample slopes per sensor and output module, with 95% intervals; displayed rows in `*_displayed.csv`. |
+| `figures/sample_variance_partition.{png,pdf}` | With `plot_nasp_visualizations=True`: donor, donor–tissue and residual fractions per module and sensor; displayed rows in `*_displayed.csv`. |
+
+Each pair is fitted as `response ~ within + sample_mean` with a donor random
+intercept and a nested sample variance component. `sample_mean` is the
+sensor's mean over the pair's units in the sample and `within` is the
+deviation from it. The sample component is omitted when every donor has one
+sample, as in a single-tissue input; within-sample then means within-donor.
+
+Interpret the three slopes together:
+
+- `within_sample_slope` compares cell types of the same tissue sample. It
+  removes additive sample- and donor-level confounding, such as age, sex,
+  infection, circumstances of death and processing. It does not remove
+  reverse causation (many sensors are interferon-stimulated genes), shared
+  measurement in the same cells, or cell types responding differently to
+  one shared signal. It is not evidence that a sensor drives the output.
+- `between_sample_slope` compares sample means. It includes shared exposures
+  and every donor- or sample-level confounder.
+- A positive `sample_contextual_slope` means the coupling is stronger between
+  samples than within them. That fits a sensor and an output tracking one
+  sample-wide state better than it fits a cell-specific sensing mechanism.
+
+Variance fractions are conditional on the context centering. The residual
+also contains finite-cell sampling noise. Processing and any remaining ambient
+RNA also make a feature vary together within samples. Before attributing a
+shared fraction to inflammation, compare it with modules for which no shared
+inflammatory signal is expected. Slopes use unscaled centered values, so
+contexts with more variation weigh more. P-values are asymptotic Wald tests
+with donors as the independent unit. Treat them as exploratory.

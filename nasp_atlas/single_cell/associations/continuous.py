@@ -14,12 +14,6 @@ from nasp_atlas.single_cell.associations.core import _statistic_pvalue
 from nasp_atlas.single_cell.associations.core import benjamini_hochberg
 
 
-__all__ = [
-    "partial_correlation_controlling_tissue",
-    "regress_features_on_continuous",
-]
-
-
 def _continuous_pair_stats(
     predictor: pd.Series,
     response: pd.Series,

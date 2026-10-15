@@ -20,13 +20,6 @@ from nasp_atlas.analysis.external_replication.result_artifacts import (
 
 REGISTRATION_MANIFEST = "registration_manifest.json"
 
-__all__ = [
-    "Registration",
-    "freeze_registration",
-    "read_registration",
-    "registered_questions",
-]
-
 
 @dataclass(frozen=True)
 class Registration:

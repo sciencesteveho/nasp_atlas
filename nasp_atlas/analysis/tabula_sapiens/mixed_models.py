@@ -18,11 +18,6 @@ from nasp_atlas.single_cell.associations import benjamini_hochberg
 from nasp_atlas.single_cell.associations import mixed_model_inference
 
 
-__all__ = [
-    "TabulaMixedModelResults",
-    "tabula_sapiens_mixed_model_inference",
-]
-
 _INDEPENDENT_UNIT_KEY: str = "__mixed_independent_unit"
 _CONTEXT_UNIT_KEY: str = "__mixed_context_unit"
 _OBSERVATIONAL_UNIT_KEY: str = "__mixed_observational_unit"

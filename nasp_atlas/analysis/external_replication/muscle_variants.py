@@ -41,9 +41,6 @@ from nasp_atlas.analysis.external_replication.workflows import (
 from nasp_atlas.single_cell.associations import paired
 
 
-__all__ = ["rescore_muscle_variants", "validate_muscle_variants"]
-
-
 def rescore_muscle_variants(
     prepared: RegisteredPrimary,
     *,

@@ -70,6 +70,16 @@ def _parse_arguments() -> argparse.Namespace:
             "Independently fit every scored tissue.",
         ),
         (
+            "age-group-associations",
+            True,
+            "Age regressions and tissue/cell-type plots with their data.",
+        ),
+        (
+            "gene-expression-percentiles",
+            True,
+            "Median within-context expression percentile bin of every gene.",
+        ),
+        (
             "donor-sensitivity",
             False,
             "Write donor deletion ranks and paired tissue differences.",
@@ -83,6 +93,11 @@ def _parse_arguments() -> argparse.Namespace:
             "gene-removal-sensitivity",
             False,
             "Rescore dominant-gene and shared-gene deletions.",
+        ),
+        (
+            "sample-coupling",
+            False,
+            "Split sensor-output slopes into within/between-sample parts.",
         ),
     ):
         parser.add_argument(
@@ -220,7 +235,7 @@ def _parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--max-plots",
         type=int,
-        default=200,
+        default=400,
         help="Maximum association plots per scorer.",
     )
     parser.add_argument(
@@ -334,12 +349,15 @@ def main() -> None:
         plot_nasp_visualizations=args.nasp_visualizations,
         mixed_models_combined=args.mixed_models_combined,
         mixed_models_per_tissue=args.mixed_models_per_tissue,
+        run_age_group_associations=args.age_group_associations,
+        run_gene_expression_percentiles=args.gene_expression_percentiles,
         run_donor_sensitivity=args.donor_sensitivity,
         run_gene_diagnostics=args.gene_diagnostics,
         run_gene_removal_sensitivity=args.gene_removal_sensitivity,
         sensitivity_dominant_genes=args.sensitivity_dominant_genes,
         run_mechanism_diagnostics=args.mechanism_diagnostics,
         include_reference_sets=args.reference_sets,
+        run_sample_coupling=args.sample_coupling,
         sensor_specs=args.sensor_specs,
         sensor_panel_path=args.sensor_panel,
     )

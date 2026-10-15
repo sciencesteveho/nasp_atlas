@@ -15,12 +15,6 @@ from nasp_atlas.single_cell.associations.core import _statistic_pvalue
 from nasp_atlas.single_cell.associations.core import benjamini_hochberg
 
 
-__all__ = [
-    "summarize_feature_groups",
-    "test_feature_groups",
-]
-
-
 def summarize_feature_groups(
     unit_frame: pd.DataFrame,
     *,

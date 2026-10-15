@@ -350,6 +350,7 @@ def test_tissue_analysis_resume_reuses_complete_score_table(
         h5ad_path=h5ad_path,
         output_dir=tmp_path / "results",
         run_name="liver",
+        run_gene_expression_percentiles=False,
     )
     checkpoint = scoring_dir / "tabula_sapiens_module_scores.csv.gz"
     saved_scores = pd.read_csv(checkpoint, index_col="obs_name")
@@ -360,6 +361,7 @@ def test_tissue_analysis_resume_reuses_complete_score_table(
         output_dir=tmp_path / "results",
         run_name="liver",
         resume_from_scores=True,
+        run_gene_expression_percentiles=False,
     )
 
     assert checkpoint.stat().st_mtime_ns == timestamp
@@ -401,6 +403,7 @@ def test_tissue_analysis_resume_rebuilds_partial_score_table(
         output_dir=tmp_path / "results",
         run_name="liver",
         resume_from_scores=True,
+        run_gene_expression_percentiles=False,
     )
 
     completed = pd.read_csv(scoring_dir / filename)

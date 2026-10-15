@@ -42,18 +42,6 @@ from nasp_atlas.single_cell.visualization import UmapPlotter
 
 logger = logging.getLogger(__name__)
 
-__all__ = [
-    "module_scoring_outputs",
-    "plot_gene_expression_heatmaps_by_obs",
-    "plot_gene_specificity_dotplots",
-    "plot_reference_score_umaps",
-    "plot_scorer_concordance_by_source",
-    "safe_filename_token",
-    "score_table_obs_metadata",
-    "score_table_provenance",
-    "write_score_tables",
-]
-
 
 class _ScanpyModuleScorer(Protocol):
     """Callable protocol for scanpy module scoring."""

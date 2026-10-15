@@ -12,15 +12,6 @@ import pandas as pd
 from matplotlib.colors import Colormap
 
 
-__all__ = [
-    "UmapPanel",
-    "UmapPanelSpec",
-    "embedding_xy",
-    "is_categorical_obs",
-    "resolve_umap_panel_specs",
-]
-
-
 class UmapPanelSpec(TypedDict, total=False):
     """User-facing specification for one observation-colored UMAP panel.
 

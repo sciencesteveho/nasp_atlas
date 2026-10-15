@@ -1,0 +1,20 @@
+# AB8: OneK1K young donors (19-39) versus Tabula Sapiens blood (10x 3' v3
+# only, up to 9 donors). Cell-type matches were declared from labels alone,
+# before any sensor value was compared. Descriptive: chemistry (OneK1K 10x
+# 3' v2), depth and processing differ.
+atlas_id: tabula_sapiens
+input_filename: 1c88f927-bcbb-4bb1-9881-281842945a2d.h5ad
+input_sha256: "9ac3d9391bd6211f28454ddd1d7bff0706c286c0cacb909179dd0f9cde68275a"
+tissue: blood
+assays: ["10x 3' v3"]
+gene_symbol_column: feature_name
+cell_types:
+  CD14 Mono: ["classical monocyte"]
+  CD16 Mono: ["non-classical monocyte"]
+  NK: ["natural killer cell"]
+  CD4 TCM: ["CD4-positive, alpha-beta T cell"]
+  CD4 Naive: ["naive thymus-derived CD4-positive, alpha-beta T cell"]
+  CD8 TEM: ["CD8-positive, alpha-beta T cell"]
+  B naive: ["B cell"]
+  Plasmablast: ["plasma cell"]
+  pDC: ["plasmacytoid dendritic cell"]

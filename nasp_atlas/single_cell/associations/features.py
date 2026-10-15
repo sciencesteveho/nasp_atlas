@@ -21,12 +21,6 @@ from nasp_atlas.single_cell.sensor_features import sensor_catalog
 from nasp_atlas.single_cell.utils import expression_matrix
 
 
-__all__ = [
-    "build_cell_feature_frame",
-    "resolve_feature_specs",
-]
-
-
 def resolve_feature_specs(
     adata: ad.AnnData,
     scores: pd.DataFrame,

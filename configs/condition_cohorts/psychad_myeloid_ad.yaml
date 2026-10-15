@@ -1,0 +1,57 @@
+cohort_id: psychad
+population_id: myeloid_ad
+source_notes: >-
+  "Plasticity of human microglia and brain perivascular macrophages in aging
+  and Alzheimer's disease" (Nature Genetics 2026,
+  doi:10.1038/s41588-026-02716-6; CELLxGENE collection
+  f6ea32cb-a10e-46ba-ba39-38d469c9cade), dataset "Frozen in silico sorted
+  myeloid single nuclei RNA-seq from human prefrontal cortex"
+  (09642770-9a4c-4fe6-9f45-67e1249adc33): 10x 3' v3 snRNA-seq of
+  dorsolateral prefrontal cortex from the PsychAD cohort, 289,279 myeloid
+  nuclei from 1,469 donors in three brain banks (MSSM, RADC, HBCC). The
+  nuclei are a myeloid partition of PsychAD primary datasets, so all are
+  flagged is_primary_data false for that reason only and are not filtered on
+  it. Arms join the author AD and Control flags: AD (AD = 1, any
+  comorbidity; 560 donors) versus controls without a neuropsychiatric or
+  neurodegenerative diagnosis (AD = 0, Control = 1; 292 donors). The other
+  617 donors (other diagnoses; HBCC donors have no AD call) are in no arm.
+  AD donors are older and more often female, so age, sex, ancestry and
+  brain bank are covariates. A third of AD donors (193) and 56 controls are
+  recorded as "90 year-old and over"; their age is top-coded at 90 rather
+  than dropping them. Each donor's nuclei were split across two multiplexed
+  pools (technical replicates), so a sample is the donor. Cell types are
+  the author myeloid subclasses (homeostatic, adaptive, ADAM and exAM
+  microglia, proliferating microglia, perivascular macrophages); subtypes
+  are kept as fine cell types. Raw counts are in raw/X.
+input_filename: 44e42474-0297-463b-92b0-4b47decf699e.h5ad
+source_url: https://datasets.cellxgene.cziscience.com/44e42474-0297-463b-92b0-4b47decf699e.h5ad
+input_sha256: "12911b2f61c54c5780a44c70aa8e70f7c57a2be4226d30061b454df6b1c586bc"
+counts_source: raw/X
+gene_id_column: _index
+gene_symbol_column: feature_name
+modality: nuclei
+sample_columns: [donor_id]
+obs_columns:
+  donor_id: donor_id
+  cell_type: subclass
+  fine_cell_type: subtype
+  ontology_cell_type: cell_type
+  assay: assay
+  tissue: tissue
+  sex: sex
+  development_stage: development_stage
+  ancestry: Ethnicity
+  brain_bank: Source
+condition:
+  column: [AD, Control]
+  levels:
+    control: ["0.0 | 1.0"]
+    ad: ["1.0 | 0.0"]
+  reference: control
+covariates:
+  age_years: {column: development_stage, kind: development_stage_top_coded}
+  sex: {column: sex, kind: categorical}
+  ancestry: {column: ancestry, kind: categorical}
+  brain_bank: {column: brain_bank, kind: categorical}
+contrasts:
+  - {estimand: ad_vs_control, target: ad, reference: control, role: primary}

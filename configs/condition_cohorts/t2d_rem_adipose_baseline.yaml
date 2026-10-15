@@ -1,0 +1,72 @@
+cohort_id: t2d_rem
+population_id: adipose_baseline
+source_notes: >-
+  Internal T2D_REM Phase 2 adipose-tissue object (not public), on cx3 at
+  lms-scott-raw/live/T2D_REM/Phase_2/objects/t2d_simplified_20260930.h5ad:
+  561,884 cells, 38,606 genes, 94 donors, 160 donor visits in two studies.
+  The T2D study sampled people with type 2 diabetes before (baseline) and
+  after (weightloss) weight loss; Remission_2021 records remission (Yes,
+  No) and NA_-_PreDM marks prediabetic participants. The WL study sampled
+  weight-loss participants without diabetes (taken to be people with
+  obesity; BMI in the object can confirm) before and after weight loss,
+  plus lean controls (Lean). Adipocytes are captured, so the assay is taken
+  to be single-nucleus RNA-seq; confirm with the study team. Donors were
+  multiplexed in pools (pooled_donors) sequenced as libraries (SeqID); a
+  processed sample is one donor visit (sample) within one library, and the
+  10x chemistry (V3, V4) is the assay. This population is the baseline
+  cross-section, one visit per donor: lean controls (24), WL baseline
+  (obese, 25) and T2D baseline (44 minus prediabetic participants, who are
+  excluded). Lean controls exist in the WL study only, so contrasts with
+  the T2D arm also compare studies; the design audit shows whether
+  chemistry separates them. Obese versus lean is therefore the primary
+  contrast that target evidence reads: it is the only disease contrast
+  within one study, and adiposity is the main driver of adipose-tissue
+  inflammation. The T2D contrasts are estimated and reported as secondary.
+  BMI defines the lean and obese arms and is not adjusted. Raw counts are in layers/raw; var names are gene symbols, with
+  Ensembl IDs in ENSEMBL_ID. Cell types are cell_type_level2; level 1 is
+  kept as lineage and cell_state as the fine cell type.
+input_filename: t2d_simplified_20260930.h5ad
+# Internal data: no public download. Its SHA-256 identifies the file; set it
+# from `sha256sum t2d_simplified_20260930.h5ad` on cx3 before the first run.
+source_url: null
+input_sha256: "SET_FROM_sha256sum_ON_CX3"
+counts_source: layers/raw
+gene_id_column: ENSEMBL_ID
+gene_symbol_column: _index
+modality: nuclei
+sample_columns: [sample, SeqID]
+obs_columns:
+  donor_id: Donor
+  cell_type: cell_type_level2
+  lineage: cell_type_level1
+  fine_cell_type: cell_state
+  assay: Chemistry
+  sex: sex
+  development_stage: Age
+  age: Age
+  study: study
+obs_constants:
+  tissue: adipose tissue
+filters:
+  condition: [baseline, Lean]
+  # Drops prediabetic T2D-study participants; WL-study cells have no
+  # remission value and are kept by null. Quote "No"/"Yes": YAML reads them
+  # unquoted as booleans.
+  Remission_2021: ["No", "Yes", null]
+condition:
+  column: [study, condition]
+  levels:
+    lean: ["WL | Lean"]
+    obese: ["WL | baseline"]
+    t2d: ["T2D | baseline"]
+  reference: lean
+covariates:
+  age_years: {column: age, kind: numeric}
+  sex: {column: sex, kind: categorical}
+  chemistry: {column: assay, kind: categorical}
+contrasts:
+  # Within the WL study; the only contrast target evidence reads.
+  - {estimand: obese_vs_lean, target: obese, reference: lean, role: primary}
+  # Both also compare the T2D study with the WL study.
+  - {estimand: t2d_vs_lean, target: t2d, reference: lean, role: secondary}
+  - {estimand: t2d_vs_obese, target: t2d, reference: obese, role: secondary}

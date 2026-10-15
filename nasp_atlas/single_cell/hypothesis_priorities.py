@@ -63,12 +63,6 @@ _HYPOTHESIS_PRIORITY_DESCRIPTIONS: Final[
     ),
 }
 
-__all__ = [
-    "MechanisticEdgeSpec",
-    "expected_module_coupling_report",
-    "rank_nasp_hypotheses",
-]
-
 
 def _hypothesis_priority_label(
     hypothesis: str,

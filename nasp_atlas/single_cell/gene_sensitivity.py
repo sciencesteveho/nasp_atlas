@@ -24,9 +24,6 @@ from nasp_atlas.single_cell.module_scoring import score_scanpy_module
 from nasp_atlas.single_cell.utils import expression_matrix
 
 
-__all__ = ["GeneSensitivityResults", "gene_removal_sensitivity"]
-
-
 @dataclass(frozen=True)
 class GeneSensitivityResults:
     """Derived signatures, context changes and overlap sensitivity."""

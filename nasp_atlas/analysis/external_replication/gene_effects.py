@@ -25,9 +25,6 @@ from nasp_atlas.single_cell.gene_sensitivity import GeneSensitivityResults
 from nasp_atlas.single_cell.module_scoring import ScorerName
 
 
-__all__ = ["estimate_gene_removal_effects", "paired_gene_expression"]
-
-
 def estimate_gene_removal_effects(
     result: GeneSensitivityResults,
     expression: ad.AnnData,

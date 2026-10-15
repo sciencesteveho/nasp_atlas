@@ -54,13 +54,6 @@ from nasp_atlas.analysis.external_replication.workflows import (
 from nasp_atlas.single_cell.associations import paired
 
 
-__all__ = [
-    "finalize_cohort_registration",
-    "reconstruct_discovery_reference",
-    "validate_discovery_artifacts",
-]
-
-
 def reconstruct_discovery_reference(
     *,
     registration_dir: Path,

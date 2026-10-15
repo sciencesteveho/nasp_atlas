@@ -10,14 +10,6 @@ import pandas as pd
 from nasp_compendium.types import GeneModule  # type: ignore[import]
 
 
-__all__ = [
-    "FeatureAlignment",
-    "align_cohort_features",
-    "apply_feature_alignment",
-    "panel_aliases",
-]
-
-
 @dataclass(frozen=True)
 class FeatureAlignment:
     """Annotation crosswalks, shared background and module gene coverage."""

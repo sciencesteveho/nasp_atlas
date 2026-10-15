@@ -17,7 +17,6 @@ from nasp_atlas.analysis.external_replication.feature_mapping import (
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["COMPENDIUM_SYMBOL_COLUMN", "add_compendium_symbol_column"]
 
 # Shared by the scoring and association stages, which must match compendium
 # symbols through the same column.

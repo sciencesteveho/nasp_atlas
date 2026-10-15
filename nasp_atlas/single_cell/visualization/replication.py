@@ -15,16 +15,6 @@ from nasp_compendium.display import humanize_module_name
 from nasp_atlas.visualization import set_matplotlib_publication_parameters
 
 
-__all__ = [
-    "plot_cohort_support",
-    "plot_donor_contrasts",
-    "plot_gene_support",
-    "plot_replication_matrix",
-    "plot_sensitivity_effects",
-    "plot_subtype_extension",
-]
-
-
 def plot_gene_support(
     summary: pd.DataFrame,
     paired_genes: pd.DataFrame,

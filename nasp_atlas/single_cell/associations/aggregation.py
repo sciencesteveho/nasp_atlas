@@ -15,12 +15,6 @@ from nasp_atlas.single_cell.associations.core import _unit_group_keys
 from nasp_atlas.single_cell.associations.core import metadata_columns
 
 
-__all__ = [
-    "aggregate_feature_frame",
-    "aggregate_feature_frame_by_keys",
-]
-
-
 def aggregate_feature_frame(
     cell_frame: pd.DataFrame,
     *,

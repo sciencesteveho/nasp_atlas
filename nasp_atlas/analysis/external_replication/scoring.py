@@ -23,9 +23,6 @@ from nasp_atlas.single_cell.module_scoring import score_aucell_modules
 from nasp_atlas.single_cell.module_scoring import score_scanpy_modules
 
 
-__all__ = ["CohortScores", "aggregate_module_scores", "score_prepared_cohort"]
-
-
 @dataclass(frozen=True)
 class CohortScores:
     """Scores and measurement eligibility, including each declared module."""

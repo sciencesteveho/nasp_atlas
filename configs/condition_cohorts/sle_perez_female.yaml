@@ -1,0 +1,53 @@
+cohort_id: sle_perez
+population_id: female
+source_notes: >-
+  Perez et al., Science 2022 (doi:10.1126/science.abf1970), multiplexed
+  10x 3' v2 scRNA-seq of PBMCs, CELLxGENE dataset
+  218acb0f-9f2f-4f76-b90b-15a4b7c7f629. Patients and controls share most
+  sequencing libraries, so library batch cannot stand in for disease.
+  Females only: 15 of the 17 males are patients, so sex cannot be adjusted
+  for. A sample is one suspension within one processing cohort, because
+  suspensions were sequenced across processing cohorts and cohort 1 holds
+  only controls. Patients are older and more often of Asian ancestry, so
+  age and ancestry are covariates. disease_state (managed, flare, treated)
+  is carried for secondary analyses. Raw counts are in raw/X.
+input_filename: c55dc602-d168-4d15-acc1-5de4f2f5d551.h5ad
+source_url: https://datasets.cellxgene.cziscience.com/c55dc602-d168-4d15-acc1-5de4f2f5d551.h5ad
+input_sha256: "3c0b74d54c03838a49817edce95314e6a4fa048ef35b74d1e697b8b2fd07cc03"
+counts_source: raw/X
+gene_id_column: _index
+gene_symbol_column: feature_name
+modality: cells
+sample_columns: [suspension_uuid, Processing_Cohort]
+obs_columns:
+  donor_id: donor_id
+  cell_type: author_cell_type
+  fine_cell_type: ct_cov
+  ontology_cell_type: cell_type
+  assay: assay
+  tissue: tissue
+  sex: sex
+  development_stage: development_stage
+  ancestry: self_reported_ethnicity
+  processing_cohort: Processing_Cohort
+  disease_state: disease_state
+filters:
+  is_primary_data: [true]
+  sex: [female]
+condition:
+  column: disease
+  levels:
+    control: [normal]
+    sle: [systemic lupus erythematosus]
+  reference: control
+covariates:
+  age_years: {column: development_stage, kind: development_stage}
+  ancestry: {column: ancestry, kind: categorical}
+  processing_cohort: {column: processing_cohort, kind: categorical}
+contrasts:
+  - {estimand: sle_vs_control, target: sle, reference: control, role: primary}
+ifn_strata:
+  arm: sle
+  cell_type: cM
+  quantile: 0.95
+  scorer: scanpy

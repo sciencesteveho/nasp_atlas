@@ -15,13 +15,6 @@ from nasp_atlas.single_cell.associations.paired import paired_feature_contrasts
 from nasp_atlas.single_cell.sensor_features import resolve_sensor_features
 
 
-__all__ = [
-    "paired_sensor_effects",
-    "sensor_donor_expression",
-    "unique_sensor_measurements",
-]
-
-
 def sensor_donor_expression(
     expression: ad.AnnData,
     catalog: pd.DataFrame,

@@ -13,9 +13,6 @@ from nasp_atlas.single_cell.associations import aggregate_feature_frame_by_keys
 from nasp_atlas.single_cell.context_summary import summarize_module_contexts
 
 
-__all__ = ["DonorSensitivityResults", "donor_sensitivity"]
-
-
 @dataclass(frozen=True)
 class DonorSensitivityResults:
     """Individual donors, ranks, deletion replicates, and paired differences."""

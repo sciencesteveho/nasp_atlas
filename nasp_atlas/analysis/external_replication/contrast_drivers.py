@@ -47,13 +47,6 @@ from nasp_atlas.analysis.external_replication.workflows import (
 from nasp_atlas.single_cell.associations import paired
 
 
-__all__ = [
-    "rescore_without_contrast_drivers",
-    "select_contrast_drivers",
-    "validate_contrast_driver_removal",
-]
-
-
 def select_contrast_drivers(
     paired_genes: pd.DataFrame, *, drivers_per_module: int = 2
 ) -> dict[str, tuple[str, ...]]:

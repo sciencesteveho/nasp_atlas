@@ -616,6 +616,47 @@ from nasp_atlas.single_cell.visualization.robustness import RobustnessPlotter
 plotter = RobustnessPlotter("results/robustness/figures")
 plotter.plot_tables(tables, max_rows=8, figsize=(3.5, 3.0), label_width=44)
 ```
+## Sample-coupling figures
+
+The optional sample-coupling stage draws two figures under
+`associations/<scorer>/sample_coupling/figures/` when NASP visualizations are
+enabled. Each exports a 450-dpi PNG, a vector PDF and the displayed rows.
+
+- `sensor_output_sample_coupling`: one panel per output module, with sensors
+  ordered by their IFN-I within-sample slope. Circles are within-sample
+  slopes and diamonds between-sample slopes, with 95% intervals. Filled
+  markers have BH-FDR below 0.05 in their estimand family. A gray connector
+  marks a significant contextual slope (between minus within). Each panel
+  has its own x axis because module scores have module-specific units. The
+  limits come from the central 95% of interval endpoints, so one very sparse
+  sensor cannot compress the others; clipped intervals end in an edge arrow.
+  Sensors in the output module read "in module", unfitted pairs "n.e.".
+- `sample_variance_partition`: stacked donor, donor–tissue and residual
+  fractions for module scores and sensor genes, ordered by the shared
+  fraction. Saved fractions are not renormalized. Hatching marks unallocated
+  variance and features whose model was not estimable.
+
+To replot from saved tables:
+
+```python
+import pandas as pd
+
+from nasp_atlas.single_cell.visualization.sample_coupling import (
+    SampleCouplingPlotter,
+)
+
+stage = "results/<run>/associations/scanpy/sample_coupling"
+plotter = SampleCouplingPlotter(f"{stage}/figures")
+plotter.plot_coupling(
+    pd.read_csv(f"{stage}/sensor_output_sample_coupling.csv"),
+    responses=["IFN_I_OUTPUT", "NFKB_CYTOKINE_OUTPUT"],
+    x_quantile=1.0,
+)
+plotter.plot_variance_partition(
+    pd.read_csv(f"{stage}/sample_variance_partition.csv"), width=3.2
+)
+```
+
 ## Mechanism and reference figures
 
 The optional mechanism stage exports compact PNG/PDF figures plus displayed

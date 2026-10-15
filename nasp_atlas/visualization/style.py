@@ -8,12 +8,6 @@ from matplotlib import pyplot as plt
 from matplotlib.typing import ColorType
 
 
-__all__ = [
-    "darken_color",
-    "set_matplotlib_publication_parameters",
-]
-
-
 def set_matplotlib_publication_parameters() -> None:
     """Set publication parameters with Graphik and sans-serif fallback."""
     font_families = _publication_font_families()

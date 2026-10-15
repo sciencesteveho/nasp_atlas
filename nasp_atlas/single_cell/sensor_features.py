@@ -8,9 +8,6 @@ import pandas as pd
 from nasp_compendium import GeneModules
 
 
-__all__ = ["resolve_sensor_features", "sensor_catalog"]
-
-
 def sensor_catalog(
     *,
     panel_path: str | Path | None = None,

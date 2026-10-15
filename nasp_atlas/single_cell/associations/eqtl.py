@@ -47,14 +47,6 @@ _FEATURE_COLUMNS: tuple[str, ...] = (
     "feature_label",
 )
 
-__all__ = [
-    "associate_features_with_eqtl_counts",
-    "build_eqtl_association_frames",
-    "merge_eqtl_counts",
-    "prepare_eqtl_table",
-    "validate_eqtl_table",
-]
-
 
 def prepare_eqtl_table(
     eqtl_table: pd.DataFrame,

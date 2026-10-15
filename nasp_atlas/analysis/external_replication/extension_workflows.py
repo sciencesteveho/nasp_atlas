@@ -47,13 +47,6 @@ from nasp_atlas.analysis.external_replication.workflows import (
 from nasp_atlas.single_cell.associations import paired
 
 
-__all__ = [
-    "analyze_muscle_extension",
-    "analyze_wells_extension",
-    "validate_extension_artifacts",
-]
-
-
 def analyze_wells_extension(
     primary: RegisteredPrimary, *, output_dir: Path
 ) -> Path:

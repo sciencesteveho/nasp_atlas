@@ -52,9 +52,6 @@ from nasp_atlas.single_cell.module_scoring import ScorerName
 from nasp_atlas.single_cell.module_scoring import module_score_name
 
 
-__all__ = ["analyze_gene_sensitivity", "validate_gene_sensitivity"]
-
-
 def analyze_gene_sensitivity(
     prepared: RegisteredPrimary,
     *,

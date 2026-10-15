@@ -63,12 +63,6 @@ from nasp_atlas.single_cell.module_scoring import ScorerName
 
 logger = logging.getLogger(__name__)
 
-__all__ = [
-    "analyze_primary_cohort",
-    "score_cohort",
-    "validate_scoring_artifacts",
-]
-
 
 def analyze_primary_cohort(
     prepared: RegisteredPrimary,

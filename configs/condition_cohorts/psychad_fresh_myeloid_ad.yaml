@@ -1,0 +1,61 @@
+cohort_id: psychad
+population_id: fresh_myeloid_ad
+source_notes: >-
+  "Plasticity of human microglia and brain perivascular macrophages in aging
+  and Alzheimer's disease" (Nature Genetics 2026,
+  doi:10.1038/s41588-026-02716-6; CELLxGENE collection
+  f6ea32cb-a10e-46ba-ba39-38d469c9cade), dataset "Fresh ex vivo myeloid
+  single cell RNA-seq from human prefrontal cortex"
+  (440da0a0-f321-4f40-9080-bb04031681e5): scRNA-seq of 543,012 myeloid
+  cells sorted fresh from dorsolateral prefrontal cortex at autopsy, 137
+  donors from two brain banks (VA, RS), mostly 10x 3' v3 (16 donors 10x 3'
+  v2). It complements the frozen-nuclei population of the same paper:
+  whole cells detect cytoplasmic transcripts better, but fresh dissociation
+  induces an ex vivo activated microglia state (exAM) that is an artefact of
+  processing. Arms come from the author dx column: Alzheimer's disease (58)
+  versus controls (39); donors with other CNS disorders (40) are in no arm.
+  Age (top-coded at 90: 32 AD donors and 11 controls are recorded as "90
+  year-old and over"), sex, brain bank, assay and post-mortem interval are
+  covariates. A secondary slope per Braak stage within both arms tracks
+  tau pathology. Each donor gave one sample. Cell types are the author
+  myeloid subclasses; subtypes are kept as fine cell types. Raw counts are
+  in raw/X.
+input_filename: 21a0c6d5-658c-434e-a479-1e51504aec5c.h5ad
+source_url: https://datasets.cellxgene.cziscience.com/21a0c6d5-658c-434e-a479-1e51504aec5c.h5ad
+input_sha256: "14b5a4841d10f19785005e6cc5100d4c13de882da5fd078c62219e27915bcc9c"
+counts_source: raw/X
+gene_id_column: _index
+gene_symbol_column: feature_name
+modality: cells
+sample_columns: [donor_id]
+obs_columns:
+  donor_id: donor_id
+  cell_type: subclass
+  fine_cell_type: subtype
+  ontology_cell_type: cell_type
+  assay: assay
+  tissue: tissue
+  sex: sex
+  development_stage: development_stage
+  brain_bank: Source
+  pmi: PMI
+  braak: Braak
+filters:
+  is_primary_data: [true]
+condition:
+  column: dx
+  levels:
+    control: [CTRL]
+    ad: [AD]
+  reference: control
+covariates:
+  age_years: {column: development_stage, kind: development_stage_top_coded}
+  sex: {column: sex, kind: categorical}
+  brain_bank: {column: brain_bank, kind: categorical}
+  assay: {column: assay, kind: categorical}
+  pmi_minutes: {column: pmi, kind: numeric}
+contrasts:
+  - {estimand: ad_vs_control, target: ad, reference: control, role: primary}
+continuous_contrasts:
+  # Tau pathology: change per Braak stage (0-6) within both arms.
+  - {estimand: braak_slope, column: braak, kind: numeric, arms: [control, ad], step: 1, role: secondary}

@@ -48,9 +48,6 @@ from nasp_atlas.single_cell.associations import paired
 from nasp_atlas.single_cell.module_scoring import ScorerName
 
 
-__all__ = ["rescore_balanced_comparison", "validate_balanced_artifacts"]
-
-
 def rescore_balanced_comparison(
     prepared: RegisteredPrimary,
     *,

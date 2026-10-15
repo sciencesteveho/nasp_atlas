@@ -8,11 +8,6 @@ import numpy as np
 import pandas as pd
 
 
-__all__ = [
-    "summarize_module_contexts",
-]
-
-
 def summarize_module_contexts(
     unit_frame: pd.DataFrame,
     *,

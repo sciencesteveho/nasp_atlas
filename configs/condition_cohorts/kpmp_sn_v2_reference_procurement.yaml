@@ -1,0 +1,58 @@
+cohort_id: kpmp_sn_v2
+population_id: reference_procurement
+source_notes: >-
+  KPMP/HuBMAP Human Kidney Atlas v2.0 single-nucleus RNA-seq, CELLxGENE
+  dataset 7ff0197b-d175-49bf-b4fa-150fe0995d93. Healthy reference donors
+  only, compared by how the tissue was obtained. Needle biopsies of living
+  donors are the baseline. The living-donor pre-perfusion contrast tests the
+  assumption behind pooling the two living-biopsy references in the primary
+  population; the nephrectomy and deceased-donor contrasts estimate how
+  surgical and post-mortem procurement shift sensors and IFN, ISR and SASP
+  programs, which matters because Tabula Sapiens donors are deceased.
+  Collection methods also differ in region, age and assay, which are
+  adjusted. A sensitivity analysis, not a disease contrast.
+input_filename: 06b8d9c2-0bde-48bd-88d9-730993fc95e2.h5ad
+source_url: https://datasets.cellxgene.cziscience.com/06b8d9c2-0bde-48bd-88d9-730993fc95e2.h5ad
+input_sha256: "3e61b954c8101cd2c1b379cb3f210068177622a83e6e7457d4945292f78f8eab"
+counts_source: raw/X
+gene_id_column: _index
+gene_symbol_column: feature_name
+modality: nuclei
+sample_columns: [library]
+obs_columns:
+  donor_id: donor_id
+  cell_type: SubclassLevel1
+  ontology_cell_type: cell_type
+  assay: assay
+  region: region
+  sex: sex
+  development_stage: development_stage
+  age_bin: Age
+  subtype: Conditions.Subtype
+obs_constants:
+  tissue: kidney
+filters:
+  is_primary_data: [true]
+  Conditions.Subtype:
+    - Healthy Reference Tissue
+    - Living Donor Healthy Reference Tissue (KPMP)
+    - Healthy Reference Tissue - Stone
+condition:
+  column: TissueCollection
+  levels:
+    needle_biopsy: [Percutaneous Needle Biopsy]
+    living_donor_pre_perfusion: [Transplant Pre-perfusion Biopsy]
+    tumour_nephrectomy: [Nephrectomy]
+    deceased_donor_nephrectomy: [Deceased Donor Nephrectomy]
+    intraoperative_stone: [Intra-operative Biopsy]
+  reference: needle_biopsy
+covariates:
+  age_years: {column: age_bin, kind: binned}
+  sex: {column: sex, kind: categorical}
+  assay: {column: assay, kind: categorical}
+  region: {column: region, kind: categorical}
+contrasts:
+  - {estimand: living_donor_vs_needle, target: living_donor_pre_perfusion, reference: needle_biopsy, role: primary}
+  - {estimand: deceased_donor_vs_needle, target: deceased_donor_nephrectomy, reference: needle_biopsy, role: primary}
+  - {estimand: tumour_nephrectomy_vs_needle, target: tumour_nephrectomy, reference: needle_biopsy, role: secondary}
+  - {estimand: stone_intraoperative_vs_needle, target: intraoperative_stone, reference: needle_biopsy, role: secondary}

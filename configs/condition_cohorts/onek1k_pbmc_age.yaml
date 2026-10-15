@@ -1,0 +1,60 @@
+cohort_id: onek1k
+population_id: pbmc_age
+source_notes: >-
+  OneK1K (Yazar et al., Science 2022, doi:10.1126/science.abf3041; CELLxGENE
+  dataset 3faad104-2ab8-4434-816d-474d8d2641db): 10x 3' v2 scRNA-seq of
+  PBMCs from 981 healthy adults of Northern European ancestry aged 19 to 97
+  (Hobart, Australia), multiplexed in 75 pools of about 13 donors, one pool
+  per donor. Raw counts are in X. There is no disease arm: the arms are
+  pre-specified age groups read from the author age column (young 19-39,
+  108 donors; middle 40-64, 305; old 65-97, 568), chosen before any
+  expression was read so that composition, coupling and IFN adjustment can
+  compare old with young. The primary inflammaging estimand is the age
+  slope per 10 years across all donors; because the arms are a function of
+  age, the slope is not adjusted for arm. Sex and pool are covariates; a
+  sample is the donor, because each donor was sequenced in one pool.
+  Cell types are the Azimuth level-2 labels (predicted.celltype.l2), with
+  the 131 cells labelled Doublet removed; CELLxGENE ontology labels are
+  kept as ontology cell types.
+input_filename: 1e44db10-b572-46cc-adae-dcc7acd44ca6.h5ad
+source_url: https://datasets.cellxgene.cziscience.com/1e44db10-b572-46cc-adae-dcc7acd44ca6.h5ad
+input_sha256: "14c5e9e70007a5e7dc047f7b29405773305e1a7b9791d0789af70649cf6f46ec"
+counts_source: X
+gene_id_column: _index
+gene_symbol_column: feature_name
+modality: cells
+sample_columns: [donor_id]
+obs_columns:
+  donor_id: donor_id
+  cell_type: predicted.celltype.l2
+  ontology_cell_type: cell_type
+  assay: assay
+  tissue: tissue
+  sex: sex
+  development_stage: development_stage
+  age_years: age
+  pool: pool_number
+filters:
+  is_primary_data: [true]
+  predicted.celltype.l2: ["ASDC", "B intermediate", "B memory", "B naive", "CD14 Mono", "CD16 Mono", "CD4 CTL", "CD4 Naive", "CD4 Proliferating", "CD4 TCM", "CD4 TEM", "CD8 Naive", "CD8 Proliferating", "CD8 TCM", "CD8 TEM", "Eryth", "HSPC", "ILC", "MAIT", "NK", "NK Proliferating", "NK_CD56bright", "Plasmablast", "Platelet", "Treg", "cDC1", "cDC2", "dnT", "gdT", "pDC"]
+condition:
+  column: age
+  levels:
+    young: ["19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
+      "31", "32", "33", "34", "35", "36", "37", "38", "39"]
+    middle: ["40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51",
+      "52", "53", "54", "55", "56", "57", "58", "59", "60", "61", "62", "63",
+      "64"]
+    old: ["65", "66", "67", "68", "69", "70", "71", "72", "73", "74", "75", "76",
+      "77", "78", "79", "80", "81", "82", "83", "84", "85", "86", "87", "88",
+      "89", "90", "91", "93", "94", "95", "96", "97"]
+  reference: young
+covariates:
+  sex: {column: sex, kind: categorical}
+  pool: {column: pool, kind: categorical}
+contrasts:
+  - {estimand: old_vs_young, target: old, reference: young, role: primary}
+  - {estimand: middle_vs_young, target: middle, reference: young, role: secondary}
+continuous_contrasts:
+  # Inflammaging: change per 10 years of age across all 981 donors.
+  - {estimand: age_slope, column: age_years, kind: numeric, arms: [young, middle, old], step: 10, role: primary}
