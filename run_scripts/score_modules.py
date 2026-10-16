@@ -236,7 +236,10 @@ def _parse_arguments() -> argparse.Namespace:
         "--max-plots",
         type=int,
         default=400,
-        help="Maximum association plots per scorer.",
+        help=(
+            "Maximum association plots per scorer; cell-type boxes and "
+            "tissue bars take priority over age regressions."
+        ),
     )
     parser.add_argument(
         "--nasp-visualizations",

@@ -843,6 +843,16 @@ def _reconcile_association_outputs(
     ):
         for path in directory.glob("*.png"):
             path.unlink()
+    for path in (layout.nasp_plots_dir / "state_maps").glob("*/*"):
+        if path.is_file() and path.suffix in {".png", ".pdf", ".csv"}:
+            path.unlink()
+    for filename in (
+        "nasp_competence_output_state_map.pdf",
+        "nasp_competence_output_state_map_displayed.csv",
+        "context_display_diagnostics.csv",
+        "state_map_thresholds.csv",
+    ):
+        (layout.nasp_plots_dir / filename).unlink(missing_ok=True)
     for stem in (
         "nasp_mixed_adjusted_cell_type_effects",
         "nasp_mixed_condition_effects_by_cell_type",
@@ -1207,6 +1217,14 @@ def _run_age_group_associations(
         schema=association_plan.obs_schema,
         detection_threshold=association_plan.detection_threshold,
     )
+    _run_group_associations(
+        donor_tissue_frame,
+        profile_unit_frame,
+        workflow_state=workflow_state,
+        layout=layout,
+        association_plan=association_plan,
+        max_plots=max_plots,
+    )
     if association_plan.obs_schema.age_key in profile_unit_frame.columns:
         _run_age_associations(
             donor_tissue_frame,
@@ -1216,14 +1234,14 @@ def _run_age_group_associations(
             association_plan=association_plan,
             max_plots=max_plots,
         )
-    _run_group_associations(
-        donor_tissue_frame,
-        profile_unit_frame,
-        workflow_state=workflow_state,
-        layout=layout,
-        association_plan=association_plan,
-        max_plots=max_plots,
-    )
+    if max_plots is not None and workflow_state.plot_count >= max_plots:
+        logger.warning(
+            "[tabula_sapiens] reached max_plots=%d; plots are prioritized "
+            "as cell-type boxes, tissue bars, then age regressions. "
+            "Increase max_plots for the remaining figures; all association "
+            "tables and donor-context plotting data are still saved.",
+            max_plots,
+        )
 
     for statistical_unit, unit_frame in (
         ("donor_tissue", donor_tissue_frame),
@@ -1336,8 +1354,8 @@ def _run_group_associations(
     schema = association_plan.obs_schema
     sex_key = schema.sex_key
     for group_key, statistical_unit, unit_frame in (
-        (schema.tissue_key, "donor_tissue", donor_tissue_frame),
         (schema.cell_type_key, "donor_tissue_cell_type", profile_unit_frame),
+        (schema.tissue_key, "donor_tissue", donor_tissue_frame),
     ):
         if unit_frame[group_key].dropna().nunique() < 2:
             continue
@@ -1444,6 +1462,7 @@ def _write_association_results(
             output_dir=layout.nasp_plots_dir,
             module_coupling=nasp_results.module_coupling,
             context_summary=nasp_results.context_summary,
+            evidence_profiles=nasp_results.profiles,
             hypothesis_priorities=nasp_results.hypothesis_priorities,
             sensor_output_coupling=nasp_results.sensor_output_coupling,
             regression_results=regression_results,
@@ -1451,6 +1470,7 @@ def _write_association_results(
             mechanistic_edges=nasp_results.mechanistic_edges,
             tissue_key=schema.tissue_key,
             cell_type_key=schema.cell_type_key,
+            donor_key=schema.donor_key,
         )
         workflow_state.manifest.extend(
             {
@@ -1459,11 +1479,15 @@ def _write_association_results(
                 "predictor": None,
                 "statistical_unit": "donor_tissue_cell_type",
                 "aggregation": association_plan.aggregation,
-                "stratum": None,
+                "stratum": (
+                    path.parent.name
+                    if path.parent != layout.nasp_plots_dir
+                    else None
+                ),
                 "analysis_scope": path.stem,
                 "path": str(path),
             }
-            for path in sorted(layout.nasp_plots_dir.glob("*.png"))
+            for path in sorted(layout.nasp_plots_dir.rglob("*.png"))
         )
         if mixed_model_results is not None:
             mixed_paths = plot_tabula_sapiens_mixed_model_inference(

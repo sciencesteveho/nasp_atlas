@@ -7,6 +7,7 @@ import math
 import textwrap
 import warnings
 from collections.abc import Sequence
+from pathlib import Path
 
 import matplotlib.colors as mcolors
 import matplotlib.patheffects as path_effects
@@ -19,6 +20,7 @@ from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 from matplotlib.colors import TwoSlopeNorm
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.patches import FancyArrowPatch
 from matplotlib.patches import FancyBboxPatch
 from matplotlib.text import Text
@@ -193,6 +195,229 @@ class NaspPlotter(_PlotterBase):
             self.output_dir / filename,
             "[plot] NASP module-coupling heatmap -> %s",
         )
+
+    def plot_competence_output_categories(
+        self,
+        contexts: pd.DataFrame,
+        *,
+        filename: str,
+        tissue_key: str = "tissue_in_publication",
+        cell_type_key: str = "cell_type",
+        tissues: Sequence[str] | None = None,
+        ncols: int = 5,
+        panel_size: float = 1.7,
+        max_labels: int = 3,
+        label_seed: int = 0,
+    ) -> list[Path]:
+        """Highlight tissue states against the same grey atlas background.
+
+        Consume the classified context table returned by
+        `summarize_competence_output_states`; no ranks or thresholds are
+        recomputed here. Blue, orange and green indicate high-on-both,
+        response-without-sensing and exploratory sensing-without-response
+        categories, respectively. Other supported contexts are dark grey.
+        These are relative descriptive scores, not inferred biological states.
+
+        Each panel highlights one tissue over all eligible contexts. By
+        default tissues descend by mean active-like score. Label at most one
+        strongest context per category, up to `max_labels`, with deterministic
+        repulsion. `panel_size` is in inches; limits remain [0, 1]. Save PNG,
+        vector PDF and the highlighted rows with their colors and labels.
+        The full background remains in the caller's context diagnostics.
+
+        Example Usage:
+          >>> contexts, thresholds = summarize_competence_output_states(
+          ...     profiles,
+          ... )
+          >>> paths = plotter.plot_competence_output_categories(
+          ...     contexts,
+          ...     filename="competence_output",
+          ...     tissues=["Spleen", "Muscle", "Blood"],
+          ...     ncols=3,
+          ... )
+        """
+        if ncols < 1 or max_labels < 0:
+            raise ValueError("Use ncols >= 1 and max_labels >= 0")
+        if not np.isfinite(panel_size) or panel_size <= 0:
+            raise ValueError("panel_size must be positive and finite")
+        states = (
+            ("active_like", "High on both", "#4c78a8"),
+            ("responsive_like", "Response without sensing", "#f58518"),
+            (
+                "competent_like_exploratory",
+                "Sensing without response",
+                "#54a24b",
+            ),
+        )
+        palette = {state: color for state, _, color in states}
+        palette["other"] = "0.3"
+        self._require_columns(
+            contexts,
+            [
+                tissue_key,
+                cell_type_key,
+                "eligible",
+                "state",
+                "relative_competence",
+                "relative_output",
+                *[state for state, _, _ in states],
+            ],
+            table_name="contexts",
+        )
+        scoped = contexts.loc[contexts["eligible"]].copy()
+        if scoped.empty:
+            self._warn_empty(filename)
+            return []
+        if not scoped["state"].isin(palette).all():
+            raise ValueError(
+                "Eligible contexts contain unknown state categories"
+            )
+        if tissues is None:
+            tissues = (
+                scoped.groupby(tissue_key, observed=True)["active_like"]
+                .mean()
+                .sort_values(ascending=False, kind="stable")
+                .index.tolist()
+            )
+        tissues = list(tissues)
+        if not tissues or len(set(tissues)) != len(tissues):
+            raise ValueError("Select at least one tissue, without duplicates")
+        if missing := set(tissues).difference(scoped[tissue_key]):
+            raise ValueError(
+                f"No eligible contexts for tissues: {sorted(missing)}"
+            )
+
+        set_matplotlib_publication_parameters()
+        ncols = min(ncols, len(tissues))
+        nrows = math.ceil(len(tissues) / ncols)
+        fig, axes = plt.subplots(
+            nrows,
+            ncols,
+            figsize=(
+                panel_size * ncols + 0.3,
+                panel_size * nrows + (0.8 if ncols == 1 else 0.3),
+            ),
+            sharex=True,
+            sharey=True,
+            layout="constrained",
+            squeeze=False,
+        )
+        for ax in axes.flat[len(tissues) :]:
+            ax.remove()
+        displayed = []
+        label_tasks = []
+        for i, (ax, tissue) in enumerate(zip(axes.flat, tissues, strict=False)):
+            ax.scatter(
+                scoped["relative_competence"],
+                scoped["relative_output"],
+                s=4,
+                color="0.82",
+                linewidths=0,
+                zorder=1,
+            )
+            own = scoped.loc[scoped[tissue_key].eq(tissue)].copy()
+            own["panel"] = tissue
+            own["display_color"] = own["state"].map(palette)
+            own["point_label"] = ""
+            ax.scatter(
+                own["relative_competence"],
+                own["relative_output"],
+                s=10,
+                c=own["display_color"].tolist(),
+                edgecolors="white",
+                linewidths=0.3,
+                zorder=3,
+            )
+            texts, target_x, target_y = [], [], []
+            for (state, _, _), (x_text, y_text) in zip(
+                states, ((0.72, 0.93), (0.28, 0.85), (0.72, 0.14)), strict=True
+            ):
+                candidates = own.loc[own["state"].eq(state)].sort_values(
+                    [state, cell_type_key], ascending=[False, True]
+                )
+                if candidates.empty or len(texts) >= max_labels:
+                    continue
+                row = candidates.iloc[0]
+                label = textwrap.fill(str(row[cell_type_key]), width=26)
+                own.loc[candidates.index[0], "point_label"] = label
+                texts.append(
+                    ax.text(
+                        x_text,
+                        y_text,
+                        label,
+                        ha="center",
+                        va="center",
+                        fontsize=5,
+                        zorder=4,
+                    )
+                )
+                target_x.append(row["relative_competence"])
+                target_y.append(row["relative_output"])
+            label_tasks.append((ax, texts, target_x, target_y))
+            ax.set_title(str(tissue).replace("_", " "), fontsize=5, pad=3)
+            ax.set(
+                xlim=(0, 1),
+                ylim=(0, 1),
+                aspect="equal",
+                xticks=[0, 0.5, 1],
+                yticks=[0, 0.5, 1],
+            )
+            ax.spines[["top", "right"]].set_visible(False)
+            if i + ncols >= len(tissues):
+                ax.set_xlabel("Competence")
+                ax.tick_params(labelbottom=True)
+            if i % ncols == 0:
+                ax.set_ylabel("Output")
+            displayed.append(own)
+
+        handles = [
+            Line2D(
+                [],
+                [],
+                marker="o",
+                linestyle="",
+                markersize=3.5,
+                color=color,
+                markeredgecolor="white",
+                markeredgewidth=0.3,
+                label=name,
+            )
+            for _, name, color in (
+                *states,
+                ("other", "Other", "0.3"),
+                ("background", "Other tissues", "0.82"),
+            )
+        ]
+        fig.legend(
+            handles=handles,
+            loc="outside lower center",
+            ncol=5 if ncols >= 3 else ncols,
+            frameon=False,
+            fontsize=5,
+            handletextpad=0.2,
+            columnspacing=1.2,
+        )
+        fig.canvas.draw()
+        for ax, texts, target_x, target_y in label_tasks:
+            if texts:
+                self._adjust_point_labels(
+                    ax,
+                    texts,
+                    point_x=scoped["relative_competence"].to_numpy(),
+                    point_y=scoped["relative_output"].to_numpy(),
+                    target_x=np.asarray(target_x),
+                    target_y=np.asarray(target_y),
+                    seed=label_seed,
+                    force=(0.5, 0.8),
+                    static_force=(0.1, 0.2),
+                    explode_force=(0.1, 0.5),
+                    expand=(1.05, 1.2),
+                    max_move=(10, 10),
+                )
+        try:
+            return self._save_with_data(fig, pd.concat(displayed), filename)
+        finally:
+            plt.close(fig)
 
     def plot_competence_output_state_map(
         self,

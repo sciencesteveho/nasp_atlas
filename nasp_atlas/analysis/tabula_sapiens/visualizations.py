@@ -9,8 +9,12 @@ from typing import cast
 import anndata as ad  # type: ignore[import]
 import pandas as pd
 
+from nasp_atlas.analysis.tabula_sapiens.scoring import safe_filename_token
 from nasp_atlas.cellxgene.metadata import add_development_stage_age_obs
 from nasp_atlas.cellxgene.metadata import category_color_map_from_uns
+from nasp_atlas.single_cell.competence_states import (
+    summarize_competence_output_states,
+)
 from nasp_atlas.single_cell.umap import UmapPanelSpec
 from nasp_atlas.single_cell.visualization import MixedModelPlotter
 from nasp_atlas.single_cell.visualization import NaspPlotter
@@ -192,6 +196,7 @@ def plot_nasp_association_visualizations(
     output_dir: str | Path,
     module_coupling: pd.DataFrame,
     context_summary: pd.DataFrame,
+    evidence_profiles: pd.DataFrame,
     hypothesis_priorities: pd.DataFrame,
     sensor_output_coupling: pd.DataFrame,
     regression_results: pd.DataFrame,
@@ -199,18 +204,24 @@ def plot_nasp_association_visualizations(
     mechanistic_edges: pd.DataFrame,
     tissue_key: str = "tissue_in_publication",
     cell_type_key: str = "cell_type",
+    donor_key: str = "donor_id",
 ) -> None:
     """Plot immediately valid summaries for a tissue or complete atlas.
 
     Correlation figures are descriptive donor-cell-type summaries. Age-effect
     plots use regressions stratified by tissue and cell type, where donors are
-    the independent observations within each stratum. Complete-atlas state
-    maps are faceted by tissue and use tissue-qualified hypothesis labels.
+    the independent observations within each stratum. State maps reproduce
+    the tissue-nomination figure: categorical tissue highlights over a shared
+    grey background, using at least three complete donors and the 80th
+    percentile of each state score across eligible contexts in this scorer.
+    Complete-atlas hypothesis plots use tissue-qualified labels.
 
     Args:
       output_dir: Directory receiving PNG figures.
       module_coupling: Pairwise module-correlation table.
       context_summary: Donor-supported relative NASP context table.
+      evidence_profiles: Relative donor/tissue/cell-type profiles for one
+        scorer, including all five axes and n_cells.
       hypothesis_priorities: Ranked context-hypothesis table.
       sensor_output_coupling: Sensor-gene/output-module coupling table.
       regression_results: Continuous association result table.
@@ -218,12 +229,14 @@ def plot_nasp_association_visualizations(
       mechanistic_edges: Expected mechanistic-edge coupling table.
       tissue_key: Context column identifying tissue.
       cell_type_key: Context column identifying cell type.
+      donor_key: Profile column identifying independent donors.
 
     Example Usage:
       >>> plot_nasp_association_visualizations(
       ...     output_dir="results/association_plots/nasp",
       ...     module_coupling=module_coupling,
       ...     context_summary=context_summary,
+      ...     evidence_profiles=evidence_profiles,
       ...     hypothesis_priorities=hypothesis_priorities,
       ...     sensor_output_coupling=sensor_output_coupling,
       ...     regression_results=regression_results,
@@ -244,12 +257,13 @@ def plot_nasp_association_visualizations(
             filename="nasp_module_coupling_heatmap",
             show_fdr=False,
         )
-    if not context_summary.empty:
-        plotter.plot_competence_output_state_map(
-            context_summary,
-            filename="nasp_competence_output_state_map",
-            label_columns=[cell_type_key],
-            facet_column=tissue_key if multi_tissue else None,
+    if not evidence_profiles.empty:
+        _plot_tissue_state_maps(
+            evidence_profiles,
+            output_dir=Path(output_dir),
+            tissue_key=tissue_key,
+            cell_type_key=cell_type_key,
+            donor_key=donor_key,
         )
     if not hypothesis_priorities.empty:
         plotter.plot_ranked_nasp_hypotheses(
@@ -297,6 +311,68 @@ def plot_nasp_association_visualizations(
             mechanistic_edges,
             filename="nasp_mechanistic_edge_network",
             show_fdr=False,
+        )
+
+
+def _plot_tissue_state_maps(
+    profiles: pd.DataFrame,
+    *,
+    output_dir: Path,
+    tissue_key: str,
+    cell_type_key: str,
+    donor_key: str = "donor_id",
+    min_donors: int = 3,
+    high_quantile: float = 0.8,
+    max_labels: int = 3,
+    dpi: int = 450,
+) -> None:
+    """Render the nomination overview and tissue panels from one scorer."""
+    contexts, thresholds = summarize_competence_output_states(
+        profiles,
+        tissue_key=tissue_key,
+        cell_type_key=cell_type_key,
+        donor_key=donor_key,
+        min_donors=min_donors,
+        high_quantile=high_quantile,
+    )
+    blocks = list(contexts.groupby(tissue_key, observed=True))
+    tokens = [safe_filename_token(str(tissue)) for tissue, _ in blocks]
+    if len(set(tokens)) != len(tokens):
+        raise ValueError("Tissue names collide in state-map output paths")
+
+    plotter = NaspPlotter(output_dir, dpi=dpi)
+    stem = "nasp_competence_output_state_map"
+    # Remove only owned maps, including stale panels that lost donor support.
+    for directory in [output_dir, *(output_dir / "state_maps").glob("*")]:
+        if not directory.is_dir():
+            continue
+        for suffix in (".png", ".pdf", "_displayed.csv"):
+            (directory / f"{stem}{suffix}").unlink(missing_ok=True)
+        (directory / "context_display_diagnostics.csv").unlink(missing_ok=True)
+    contexts.to_csv(output_dir / "context_display_diagnostics.csv", index=False)
+    thresholds.to_csv(output_dir / "state_map_thresholds.csv", index=False)
+    plotter.plot_competence_output_categories(
+        contexts,
+        filename=stem,
+        tissue_key=tissue_key,
+        cell_type_key=cell_type_key,
+        max_labels=max_labels,
+    )
+    for token, (tissue, block) in zip(tokens, blocks, strict=True):
+        destination = output_dir / "state_maps" / token
+        plotter = NaspPlotter(destination, dpi=dpi)
+        block.to_csv(
+            destination / "context_display_diagnostics.csv", index=False
+        )
+        if not block["eligible"].any():
+            continue
+        plotter.plot_competence_output_categories(
+            contexts,
+            filename=stem,
+            tissue_key=tissue_key,
+            cell_type_key=cell_type_key,
+            tissues=[str(tissue)],
+            max_labels=max_labels,
         )
 
 

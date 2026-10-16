@@ -32,6 +32,9 @@ from nasp_atlas.single_cell.associations import (
 from nasp_atlas.single_cell.associations import summarize_feature_groups
 from nasp_atlas.single_cell.associations import test_feature_groups
 from nasp_atlas.single_cell.associations import validate_eqtl_table
+from nasp_atlas.single_cell.competence_states import (
+    summarize_competence_output_states,
+)
 from nasp_atlas.single_cell.config import EmbeddingConfig
 from nasp_atlas.single_cell.context_summary import summarize_module_contexts
 from nasp_atlas.single_cell.donor_sensitivity import DonorSensitivityResults
@@ -150,6 +153,7 @@ __all__ = [
     "score_scanpy_modules",
     "snake_case",
     "split_anndata_by_obs",
+    "summarize_competence_output_states",
     "summarize_continuous_association_stability",
     "summarize_feature_groups",
     "summarize_module_contexts",

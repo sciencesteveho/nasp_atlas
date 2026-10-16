@@ -152,7 +152,30 @@ Common options:
 | `--subset-fraction 0.1` | Deterministic exploratory cell subset. |
 | `--no-plot-modules` | Skip per-module marker plots. |
 | `--no-nasp-visualizations` | Skip the fixed mixed-model and descriptive NASP figure sets; model tables are still written. |
-| `--max-plots 400` | Cap general association plots per scorer. |
+| `--max-plots 400` | Cap general association plots per scorer: cell-type boxes first, then tissue bars, then age regressions. All result tables and plotting data are saved even when the cap is reached. |
+
+Competence/output state maps use the tissue-nomination figure iteration:
+each tissue is highlighted over the same grey background of eligible contexts.
+An overview is saved at
+`associations/<scorer>/association_plots/nasp/nasp_competence_output_state_map.png`,
+with individual panels under `nasp/state_maps/<tissue>/`. Both have a vector
+PDF and displayed-data CSV; PNGs use 450 dpi. Panels label the strongest
+context in each colored category (at most three labels).
+
+Coordinates average the saved relative axes over complete donor profiles
+(all five axes finite and at least one cell); contexts need at least three
+complete donors. Colors use the development figure's scores: blue for high
+on both (`min(C, O)`), orange for response without sensing
+(`max(O-C, 0) * O`), green for exploratory sensing without response
+(`max(C-O, 0) * C`), and dark grey for Other. Scores must be positive and at
+least their 80th percentile across eligible contexts in that scorer's run;
+overlapping flags prioritize blue, then orange, then green. These are
+descriptive nominations, not evidence of biological activation.
+`nasp/state_map_thresholds.csv` records the formulas and cutoffs;
+`nasp/context_display_diagnostics.csv` retains all contexts, including those
+with insufficient complete donors. The manifest includes overview and tissue
+PNGs. This reproduces `development/rerender_nomination_overview.py` without
+depending on development files or its manually selected labels.
 
 `--detection-threshold` must be finite. `--mixed-model-min-cells` must be at
 least 1. The donor, study, and repeated-context thresholds must each be at
