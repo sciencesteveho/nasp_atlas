@@ -3,7 +3,7 @@ population_id: all_collections
 source_notes: >-
   KPMP/HuBMAP Human Kidney Atlas v2.0 single-nucleus RNA-seq, CELLxGENE
   dataset 7ff0197b-d175-49bf-b4fa-150fe0995d93. Secondary sensitivity
-  population with every collection method and the 88 references whose status
+  population with every collection method and the 72 references whose status
   is known healthy, adjusted for collection method. Condition effects are
   identified within collection methods that contain both arms (needle
   biopsies; tumour and deceased-donor nephrectomies), so they rest on the

@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 from nasp_compendium import GeneModules  # type: ignore[import]
 
+from nasp_atlas.analysis.condition_cohorts.cell_states import donor_state_pairs
 from nasp_atlas.analysis.condition_cohorts.composition import (
     ConditionComposition,
 )
@@ -23,6 +24,7 @@ from nasp_atlas.analysis.condition_cohorts.specification import (
     ConditionCohortSpec,
 )
 from nasp_atlas.analysis.condition_cohorts.units import SENSOR_MEASURES
+from nasp_atlas.analysis.condition_cohorts.units import UNIT_KEYS
 from nasp_atlas.analysis.condition_cohorts.units import ConditionUnits
 from nasp_atlas.single_cell.module_scoring import ScorerName
 from nasp_atlas.single_cell.module_scoring import module_score_name
@@ -54,6 +56,8 @@ class CohortResults:
       states: AB5 within-donor state contrasts, when declared.
       state_differences: Arm differences in the AB5 state difference, when
         the spec declares state contrasts.
+      state_units: Units split by the declared cell state, such as visit,
+        when the spec declares one.
     """
 
     design: ConditionDesign
@@ -66,6 +70,7 @@ class CohortResults:
     composition: ConditionComposition
     states: pd.DataFrame | None
     state_differences: pd.DataFrame | None
+    state_units: ConditionUnits | None
 
 
 def plot_condition_figures(
@@ -77,6 +82,7 @@ def plot_condition_figures(
     output_dir: Path,
     ifn_scorer: ScorerName,
     minimum_donors: int,
+    minimum_state_pairs: int,
     random_state: int,
     umap_modules: tuple[str, ...] = ("IFN_I_OUTPUT", "NFKB_CYTOKINE_OUTPUT"),
 ) -> list[Path]:
@@ -93,6 +99,24 @@ def plot_condition_figures(
         arms=spec.condition.arms,
         minimum_donors=minimum_donors,
     )
+    paths += condition.plot_donor_contrasts(
+        _donor_levels(results.units, scorer=ifn_scorer),
+        results.units.sensor_mapping,
+        comparisons=[
+            (contrast.estimand, contrast.target, contrast.reference)
+            for contrast in spec.contrasts
+        ],
+        scorer=ifn_scorer,
+        minimum_donors=minimum_donors,
+    )
+    if results.state_units is not None:
+        paths += _state_contrasts(
+            condition,
+            results.state_units,
+            spec,
+            scorer=ifn_scorer,
+            minimum_pairs=minimum_state_pairs,
+        )
     paths += _split_umaps(
         condition,
         prepared_h5ad,
@@ -120,6 +144,108 @@ def _design_figures(
     return plotter.plot_arm_support(
         results.design.arm_support, minimum_donors=minimum_donors
     ) + plotter.plot_covariate_balance(results.design.covariate_balance)
+
+
+def _donor_levels(
+    units: ConditionUnits,
+    *,
+    scorer: ScorerName,
+) -> pd.DataFrame:
+    """Average each donor's supported units per cell type and feature.
+
+    The unweighted unit mean, as in the AB1 donor regression. Sensors keep
+    present and undetected units, since zero is a measured value.
+    """
+    metadata = units.metadata.loc[
+        units.metadata["supported"].astype(bool), [*UNIT_KEYS, "condition"]
+    ]
+    features = units.features
+    selected = (
+        features["feature_type"].eq("gene_expression")
+        & features["status"].isin(["present", "undetected"])
+    ) | (
+        features["feature_type"].eq("module_score")
+        & features["scorer"].eq(scorer)
+    )
+
+    rows = features.loc[
+        selected, [*UNIT_KEYS, "feature_type", "feature_label", "feature_value"]
+    ].merge(metadata, on=list(UNIT_KEYS), validate="many_to_one")
+    return (
+        rows.groupby(
+            [
+                "cell_type",
+                "feature_type",
+                "feature_label",
+                "condition",
+                "donor_id",
+            ],
+            observed=True,
+        )["feature_value"]
+        .mean()
+        .rename("value")
+        .reset_index()
+        .rename(columns={"condition": "group"})
+    )
+
+
+def _state_contrasts(
+    plotter: ConditionPlotter,
+    units: ConditionUnits,
+    spec: ConditionCohortSpec,
+    *,
+    scorer: ScorerName,
+    minimum_pairs: int,
+) -> list[Path]:
+    """Plot within-donor state changes per arm, and their arm differences.
+
+    Uses the AB5 donor pairs (cell-weighted, both states required) without
+    the depth adjustment, and the AB5 pair minimum.
+    """
+    if spec.cell_state is None:
+        raise ValueError("State contrasts need a declared cell_state")
+    states = spec.cell_state
+
+    pairs = donor_state_pairs(units, states)
+    pairs = pairs.loc[
+        pairs["feature_type"].eq("gene_expression")
+        | (
+            pairs["feature_type"].eq("module_score")
+            & pairs["scorer"].eq(scorer)
+        )
+    ]
+    donors = pairs.rename(
+        columns={"condition": "group", "difference": "value"}
+    )[
+        [
+            "cell_type",
+            "feature_type",
+            "feature_label",
+            "group",
+            "donor_id",
+            "value",
+        ]
+    ]
+
+    comparisons: list[tuple[str, str, str | None]] = [
+        (f"state_{arm}_altered_vs_reference", arm, None)
+        for arm in spec.condition.arms
+    ]
+    comparisons += [
+        (contrast.estimand, contrast.target, contrast.reference)
+        for contrast in spec.state_contrasts
+    ]
+    return plotter.plot_donor_contrasts(
+        donors,
+        units.sensor_mapping,
+        comparisons=comparisons,
+        scorer=scorer,
+        minimum_donors=minimum_pairs,
+        value_name=(
+            f"within-donor {' / '.join(states.altered)} - {states.reference} "
+            "change"
+        ),
+    )
 
 
 def _split_umaps(

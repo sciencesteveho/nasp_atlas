@@ -1,0 +1,66 @@
+cohort_id: allen_ioa
+population_id: b_plasma
+source_notes: >-
+  Allen Institute Immunobiology of Aging cohort (Nature 2025,
+  doi:10.1038/s41586-025-09686-5; CELLxGENE collection
+  60a2676d-9f37-46cc-9b02-c7370a53be9c): 10x Flex (probe-based) scRNA-seq of
+  PBMCs from 234 healthy adults aged 40 to 89+, one Day-0 draw each. This
+  population is the "B and plasma cells" lineage file (dataset
+  b287b8e5-7ee2-428c-8f5f-7c4c8e1baeed, 455,893 cells), a partition of the
+  primary "All cells" dataset ff4235bb-1cdf-4dcf-a13a-dc4f32244400; its cells
+  are flagged is_primary_data false for that reason only and are not filtered
+  on it. B cells express TLR7 and TLR9 and respond to nucleic acids directly;
+  CMV effects are expected to be smaller than in T and NK cells. Arms,
+  covariates and exclusions are those of allen_ioa_myeloid: arms come from
+  the author serology column subject.cmv and one Equivocal donor is in no
+  arm; nine donors aged "89+" have no exact age and are excluded; age, sex,
+  ancestry and processing batch (17 batch-pools) are covariates; a sample is
+  one specimen. Sensors without probes are reported as not measured. Raw
+  counts are in raw/X.
+input_filename: a3d8cef9-0194-4953-be3a-930adfadb139.h5ad
+source_url: https://datasets.cellxgene.cziscience.com/a3d8cef9-0194-4953-be3a-930adfadb139.h5ad
+input_sha256: "b07ec2e668d06cd993c3f7306e37f331b8feb40509e0a3a67a37174c522f372f"
+counts_source: raw/X
+gene_id_column: _index
+gene_symbol_column: feature_name
+modality: cells
+sample_columns: [specimen.specimenGuid]
+obs_columns:
+  donor_id: donor_id
+  cell_type: AIFI_L2
+  fine_cell_type: AIFI_L3
+  cell_state: AIFI_L3
+  ontology_cell_type: cell_type
+  assay: assay
+  tissue: tissue
+  sex: sex
+  development_stage: development_stage
+  age: sample.subjectAgeAtDraw
+  ancestry: subject.race
+  batch: batch_id
+filters:
+  sex: [female, male]
+condition:
+  column: subject.cmv
+  levels:
+    cmv_negative: [Negative]
+    cmv_positive: [Positive]
+  reference: cmv_negative
+covariates:
+  age_years: {column: age, kind: numeric}
+  sex: {column: sex, kind: categorical}
+  ancestry: {column: ancestry, kind: categorical}
+  batch: {column: batch, kind: categorical}
+contrasts:
+  - {estimand: cmv_positive_vs_negative, target: cmv_positive, reference: cmv_negative, role: primary}
+continuous_contrasts:
+  # Inflammaging: change per decade of age at draw within both serostatus
+  # arms (age is the measurement here, so it is not also a covariate).
+  - {estimand: age_slope, column: age, kind: numeric, arms: [cmv_negative, cmv_positive], step: 10, role: secondary}
+cell_state:
+  # ISG+ versus core naive B cells of the same donor (naive B cell type only).
+  # ISG+ cells were defined from interferon-stimulated genes, so ISG sensors
+  # are expected to differ.
+  column: cell_state
+  reference: "Core naive B cell"
+  altered: ["ISG+ naive B cell"]

@@ -49,7 +49,7 @@ def contrast_cell_states(
       reference), HC3 error, t interval, raw and BH p-values, pairs, fit
       statistics, status and reason.
     """
-    pairs = _donor_pairs(state_units, states)
+    pairs = donor_state_pairs(state_units, states)
 
     records = []
     for (arm, cell_type, *feature), group in pairs.groupby(
@@ -125,7 +125,7 @@ def contrast_state_differences(
       reference difference in state differences), HC3 error, t interval,
       raw and BH p-values, pairs per arm, fit statistics, status and reason.
     """
-    pairs = _donor_pairs(state_units, states)
+    pairs = donor_state_pairs(state_units, states)
 
     records = []
     for contrast in contrasts:
@@ -185,13 +185,20 @@ def contrast_state_differences(
     return adjust_fdr_within(effects, ("estimand", "feature_type", "scorer"))
 
 
-def _donor_pairs(
+def donor_state_pairs(
     state_units: ConditionUnits,
     states: CellStateSpec,
 ) -> pd.DataFrame:
     """Return each donor's altered-minus-reference difference per feature.
 
     Only supported units of a declared state with a measured feature enter.
+    Within a donor and cell type, each state's units are pooled with cell
+    weights; donors without both states are left out.
+
+    Returns:
+      One row per arm (`condition`), donor, cell type and feature with the
+      paired `difference` and the paired `depth_difference` in log median
+      genes detected.
     """
     groups = {
         states.reference: "reference",

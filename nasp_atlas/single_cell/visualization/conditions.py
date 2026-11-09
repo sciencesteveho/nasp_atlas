@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+import textwrap
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -18,6 +19,8 @@ from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from nasp_compendium.display import humanize_module_name  # type: ignore[import]
 
+from nasp_atlas.single_cell.utils import dedupe_stem
+from nasp_atlas.single_cell.utils import snake_case
 from nasp_atlas.single_cell.visualization.style import _PlotterBase
 from nasp_atlas.visualization import set_matplotlib_publication_parameters
 
@@ -237,6 +240,307 @@ class ConditionPlotter(_PlotterBase):
                 )
 
                 return self._save_with_data(figure, shown, filename)
+            finally:
+                plt.close(figure)
+
+    def plot_donor_contrasts(
+        self,
+        donors: pd.DataFrame,
+        sensor_mapping: pd.DataFrame,
+        *,
+        comparisons: Sequence[tuple[str, str, str | None]],
+        scorer: str,
+        minimum_donors: int = 3,
+        value_name: str = "donor level",
+        filename_prefix: str = "donor_contrast",
+        column_width: float = 0.11,
+        row_height: float = 0.1,
+        max_dot_size: float = 30.0,
+        color_quantile: float = 0.98,
+        color_limits: tuple[float, float] | None = None,
+        colorbar_length: float = 0.9,
+    ) -> list[Path]:
+        """Plot every sensor and module by cell type, donors as replicates.
+
+        Draws one figure per comparison. Rows are every sensor in
+        `sensor_mapping`, grouped as DNA, DNA + RNA and RNA sensors, then
+        every module; columns are cell types. Colour is the mean donor value
+        of `target` minus that of `reference`, in log1p CP10k for sensors and
+        `scorer` score units for modules. Dot area is how consistently the
+        donors follow that difference: Cliff's delta, the share of
+        target-reference donor pairs ordered as the means are minus the share
+        ordered against them (ties count as neither). A comparison whose
+        reference is None reads `donors` values as within-donor changes and
+        compares them with zero: colour is the mean change and dot area the
+        share of donors changing in its direction minus the share changing
+        against it. Separation against the mean's direction draws only a
+        pinpoint (the CSV keeps the signed value), so a mean carried by a few
+        donors shows colour without area; every measured cell keeps at least
+        that pinpoint, so an empty cell means no value. Descriptive only: no
+        covariates, no test.
+
+        Cell types need `minimum_donors` donors in each compared group;
+        others are named in the title and kept in the CSV. Sensors without a
+        usable source gene are grey and labelled, and a cell whose donors
+        are all zero gets a cross, never a no-difference dot. Each panel's
+        colour limit is the `color_quantile` of absolute differences across
+        every comparison of the call, so comparisons and cell types are
+        directly comparable; values beyond it are clipped in colour only.
+
+        Args:
+          donors: One row per `cell_type`, `feature_type` ("gene_expression"
+            or "module_score"), `feature_label`, `group` and `donor_id`,
+            with the donor's `value`.
+          sensor_mapping: `units/sensor_mapping.csv` rows.
+          comparisons: (name, target, reference) per figure; a None
+            reference compares within-donor changes in `target` with zero.
+          scorer: Scorer of the module rows, for labels.
+          minimum_donors: Donors needed per compared group in a cell type.
+          value_name: What one donor value is, for the colour bar.
+          filename_prefix: Output stems are `<prefix>_<name>`.
+          column_width: Inches per cell type.
+          row_height: Inches per feature row.
+          max_dot_size: Area in points squared at separation 1.
+          color_quantile: Quantile of absolute differences used as each
+            panel's colour limit (0.5 to 1).
+          color_limits: Fixed (sensor, module) colour limits; overrides
+            `color_quantile`.
+          colorbar_length: Inches of each colour bar, at most 90% of its
+            panel's height.
+
+        Returns:
+          Paths of the saved files, or an empty list without a drawable
+          comparison.
+
+        Example Usage:
+          >>> paths = plotter.plot_donor_contrasts(
+          ...     donors, sensor_mapping,
+          ...     comparisons=[("sle_vs_control", "sle", "control")],
+          ...     scorer="scanpy", column_width=0.12, max_dot_size=18.0,
+          ... )
+        """
+        _validate_geometry(
+            column_width=column_width,
+            row_height=row_height,
+            max_dot_size=max_dot_size,
+            colorbar_length=colorbar_length,
+        )
+        if not 0.5 <= color_quantile <= 1:
+            raise ValueError("color_quantile must be in [0.5, 1]")
+        if color_limits is not None:
+            _validate_geometry(
+                sensor_limit=color_limits[0], module_limit=color_limits[1]
+            )
+
+        rows = _feature_rows(
+            sensor_mapping,
+            modules=donors.loc[
+                donors["feature_type"].eq("module_score"), "feature_label"
+            ].unique(),
+            scorer=scorer,
+        )
+        unknown = (
+            donors[["feature_type", "feature_label"]]
+            .drop_duplicates()
+            .merge(rows, how="left", indicator=True)
+        )
+        unknown = unknown.loc[unknown["_merge"].eq("left_only")]
+        if not unknown.empty:
+            raise ValueError(
+                "Donor features absent from the sensor mapping or of another "
+                f"type: {unknown['feature_label'].tolist()[:5]}"
+            )
+
+        summaries = [
+            _donor_contrast(
+                donors,
+                target=target,
+                reference=reference,
+                minimum_donors=minimum_donors,
+            )
+            for _, target, reference in comparisons
+        ]
+        measured = pd.concat(summaries, ignore_index=True)
+        measured = measured.loc[measured["status"].eq("measured")]
+        if measured.empty:
+            logger.info(
+                "No cell type has %d donors per compared group", minimum_donors
+            )
+            return []
+
+        limits = color_limits or tuple(
+            _color_limit(
+                measured.loc[
+                    measured["feature_type"].eq(feature_type), "difference"
+                ].to_numpy(dtype=float),
+                color_quantile,
+            )
+            for feature_type in ("gene_expression", "module_score")
+        )
+
+        paths: list[Path] = []
+        stems: set[str] = set()
+        for (name, target, reference), summary in zip(
+            comparisons, summaries, strict=True
+        ):
+            if not summary["status"].ne("insufficient_donors").any():
+                logger.info(
+                    "No %s figure: no cell type has %d donors per group",
+                    name,
+                    minimum_donors,
+                )
+                continue
+
+            paths += self._plot_donor_contrast(
+                _contrast_table(
+                    summary,
+                    rows,
+                    comparison=(name, target, reference),
+                    limits=(float(limits[0]), float(limits[1])),
+                ),
+                rows,
+                comparison=(name, target, reference),
+                scorer=scorer,
+                limits=(float(limits[0]), float(limits[1])),
+                value_name=value_name,
+                minimum_donors=minimum_donors,
+                column_width=column_width,
+                row_height=row_height,
+                max_dot_size=max_dot_size,
+                colorbar_length=colorbar_length,
+                filename=dedupe_stem(
+                    f"{filename_prefix}_{snake_case(name)}", stems
+                ),
+            )
+
+        return paths
+
+    def _plot_donor_contrast(
+        self,
+        displayed: pd.DataFrame,
+        rows: pd.DataFrame,
+        *,
+        comparison: tuple[str, str, str | None],
+        scorer: str,
+        limits: tuple[float, float],
+        value_name: str,
+        minimum_donors: int,
+        column_width: float,
+        row_height: float,
+        max_dot_size: float,
+        colorbar_length: float,
+        filename: str,
+    ) -> list[Path]:
+        """Draw one comparison's sensor and module panels on shared columns."""
+        name, target, reference = comparison
+        paired = reference is None
+        drawn = displayed.loc[
+            displayed["status"].isin(["measured", "not_detected"])
+        ]
+        support = drawn.groupby("cell_type")[["n_target", "n_reference"]].max()
+        cell_types = sorted(map(str, support.index))
+        skipped = sorted(
+            set(displayed["cell_type"].dropna().astype(str)).difference(
+                cell_types
+            )
+        )
+
+        panels = [
+            _contrast_panel(
+                drawn, rows, cell_types=cell_types, feature_type=feature_type
+            )
+            for feature_type in ("gene_expression", "module_score")
+        ]
+        heights = [len(labels) for _, labels in panels]
+        versus = f" in {target}" if paired else f", {target} - {reference}"
+
+        with plt.rc_context():
+            set_matplotlib_publication_parameters()
+            figure, axes = plt.subplots(
+                2,
+                1,
+                figsize=(
+                    2.6 + column_width * len(cell_types),
+                    1.7 + row_height * sum(heights),
+                ),
+                height_ratios=heights,
+                sharex=True,
+                layout="constrained",
+            )
+            try:
+                for axis, (points, labels), limit, unit in zip(
+                    axes,
+                    panels,
+                    limits,
+                    ("log1p CP10k", f"{scorer} score"),
+                    strict=True,
+                ):
+                    _draw_contrast_panel(
+                        figure,
+                        axis,
+                        points,
+                        labels,
+                        n_columns=len(cell_types),
+                        limit=limit,
+                        max_dot_size=max_dot_size,
+                        color_label=f"Mean {value_name}{versus}\n({unit})",
+                        colorbar_shrink=min(
+                            0.9, colorbar_length / (row_height * len(labels))
+                        ),
+                    )
+
+                counts = support.loc[cell_types].fillna(0).astype(int)
+                axes[1].set_xticks(
+                    range(len(cell_types)),
+                    [
+                        f"{cell} ({n_target})"
+                        if paired
+                        else f"{cell} ({n_target}/{n_reference})"
+                        for cell, n_target, n_reference in zip(
+                            cell_types,
+                            counts["n_target"],
+                            counts["n_reference"],
+                            strict=True,
+                        )
+                    ],
+                    rotation=90,
+                )
+                axes[1].set_xlabel(
+                    f"Cell type ({target} donors)"
+                    if paired
+                    else f"Cell type ({target}/{reference} donors)"
+                )
+                _separation_legend(
+                    figure, paired=paired, max_dot_size=max_dot_size
+                )
+
+                what = (
+                    f"{value_name} in {target}"
+                    if paired
+                    else f"{target} vs {reference} donors"
+                )
+                lines = [
+                    f"{name}: {what}",
+                    "Every sensor and module by cell type; donors are the "
+                    "replicates. Descriptive: no covariates, no test.",
+                ]
+                if skipped:
+                    lines += textwrap.wrap(
+                        f"Not drawn (< {minimum_donors} donors in a compared "
+                        "group): " + ", ".join(skipped),
+                        width=90,
+                    )
+                heading = figure.suptitle(
+                    "\n".join(lines),
+                    x=0.02,
+                    ha="left",
+                    fontsize=plt.rcParams["axes.titlesize"],
+                )
+                needed = heading.get_window_extent().width / figure.dpi + 0.15
+                if needed > figure.get_figwidth():
+                    figure.set_figwidth(needed)
+
+                return self._save_with_data(figure, displayed, filename)
             finally:
                 plt.close(figure)
 
@@ -996,6 +1300,385 @@ def _donor_median_sensors(
     )
 
     return summary.loc[summary["n_donors"].ge(minimum_donors)]
+
+
+def _feature_rows(
+    sensor_mapping: pd.DataFrame,
+    *,
+    modules: Iterable[str],
+    scorer: str,
+) -> pd.DataFrame:
+    """Order sensors by class, then symbol, followed by modules by identifier.
+
+    Every compendium sensor keeps a row, including those without a usable
+    source gene, so their absence stays visible.
+    """
+    classes = {
+        ("dna_sensor",): "DNA sensor",
+        ("dna_sensor", "rna_sensor"): "DNA + RNA sensor",
+        ("rna_sensor",): "RNA sensor",
+    }
+    tags = [
+        tuple(sorted(str(text).split(";")))
+        for text in sensor_mapping["sensor_class"]
+    ]
+    unknown = set(tags).difference(classes)
+    if unknown:
+        raise ValueError(
+            f"Unknown sensor classes {sorted(unknown)}; expected dna_sensor "
+            "and/or rna_sensor"
+        )
+
+    order = list(classes)
+    sensors = (
+        pd.DataFrame(
+            {
+                "feature_type": "gene_expression",
+                "panel_group": [classes[tag] for tag in tags],
+                "feature_label": sensor_mapping["gene"].astype(str).to_numpy(),
+                "mapping_status": sensor_mapping["mapping_status"]
+                .astype(str)
+                .to_numpy(),
+                "order": [order.index(tag) for tag in tags],
+            }
+        )
+        .sort_values(["order", "feature_label"])
+        .drop(columns="order")
+    )
+    sensors["display_label"] = sensors["feature_label"]
+
+    module_ids = sorted(map(str, modules))
+    module_rows = pd.DataFrame(
+        {
+            "feature_type": "module_score",
+            "panel_group": f"Modules ({scorer})",
+            "feature_label": module_ids,
+            "mapping_status": "present",
+            "display_label": [
+                humanize_module_name(name) for name in module_ids
+            ],
+        }
+    )
+    return pd.concat([sensors, module_rows], ignore_index=True)
+
+
+def _donor_contrast(
+    donors: pd.DataFrame,
+    *,
+    target: str,
+    reference: str | None,
+    minimum_donors: int,
+) -> pd.DataFrame:
+    """Summarize one comparison per cell type and feature from donor values.
+
+    With a reference group, separation is Cliff's delta from midranks
+    pooled over both groups, so ties count as neither order. Without one,
+    values are within-donor changes and separation is their mean sign.
+    Non-finite donor values are left out of both.
+
+    Returns:
+      One row per cell type and feature: donors and mean per group, the
+      difference, the signed separation and its measure, and a status
+      ("measured", "not_detected" or "insufficient_donors").
+    """
+    keys = ["cell_type", "feature_type", "feature_label"]
+    groups = [target] if reference is None else [target, reference]
+    values = donors.loc[
+        donors["group"].isin(groups)
+        & np.isfinite(donors["value"].to_numpy(dtype=float))
+    ]
+    values = values.assign(
+        in_target=values["group"].eq(target),
+        detected=values["value"].ne(0),
+        rank=values.groupby(keys, observed=True)["value"].rank(),
+        sign=np.sign(values["value"]),
+    )
+
+    per_group = pd.DataFrame(
+        values.groupby([*keys, "in_target"], observed=True)
+        .agg(
+            n=("value", "size"),
+            mean=("value", "mean"),
+            rank_sum=("rank", "sum"),
+            sign=("sign", "mean"),
+        )
+        .unstack("in_target")
+    ).reindex(
+        columns=pd.MultiIndex.from_product(
+            [["n", "mean", "rank_sum", "sign"], [True, False]]
+        )
+    )
+    n_target = per_group[("n", True)].fillna(0)
+    n_reference = per_group[("n", False)].fillna(0)
+    detected = (
+        values.groupby(keys, observed=True)["detected"]
+        .any()
+        .reindex(per_group.index)
+    )
+
+    if reference is None:
+        summary = pd.DataFrame(
+            {
+                "n_target": n_target,
+                "n_reference": np.nan,
+                "target_mean": per_group[("mean", True)],
+                "reference_mean": np.nan,
+                "difference": per_group[("mean", True)],
+                "separation": per_group[("sign", True)],
+                "separation_measure": "sign_balance",
+            }
+        )
+        enough = n_target.ge(minimum_donors)
+    else:
+        u_target = per_group[("rank_sum", True)] - n_target * (n_target + 1) / 2
+        summary = pd.DataFrame(
+            {
+                "n_target": n_target,
+                "n_reference": n_reference,
+                "target_mean": per_group[("mean", True)],
+                "reference_mean": per_group[("mean", False)],
+                "difference": per_group[("mean", True)]
+                - per_group[("mean", False)],
+                "separation": 2 * u_target / (n_target * n_reference) - 1,
+                "separation_measure": "cliffs_delta",
+            }
+        )
+        enough = n_target.ge(minimum_donors) & n_reference.ge(minimum_donors)
+
+    is_sensor = summary.index.get_level_values("feature_type").to_numpy() == (
+        "gene_expression"
+    )
+    summary["status"] = np.select(
+        [~enough.to_numpy(), is_sensor & ~detected.to_numpy(dtype=bool)],
+        ["insufficient_donors", "not_detected"],
+        default="measured",
+    )
+    return summary.reset_index()
+
+
+def _contrast_table(
+    summary: pd.DataFrame,
+    rows: pd.DataFrame,
+    *,
+    comparison: tuple[str, str, str | None],
+    limits: tuple[float, float],
+) -> pd.DataFrame:
+    """Return the displayed rows: every feature row, with its cell types.
+
+    Features without a usable source gene keep one row without cells.
+    `dot_separation` is the separation toward the mean difference, floored
+    at zero, as drawn.
+    """
+    name, target, reference = comparison
+    table = rows.merge(
+        summary.assign(cell_type=summary["cell_type"].astype(str)),
+        on=["feature_type", "feature_label"],
+        how="left",
+        validate="one_to_many",
+    )
+    toward = table["separation"] * np.sign(table["difference"])
+
+    return table.assign(
+        comparison=name,
+        target=target,
+        reference=reference,
+        dot_separation=toward.clip(0, 1).where(table["status"].eq("measured")),
+        color_limit=np.where(
+            table["feature_type"].eq("gene_expression"), limits[0], limits[1]
+        ),
+    )
+
+
+def _contrast_panel(
+    drawn: pd.DataFrame,
+    rows: pd.DataFrame,
+    *,
+    cell_types: Sequence[str],
+    feature_type: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Lay out one panel: a heading per row group, then its features.
+
+    Returns:
+      The cells to draw with `x` and `y` positions, and one label record
+      per panel row with `kind`, `text`, `feature_type` and `status`.
+    """
+    panel_rows = rows.loc[rows["feature_type"].eq(feature_type)]
+    cells = drawn.loc[drawn["feature_type"].eq(feature_type)]
+    with_cells = set(cells["feature_label"])
+
+    labels, positions = [], {}
+    for heading, block in panel_rows.groupby("panel_group", sort=False):
+        labels.append({"kind": "heading", "text": heading, "status": ""})
+
+        for row in block.itertuples(index=False):
+            if row.mapping_status == "absent":
+                status = "Not mapped"
+            elif row.mapping_status != "present":
+                status = str(row.mapping_status).replace("_", " ").capitalize()
+            elif row.feature_label not in with_cells:
+                status = "No values"
+            else:
+                status = "measured"
+                positions[row.feature_label] = len(labels)
+
+            labels.append(
+                {"kind": "feature", "text": row.display_label, "status": status}
+            )
+
+    columns = {cell: index for index, cell in enumerate(cell_types)}
+    points = cells.assign(
+        x=cells["cell_type"].map(columns),
+        y=cells["feature_label"].map(positions),
+    ).dropna(subset=["x", "y"])
+    return points, pd.DataFrame(labels).assign(feature_type=feature_type)
+
+
+def _draw_contrast_panel(
+    figure: Figure,
+    axis: Axes,
+    points: pd.DataFrame,
+    labels: pd.DataFrame,
+    *,
+    n_columns: int,
+    limit: float,
+    max_dot_size: float,
+    color_label: str,
+    colorbar_shrink: float,
+) -> None:
+    """Draw one panel's dots, crosses, headings, row notes and colour bar.
+
+    Colour is the clipped difference and area the separation toward it,
+    with a pinpoint floor so measured cells never vanish. Cells whose donors
+    are all zero get a grey cross; rows without a usable source gene carry
+    their status as grey text.
+    """
+    colormap = plt.get_cmap("RdBu_r")
+    norm = TwoSlopeNorm(vcenter=0.0, vmin=-limit, vmax=limit)
+    features = np.flatnonzero(labels["kind"].eq("feature"))
+    axis.hlines(features, -0.6, n_columns - 0.4, color="#eeeeee", lw=0.3)
+    axis.vlines(
+        range(n_columns), -0.5, len(labels) - 0.5, color="#eeeeee", lw=0.3
+    )
+
+    measured = points.loc[points["status"].eq("measured")]
+    axis.scatter(
+        measured["x"],
+        measured["y"],
+        s=np.maximum(measured["dot_separation"] * max_dot_size, 1.0),
+        c=measured["difference"].clip(-limit, limit),
+        cmap=colormap,
+        norm=norm,
+        edgecolors="#555555",
+        linewidths=0.2,
+        zorder=2,
+    )
+    zeros = points.loc[points["status"].eq("not_detected")]
+    axis.scatter(
+        zeros["x"], zeros["y"], marker="x", s=4, c="#9a9a9a", lw=0.4, zorder=2
+    )
+
+    note = {"facecolor": "white", "edgecolor": "none", "pad": 0.4}
+    for position, label in enumerate(labels.itertuples(index=False)):
+        if label.kind == "heading":
+            axis.text(
+                0.0,
+                position,
+                str(label.text),
+                transform=axis.get_yaxis_transform(),
+                va="center",
+                fontweight="bold",
+                bbox=note,
+                zorder=3,
+            )
+        elif label.status != "measured":
+            axis.text(
+                (n_columns - 1) / 2,
+                position,
+                str(label.status),
+                ha="center",
+                va="center",
+                color="#626262",
+                fontsize=4,
+                bbox=note,
+                zorder=3,
+            )
+
+    axis.set_yticks(
+        range(len(labels)),
+        [
+            text if kind == "feature" else ""
+            for kind, text in zip(labels["kind"], labels["text"], strict=True)
+        ],
+    )
+    if labels["feature_type"].eq("gene_expression").all():
+        for tick in axis.get_yticklabels():
+            tick.set_fontstyle("italic")
+    axis.set_xlim(-0.6, n_columns - 0.4)
+    axis.set_ylim(len(labels) - 0.5, -0.5)
+    axis.tick_params(length=0, pad=1.5)
+    axis.spines[:].set_visible(False)
+
+    differences = measured["difference"].to_numpy(dtype=float)
+    clipped = (
+        bool((differences < -limit).any()),
+        bool((differences > limit).any()),
+    )
+    colorbar = figure.colorbar(
+        ScalarMappable(norm=norm, cmap=colormap),
+        ax=axis,
+        shrink=colorbar_shrink,
+        aspect=12,
+        pad=0.02,
+        extend={
+            (False, False): "neither",
+            (True, False): "min",
+            (False, True): "max",
+            (True, True): "both",
+        }[clipped],
+        extendrect=True,
+    )
+    colorbar.set_label(color_label)
+
+
+def _separation_legend(
+    figure: Figure,
+    *,
+    paired: bool,
+    max_dot_size: float,
+) -> None:
+    """Explain dot area and the all-zero cross below the panels."""
+    handles = [
+        Line2D(
+            [],
+            [],
+            marker="o",
+            ls="",
+            ms=float(np.sqrt(value * max_dot_size)),
+            markerfacecolor="#bdbdbd",
+            markeredgecolor="#555555",
+            markeredgewidth=0.2,
+            label=f"{value:g}",
+        )
+        for value in (0.25, 0.5, 1.0)
+    ]
+    handles.append(
+        Line2D(
+            [], [], marker="x", ls="", ms=2, color="#9a9a9a", label="All zero"
+        )
+    )
+    figure.legend(
+        handles=handles,
+        title=(
+            "Dot area: donors changing with the mean minus against it (share)"
+            if paired
+            else "Dot area: Cliff's delta toward the mean difference\n"
+            "(donor pairs ordered with it minus against it, as a share)"
+        ),
+        title_fontsize=plt.rcParams["font.size"],
+        loc="outside lower center",
+        ncol=len(handles),
+        frameon=False,
+    )
 
 
 def _effect_matrix(

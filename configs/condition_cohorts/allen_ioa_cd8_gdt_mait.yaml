@@ -1,0 +1,67 @@
+cohort_id: allen_ioa
+population_id: cd8_gdt_mait
+source_notes: >-
+  Allen Institute Immunobiology of Aging cohort (Nature 2025,
+  doi:10.1038/s41586-025-09686-5; CELLxGENE collection
+  60a2676d-9f37-46cc-9b02-c7370a53be9c): 10x Flex (probe-based) scRNA-seq of
+  PBMCs from 234 healthy adults aged 40 to 89+, one Day-0 draw each. This
+  population is the "CD8 T, gdT, MAIT, and dnT cells" lineage file (dataset
+  43507e2f-a9d7-40da-bb3c-f1946f71a267, 717,559 cells), a partition of the
+  primary "All cells" dataset ff4235bb-1cdf-4dcf-a13a-dc4f32244400; its cells
+  are flagged is_primary_data false for that reason only and are not filtered
+  on it. CMV drives the largest T-cell expansion, of KLRF1+ GZMB+ CD27-
+  effector-memory CD8 T cells (inside the memory CD8 T cell type) and of Vd1
+  gdT cells, so differences in those types can reflect subset shifts. Arms,
+  covariates and exclusions are those of allen_ioa_myeloid: arms come from
+  the author serology column subject.cmv and one Equivocal donor is in no
+  arm; nine donors aged "89+" have no exact age and are excluded; age, sex,
+  ancestry and processing batch (17 batch-pools) are covariates; a sample is
+  one specimen. Sensors without probes are reported as not measured. Raw
+  counts are in raw/X.
+input_filename: ca5b6b79-5e4f-46eb-b034-a58cac6282cd.h5ad
+source_url: https://datasets.cellxgene.cziscience.com/ca5b6b79-5e4f-46eb-b034-a58cac6282cd.h5ad
+input_sha256: "64740731aabd455090a651dd893f4c5286ad1fd4c464a7a38531b5ee3f526175"
+counts_source: raw/X
+gene_id_column: _index
+gene_symbol_column: feature_name
+modality: cells
+sample_columns: [specimen.specimenGuid]
+obs_columns:
+  donor_id: donor_id
+  cell_type: AIFI_L2
+  fine_cell_type: AIFI_L3
+  cell_state: AIFI_L3
+  ontology_cell_type: cell_type
+  assay: assay
+  tissue: tissue
+  sex: sex
+  development_stage: development_stage
+  age: sample.subjectAgeAtDraw
+  ancestry: subject.race
+  batch: batch_id
+filters:
+  sex: [female, male]
+condition:
+  column: subject.cmv
+  levels:
+    cmv_negative: [Negative]
+    cmv_positive: [Positive]
+  reference: cmv_negative
+covariates:
+  age_years: {column: age, kind: numeric}
+  sex: {column: sex, kind: categorical}
+  ancestry: {column: ancestry, kind: categorical}
+  batch: {column: batch, kind: categorical}
+contrasts:
+  - {estimand: cmv_positive_vs_negative, target: cmv_positive, reference: cmv_negative, role: primary}
+continuous_contrasts:
+  # Inflammaging: change per decade of age at draw within both serostatus
+  # arms (age is the measurement here, so it is not also a covariate).
+  - {estimand: age_slope, column: age, kind: numeric, arms: [cmv_negative, cmv_positive], step: 10, role: secondary}
+cell_state:
+  # ISG+ versus core naive CD8 T cells of the same donor; about 30 specimens
+  # per arm have 10 cells of each. ISG+ cells were defined from
+  # interferon-stimulated genes, so ISG sensors are expected to differ.
+  column: cell_state
+  reference: "Core naive CD8 T cell"
+  altered: ["ISG+ naive CD8 T cell"]

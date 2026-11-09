@@ -1,0 +1,57 @@
+cohort_id: onek1k
+population_id: pbmc_age_female
+source_notes: >-
+  OneK1K (Yazar et al., Science 2022, doi:10.1126/science.abf3041; CELLxGENE
+  dataset 3faad104-2ab8-4434-816d-474d8d2641db), restricted to female donors:
+  565 donors (young 60, middle 184, old 321). Identical to onek1k_pbmc_age (same input, cell
+  types, age groups and pool covariate) except for the sex filter; sex is
+  constant within the stratum and is not a covariate. This and
+  onek1k_pbmc_age_male are the two strata of a fully sex-interacted age
+  model: the sex difference in an age slope is the female minus male
+  estimate, with a standard error combining the two independent HC3
+  standard errors. Tests whether ageing effects, such as the reported
+  female-biased ISG+ monocyte expansion, differ by sex. X-linked genes that
+  escape inactivation differ in level between sexes, not necessarily in
+  slope. Raw counts are in X; a sample is the donor.
+input_filename: 1e44db10-b572-46cc-adae-dcc7acd44ca6.h5ad
+source_url: https://datasets.cellxgene.cziscience.com/1e44db10-b572-46cc-adae-dcc7acd44ca6.h5ad
+input_sha256: "14c5e9e70007a5e7dc047f7b29405773305e1a7b9791d0789af70649cf6f46ec"
+counts_source: X
+gene_id_column: _index
+gene_symbol_column: feature_name
+modality: cells
+sample_columns: [donor_id]
+obs_columns:
+  donor_id: donor_id
+  cell_type: predicted.celltype.l2
+  ontology_cell_type: cell_type
+  assay: assay
+  tissue: tissue
+  sex: sex
+  development_stage: development_stage
+  age_years: age
+  pool: pool_number
+filters:
+  is_primary_data: [true]
+  sex: [female]
+  predicted.celltype.l2: ["ASDC", "B intermediate", "B memory", "B naive", "CD14 Mono", "CD16 Mono", "CD4 CTL", "CD4 Naive", "CD4 Proliferating", "CD4 TCM", "CD4 TEM", "CD8 Naive", "CD8 Proliferating", "CD8 TCM", "CD8 TEM", "Eryth", "HSPC", "ILC", "MAIT", "NK", "NK Proliferating", "NK_CD56bright", "Plasmablast", "Platelet", "Treg", "cDC1", "cDC2", "dnT", "gdT", "pDC"]
+condition:
+  column: age
+  levels:
+    young: ["19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30",
+      "31", "32", "33", "34", "35", "36", "37", "38", "39"]
+    middle: ["40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "50", "51",
+      "52", "53", "54", "55", "56", "57", "58", "59", "60", "61", "62", "63",
+      "64"]
+    old: ["65", "66", "67", "68", "69", "70", "71", "72", "73", "74", "75", "76",
+      "77", "78", "79", "80", "81", "82", "83", "84", "85", "86", "87", "88",
+      "89", "90", "91", "93", "94", "95", "96", "97"]
+  reference: young
+covariates:
+  pool: {column: pool, kind: categorical}
+contrasts:
+  - {estimand: old_vs_young, target: old, reference: young, role: primary}
+  - {estimand: middle_vs_young, target: middle, reference: young, role: secondary}
+continuous_contrasts:
+  # Inflammaging: change per 10 years of age across female donors.
+  - {estimand: age_slope, column: age_years, kind: numeric, arms: [young, middle, old], step: 10, role: primary}

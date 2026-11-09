@@ -1,0 +1,66 @@
+cohort_id: allen_ioa
+population_id: cd4_naive
+source_notes: >-
+  Allen Institute Immunobiology of Aging cohort (Nature 2025,
+  doi:10.1038/s41586-025-09686-5; CELLxGENE collection
+  60a2676d-9f37-46cc-9b02-c7370a53be9c): 10x Flex (probe-based) scRNA-seq of
+  PBMCs from 234 healthy adults aged 40 to 89+, one Day-0 draw each. This
+  population is the "Naive CD4 T cells" lineage file (dataset
+  6cd95660-6751-4629-a2ef-fbf5985531a5, 770,809 cells), a partition of the
+  primary "All cells" dataset ff4235bb-1cdf-4dcf-a13a-dc4f32244400; its cells
+  are flagged is_primary_data false for that reason only and are not filtered
+  on it. A comparator lineage: CMV acts mainly on memory and effector T
+  cells, and naive CD4 T cells are lost with age. Arms, covariates and
+  exclusions are those of allen_ioa_myeloid: arms come from the author
+  serology column subject.cmv and one Equivocal donor is in no arm; nine
+  donors aged "89+" have no exact age and are excluded; age, sex, ancestry
+  and processing batch (17 batch-pools) are covariates; a sample is one
+  specimen. Sensors without probes are reported as not measured. Raw counts
+  are in raw/X.
+input_filename: 8e4fae37-d7f9-47d1-bc73-9ab9d029bdaa.h5ad
+source_url: https://datasets.cellxgene.cziscience.com/8e4fae37-d7f9-47d1-bc73-9ab9d029bdaa.h5ad
+input_sha256: "e68e06b954087435e5e78b02d674b39356ad22da5b30cb445b61f204245b6249"
+counts_source: raw/X
+gene_id_column: _index
+gene_symbol_column: feature_name
+modality: cells
+sample_columns: [specimen.specimenGuid]
+obs_columns:
+  donor_id: donor_id
+  cell_type: AIFI_L2
+  fine_cell_type: AIFI_L3
+  cell_state: AIFI_L3
+  ontology_cell_type: cell_type
+  assay: assay
+  tissue: tissue
+  sex: sex
+  development_stage: development_stage
+  age: sample.subjectAgeAtDraw
+  ancestry: subject.race
+  batch: batch_id
+filters:
+  sex: [female, male]
+condition:
+  column: subject.cmv
+  levels:
+    cmv_negative: [Negative]
+    cmv_positive: [Positive]
+  reference: cmv_negative
+covariates:
+  age_years: {column: age, kind: numeric}
+  sex: {column: sex, kind: categorical}
+  ancestry: {column: ancestry, kind: categorical}
+  batch: {column: batch, kind: categorical}
+contrasts:
+  - {estimand: cmv_positive_vs_negative, target: cmv_positive, reference: cmv_negative, role: primary}
+continuous_contrasts:
+  # Inflammaging: change per decade of age at draw within both serostatus
+  # arms (age is the measurement here, so it is not also a covariate).
+  - {estimand: age_slope, column: age, kind: numeric, arms: [cmv_negative, cmv_positive], step: 10, role: secondary}
+cell_state:
+  # ISG+ versus core naive CD4 T cells of the same donor. ISG+ cells were
+  # defined from interferon-stimulated genes, so ISG sensors are expected to
+  # differ.
+  column: cell_state
+  reference: "Core naive CD4 T cell"
+  altered: ["ISG+ naive CD4 T cell"]

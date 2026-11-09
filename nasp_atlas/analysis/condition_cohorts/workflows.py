@@ -270,6 +270,11 @@ def condition_cohort_analysis(
                 composition=composition,
                 states=states,
                 state_differences=state_differences,
+                state_units=(
+                    _read_units(run_dir / "state_units", stage="state_units")
+                    if spec.cell_state is not None
+                    else None
+                ),
             ),
             spec,
             prepared_h5ad=prepared.h5ad_path,
@@ -277,6 +282,7 @@ def condition_cohort_analysis(
             output_dir=run_dir / "figures",
             ifn_scorer=ifn_scorer,
             minimum_donors=minimum_donors,
+            minimum_state_pairs=minimum_state_pairs,
             random_state=random_state,
         )
 

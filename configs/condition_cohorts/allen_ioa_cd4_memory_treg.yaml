@@ -1,0 +1,61 @@
+cohort_id: allen_ioa
+population_id: cd4_memory_treg
+source_notes: >-
+  Allen Institute Immunobiology of Aging cohort (Nature 2025,
+  doi:10.1038/s41586-025-09686-5; CELLxGENE collection
+  60a2676d-9f37-46cc-9b02-c7370a53be9c): 10x Flex (probe-based) scRNA-seq of
+  PBMCs from 234 healthy adults aged 40 to 89+, one Day-0 draw each. This
+  population is the "CD4 memory and Treg cells" lineage file (dataset
+  4934091f-85d6-4a82-8915-6812aea23cb9, 854,753 cells), a partition of the
+  primary "All cells" dataset ff4235bb-1cdf-4dcf-a13a-dc4f32244400; its cells
+  are flagged is_primary_data false for that reason only and are not filtered
+  on it. CMV expands cytotoxic (GZMB+ CD27-) effector-memory CD4 T cells,
+  which sit inside the memory CD4 T cell type, so a memory CD4 difference can
+  reflect that subset shift. No within-donor ISG state is compared: the
+  lineage has no core state to pair with ISG+ memory CD4 T cells. Arms,
+  covariates and exclusions are those of allen_ioa_myeloid: arms come from
+  the author serology column subject.cmv and one Equivocal donor is in no
+  arm; nine donors aged "89+" have no exact age and are excluded; age, sex,
+  ancestry and processing batch (17 batch-pools) are covariates; a sample is
+  one specimen. Sensors without probes are reported as not measured. Raw
+  counts are in raw/X.
+input_filename: 729a2a8d-f457-4709-b2ba-731616abb516.h5ad
+source_url: https://datasets.cellxgene.cziscience.com/729a2a8d-f457-4709-b2ba-731616abb516.h5ad
+input_sha256: "80b3b77b23cf373dd0aa19d36d4cf8a4a8d4491a66fbe86acc5c94612d8146b0"
+counts_source: raw/X
+gene_id_column: _index
+gene_symbol_column: feature_name
+modality: cells
+sample_columns: [specimen.specimenGuid]
+obs_columns:
+  donor_id: donor_id
+  cell_type: AIFI_L2
+  fine_cell_type: AIFI_L3
+  cell_state: AIFI_L3
+  ontology_cell_type: cell_type
+  assay: assay
+  tissue: tissue
+  sex: sex
+  development_stage: development_stage
+  age: sample.subjectAgeAtDraw
+  ancestry: subject.race
+  batch: batch_id
+filters:
+  sex: [female, male]
+condition:
+  column: subject.cmv
+  levels:
+    cmv_negative: [Negative]
+    cmv_positive: [Positive]
+  reference: cmv_negative
+covariates:
+  age_years: {column: age, kind: numeric}
+  sex: {column: sex, kind: categorical}
+  ancestry: {column: ancestry, kind: categorical}
+  batch: {column: batch, kind: categorical}
+contrasts:
+  - {estimand: cmv_positive_vs_negative, target: cmv_positive, reference: cmv_negative, role: primary}
+continuous_contrasts:
+  # Inflammaging: change per decade of age at draw within both serostatus
+  # arms (age is the measurement here, so it is not also a covariate).
+  - {estimand: age_slope, column: age, kind: numeric, arms: [cmv_negative, cmv_positive], step: 10, role: secondary}
